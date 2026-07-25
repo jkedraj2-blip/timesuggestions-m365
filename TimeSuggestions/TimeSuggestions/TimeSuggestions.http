@@ -1,3 +1,55 @@
 @TimeSuggestions_HostAddress = http://localhost:5188
 
-# Endpointy zostaną dodane w kolejnych krokach implementacji.
+### Synchronizacja — frontend przysyła surowe dane z Graph (tu: przykład minimalny)
+POST {{TimeSuggestions_HostAddress}}/api/sync
+Content-Type: application/json
+
+{
+  "calendarEvents": [
+    {
+      "id": "przykladowe-id-spotkania-1",
+      "subject": "Spotkanie z Kowalski — przegląd umowy",
+      "startDateTime": "2026-07-24T10:00:00",
+      "endDateTime": "2026-07-24T11:30:00",
+      "isAllDay": false,
+      "sensitivity": "normal"
+    }
+  ],
+  "driveFiles": [
+    {
+      "id": "przykladowe-id-pliku-1",
+      "name": "Umowa_NovaTech_v2.docx",
+      "lastModifiedDateTime": "2026-07-24T14:12:00",
+      "lastModifiedByMe": true
+    }
+  ]
+}
+
+### Lista sugestii oczekujących (domyślnie status=pending)
+GET {{TimeSuggestions_HostAddress}}/api/suggestions
+Accept: application/json
+
+### Lista sugestii tylko z kalendarza
+GET {{TimeSuggestions_HostAddress}}/api/suggestions?source=calendar
+Accept: application/json
+
+### Zatwierdzenie sugestii (id=1) — tworzy wpis czasu pracy
+POST {{TimeSuggestions_HostAddress}}/api/suggestions/1/approve
+Content-Type: application/json
+
+{
+  "caseId": 1,
+  "durationMinutes": 90,
+  "description": "Przegląd umowy z klientem"
+}
+
+### Odrzucenie sugestii (id=2)
+POST {{TimeSuggestions_HostAddress}}/api/suggestions/2/reject
+
+### Aktywne sprawy (do dropdownu edycji)
+GET {{TimeSuggestions_HostAddress}}/api/cases
+Accept: application/json
+
+### Wpisy czasu pracy (weryfikacja na demo)
+GET {{TimeSuggestions_HostAddress}}/api/time-entries
+Accept: application/json

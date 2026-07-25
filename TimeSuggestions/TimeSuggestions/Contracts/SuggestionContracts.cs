@@ -48,14 +48,35 @@ public class ApproveSuggestionRequest
     public string Description { get; set; } = string.Empty;
 }
 
-public record CaseDto(int Id, string Name, string CaseNumber, string ClientName, IReadOnlyList<string> Keywords)
+public record CaseDto(int Id, string Name, string CaseNumber, string ClientName, IReadOnlyList<string> Keywords, bool IsActive)
 {
     public static CaseDto FromEntity(Case legalCase) => new(
         legalCase.Id,
         legalCase.Name,
         legalCase.CaseNumber,
         legalCase.ClientName,
-        legalCase.Keywords.Split(';', StringSplitOptions.RemoveEmptyEntries));
+        legalCase.Keywords.Split(';', StringSplitOptions.RemoveEmptyEntries),
+        legalCase.IsActive);
+}
+
+/// <summary>Dane sprawy przy tworzeniu i edycji — słowa kluczowe jako lista, sklejane do formatu bazy.</summary>
+public class CaseWriteRequest
+{
+    [Required(AllowEmptyStrings = false, ErrorMessage = "Nazwa sprawy jest wymagana.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Required(AllowEmptyStrings = false, ErrorMessage = "Numer sprawy jest wymagany.")]
+    public string CaseNumber { get; set; } = string.Empty;
+
+    [Required(AllowEmptyStrings = false, ErrorMessage = "Nazwa klienta jest wymagana.")]
+    public string ClientName { get; set; } = string.Empty;
+
+    public List<string> Keywords { get; set; } = [];
+
+    /// <summary>Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej tabeli — YAGNI).</summary>
+    public string JoinedKeywords => string.Join(';', Keywords
+        .Select(keyword => keyword.Trim())
+        .Where(keyword => keyword.Length > 0));
 }
 
 /// <summary>Liczniki dla kafelków podsumowania w nagłówku aplikacji.</summary>

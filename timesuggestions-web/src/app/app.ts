@@ -1,37 +1,51 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from './services/auth.service';
-import { SuggestionList } from './components/suggestion-list';
 
 @Component({
   selector: 'app-root',
-  imports: [SuggestionList],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
-    <header>
-      <h1>Sugestie wpisów czasu pracy</h1>
+    <header class="app-header">
+      <div>
+        <h1>TimeSuggestions</h1>
+        <p class="text-muted subtitle">Automatyczne sugestie wpisów czasu pracy z Microsoft 365</p>
+      </div>
       @if (user()) {
         <div class="session">
-          <span>Zalogowano jako {{ user() }}</span>
-          <button (click)="auth.logout()">Wyloguj</button>
+          <span class="text-muted">{{ user() }}</span>
+          <button class="btn" (click)="auth.logout()">Wyloguj</button>
         </div>
       }
     </header>
 
     @if (user()) {
-      <app-suggestion-list />
+      <nav class="tabs">
+        <a class="tab" routerLink="/sugestie" routerLinkActive="active">Sugestie</a>
+        <a class="tab" routerLink="/wpisy" routerLinkActive="active">Wpisy czasu</a>
+        <a class="tab" routerLink="/sprawy" routerLinkActive="active">Sprawy</a>
+      </nav>
+
+      <router-outlet />
     } @else {
-      <p>Zaloguj się kontem Microsoft, aby pobrać spotkania i dokumenty z ostatnich 7 dni.</p>
-      <button class="primary" (click)="auth.login()">Zaloguj przez Microsoft</button>
+      <div class="card login-card">
+        <h2>Zaloguj się, aby zacząć</h2>
+        <p class="text-muted">
+          Aplikacja pobierze Twoje spotkania z kalendarza Outlook i dokumenty Word/Excel
+          z OneDrive z ostatnich 7 dni, a następnie zaproponuje gotowe wpisy czasu pracy.
+          Wystarczy jedno kliknięcie „Zatwierdź".
+        </p>
+        <button class="btn btn-primary" (click)="auth.login()">Zaloguj przez Microsoft</button>
+      </div>
     }
   `,
   styles: `
-    :host { display: block; max-width: 720px; margin: 0 auto; padding: 16px; font-family: system-ui, sans-serif; }
-    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-    h1 { font-size: 1.5em; }
-    .session { display: flex; align-items: center; gap: 12px; color: #555; }
-    button { padding: 6px 14px; border-radius: 6px; border: 1px solid #999; background: #f5f5f5; cursor: pointer; }
-    button:hover { background: #e8e8e8; }
-    button.primary { background: #1863c6; border-color: #1863c6; color: #fff; }
-    button.primary:hover { background: #124e9e; }
+    :host { display: block; max-width: 960px; margin: 0 auto; padding: var(--space-5) var(--space-4); }
+    .app-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); flex-wrap: wrap; }
+    h1 { font-size: var(--font-size-xl); }
+    .subtitle { margin: var(--space-1) 0 0; font-size: var(--font-size-sm); }
+    .session { display: flex; align-items: center; gap: var(--space-3); }
+    .login-card { max-width: 480px; margin: var(--space-6) auto; text-align: center; display: flex; flex-direction: column; gap: var(--space-3); align-items: center; }
   `,
 })
 export class App implements OnInit {

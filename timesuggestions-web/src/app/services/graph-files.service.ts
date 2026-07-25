@@ -21,23 +21,29 @@ const ALLOWED_EXTENSIONS = ['.docx', '.doc', '.xlsx', '.xls'];
 export class GraphFilesService {
   private auth = inject(AuthService);
 
-  async getRecentDocuments(days: number): Promise<DriveFilePayload[]> {
+  async getRecentDocuments(
+    days: number,
+    onPage?: (page: number) => void,
+  ): Promise<DriveFilePayload[]> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    const items = await this.fetchAllDriveItems();
+    const items = await this.fetchAllDriveItems(onPage);
 
     return items
       .filter((item) => this.isRecentDocument(item, since))
       .map((item) => this.toPayload(item));
   }
 
-  /** Delta stronicuje wyniki — podążamy za @odata.nextLink aż do końca. */
-  private async fetchAllDriveItems(): Promise<GraphDriveItem[]> {
+  /** Delta stronicuje wyniki — podążamy za @odata.nextLink aż do końca, raportując postęp do UI. */
+  private async fetchAllDriveItems(onPage?: (page: number) => void): Promise<GraphDriveItem[]> {
     const token = await this.auth.getToken();
     const select = '$select=id,name,file,lastModifiedDateTime,lastModifiedBy';
     let url: string | undefined = `${GRAPH_BASE_URL}/me/drive/root/delta?${select}`;
 
     const items: GraphDriveItem[] = [];
+    let page = 0;
     while (url) {
+      page++;
+      onPage?.(page);
       const response = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
       });

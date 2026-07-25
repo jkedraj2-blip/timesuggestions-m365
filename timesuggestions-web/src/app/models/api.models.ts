@@ -24,11 +24,6 @@ export interface SyncRequest {
   driveFiles: DriveFilePayload[];
 }
 
-export interface SyncResult {
-  created: number;
-  skippedExisting: number;
-}
-
 export interface Suggestion {
   id: number;
   source: SuggestionSource;
@@ -38,6 +33,8 @@ export interface Suggestion {
   caseId: number | null;
   caseName: string | null;
   isAmbiguous: boolean;
+  /** Nazwy spraw pasujących przy niejednoznacznym dopasowaniu — UI mówi konkretnie "pasuje do X i Y". */
+  matchCandidates: string[];
   proposedDescription: string;
   status: SuggestionStatus;
 }
@@ -47,6 +44,7 @@ export interface CaseInfo {
   name: string;
   caseNumber: string;
   clientName: string;
+  keywords: string[];
 }
 
 export interface ApprovePayload {
@@ -65,4 +63,57 @@ export interface TimeEntry {
   createdFromSuggestion: boolean;
   source: SuggestionSource;
   suggestionId: number;
+}
+
+/** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */
+export interface TimeEntriesResponse {
+  totalMinutes: number;
+  days: TimeEntryDay[];
+}
+
+export interface TimeEntryDay {
+  date: string;
+  totalMinutes: number;
+  entries: TimeEntry[];
+}
+
+/** Liczniki dla kafelków podsumowania. */
+export interface Summary {
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  totalLoggedMinutes: number;
+  todayLoggedMinutes: number;
+  lastSyncAt: string | null;
+}
+
+export interface SyncFetchedCounts {
+  calendarEvents: number;
+  driveFiles: number;
+}
+
+export interface SyncFilteredOutCounts {
+  private: number;
+  tooShort: number;
+  allDay: number;
+  notOfficeDocument: number;
+  outsideWindow: number;
+  notModifiedByUser: number;
+  total: number;
+}
+
+export interface SyncMatchedCounts {
+  single: number;
+  none: number;
+  ambiguous: number;
+}
+
+/** Pełny raport synchronizacji — aplikacja pokazuje użytkownikowi swoją pracę. */
+export interface SyncReport {
+  fetched: SyncFetchedCounts;
+  filteredOut: SyncFilteredOutCounts;
+  aggregated: number;
+  created: number;
+  skippedExisting: number;
+  matched: SyncMatchedCounts;
 }

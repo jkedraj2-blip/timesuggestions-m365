@@ -9,11 +9,20 @@ import {
   CaseInfo,
   Suggestion,
   SuggestionSource,
+  SuggestionStatus,
+  Summary,
+  SyncReport,
   SyncRequest,
-  SyncResult,
+  TimeEntriesResponse,
   TimeEntry,
 } from '../models/api.models';
 import { GraphEvent } from '../models/graph.models';
+
+/** Etapy synchronizacji raportowane do UI — user widzi, że coś się dzieje. */
+export type SyncStage =
+  | { kind: 'calendar' }
+  | { kind: 'files'; page: number }
+  | { kind: 'processing' };
 
 /**
  * REST do backendu TimeSuggestions. Celowo bez nagłówka Authorization —
@@ -26,22 +35,31 @@ export class ApiService {
   private baseUrl = environment.apiBaseUrl;
 
   /** Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania. */
-  async syncNow(): Promise<SyncResult> {
-    const [events, files] = await Promise.all([
-      this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK),
-      this.graphFiles.getRecentDocuments(SYNC_DAYS_BACK),
-    ]);
+  async syncNow(onStage?: (stage: SyncStage) => void): Promise<SyncReport> {
+    onStage?.({ kind: 'calendar' });
+    const events = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK);
 
+    const files = await this.graphFiles.getRecentDocuments(SYNC_DAYS_BACK, (page) =>
+      onStage?.({ kind: 'files', page }),
+    );
+
+    onStage?.({ kind: 'processing' });
     const request: SyncRequest = {
       calendarEvents: events.map((event) => this.toCalendarPayload(event)),
       driveFiles: files,
     };
 
-    return this.requestJson<SyncResult>('POST', '/api/sync', request);
+    return this.requestJson<SyncReport>('POST', '/api/sync', request);
   }
 
-  getSuggestions(source?: SuggestionSource): Promise<Suggestion[]> {
-    const query = source ? `?source=${source}` : '';
+  getSuggestions(filter?: {
+    status?: SuggestionStatus;
+    source?: SuggestionSource;
+  }): Promise<Suggestion[]> {
+    const params = new URLSearchParams();
+    if (filter?.status) params.set('status', filter.status);
+    if (filter?.source) params.set('source', filter.source);
+    const query = params.size > 0 ? `?${params}` : '';
     return this.requestJson<Suggestion[]>('GET', `/api/suggestions${query}`);
   }
 
@@ -53,12 +71,24 @@ export class ApiService {
     await this.request('POST', `/api/suggestions/${suggestionId}/reject`);
   }
 
+  async restore(suggestionId: number): Promise<void> {
+    await this.request('POST', `/api/suggestions/${suggestionId}/restore`);
+  }
+
   getCases(): Promise<CaseInfo[]> {
     return this.requestJson<CaseInfo[]>('GET', '/api/cases');
   }
 
-  getTimeEntries(): Promise<TimeEntry[]> {
-    return this.requestJson<TimeEntry[]>('GET', '/api/time-entries');
+  getTimeEntries(): Promise<TimeEntriesResponse> {
+    return this.requestJson<TimeEntriesResponse>('GET', '/api/time-entries');
+  }
+
+  async deleteTimeEntry(timeEntryId: number): Promise<void> {
+    await this.request('DELETE', `/api/time-entries/${timeEntryId}`);
+  }
+
+  getSummary(): Promise<Summary> {
+    return this.requestJson<Summary>('GET', '/api/summary');
   }
 
   private toCalendarPayload(event: GraphEvent): CalendarEventPayload {

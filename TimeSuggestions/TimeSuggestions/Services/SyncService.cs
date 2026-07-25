@@ -22,7 +22,15 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .Where(legalCase => legalCase.IsActive)
             .ToListAsync(cancellationToken);
 
-        var builder = new SuggestionBuilder(options);
+        // Preferencja użytkownika z żądania (zwalidowana na granicy API) nadpisuje
+        // konfigurację; sama reguła "co robimy, gdy nie znamy czasu" zostaje w backendzie.
+        var effectiveOptions = new SuggestionOptions
+        {
+            MinimumEventDurationMinutes = options.MinimumEventDurationMinutes,
+            DefaultDocumentDurationMinutes = request.DefaultDocumentDurationMinutes ?? options.DefaultDocumentDurationMinutes,
+            SyncDaysBack = options.SyncDaysBack,
+        };
+        var builder = new SuggestionBuilder(effectiveOptions);
 
         var eventFilterResult = CalendarEventFilter.FilterBillable(
             request.CalendarEvents, options.MinimumEventDurationMinutes);

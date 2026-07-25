@@ -9,6 +9,9 @@ public class SuggestionOptions
 {
     public const string SectionName = "Suggestions";
 
+    /// <summary>Górna granica sensownego czasu edycji dokumentu (8 godzin) — walidacja wartości od użytkownika.</summary>
+    public const int MaxDocumentDurationMinutes = 480;
+
     /// <summary>Minimalny czas trwania spotkania w minutach; krótsze są odfiltrowywane (dokładnie ta wartość przechodzi).</summary>
     public int MinimumEventDurationMinutes { get; set; } = 5;
 

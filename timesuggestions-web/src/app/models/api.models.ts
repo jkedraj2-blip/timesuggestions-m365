@@ -22,6 +22,8 @@ export interface DriveFilePayload {
 export interface SyncRequest {
   calendarEvents: CalendarEventPayload[];
   driveFiles: DriveFilePayload[];
+  /** Opcjonalna preferencja użytkownika — bez wartości obowiązuje konfiguracja backendu. */
+  defaultDocumentDurationMinutes?: number;
 }
 
 export interface Suggestion {

@@ -35,7 +35,10 @@ export class ApiService {
   private baseUrl = environment.apiBaseUrl;
 
   /** Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania. */
-  async syncNow(onStage?: (stage: SyncStage) => void): Promise<SyncReport> {
+  async syncNow(
+    onStage?: (stage: SyncStage) => void,
+    defaultDocumentDurationMinutes?: number,
+  ): Promise<SyncReport> {
     onStage?.({ kind: 'calendar' });
     const events = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK);
 
@@ -47,6 +50,7 @@ export class ApiService {
     const request: SyncRequest = {
       calendarEvents: events.map((event) => this.toCalendarPayload(event)),
       driveFiles: files,
+      defaultDocumentDurationMinutes,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);

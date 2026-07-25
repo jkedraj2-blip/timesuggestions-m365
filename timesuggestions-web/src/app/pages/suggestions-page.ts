@@ -3,20 +3,31 @@ import { ApiService, SyncStage } from '../services/api.service';
 import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
 import { CaseInfo, Suggestion, SuggestionSource, SuggestionStatus, SyncReport } from '../models/api.models';
+import { FormsModule } from '@angular/forms';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
 import { DurationPipe } from '../pipes/duration.pipe';
+
+/** Klucz localStorage z preferencją użytkownika dla czasu dokumentów. */
+const DOCUMENT_MINUTES_STORAGE_KEY = 'timesuggestions.defaultDocumentMinutes';
+const DOCUMENT_MINUTES_MIN = 1;
+const DOCUMENT_MINUTES_MAX = 480;
 
 type SourceFilter = 'all' | SuggestionSource;
 type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
 
 @Component({
   selector: 'app-suggestions-page',
-  imports: [SuggestionCard],
+  imports: [SuggestionCard, FormsModule],
   template: `
     <div class="toolbar">
       <button class="btn btn-primary" (click)="sync()" [disabled]="syncing() || loading()">
         {{ syncing() ? 'Synchronizuję…' : 'Synchronizuj' }}
       </button>
+
+      <label class="field doc-minutes" title="Ile minut przyjąć dla sugestii z dokumentu — Graph nie mierzy czasu edycji. Możesz to potem poprawić na każdej karcie.">
+        Domyślny czas dokumentu (min)
+        <input type="number" min="1" max="480" [(ngModel)]="documentMinutesDraft" (change)="saveDocumentMinutes()" />
+      </label>
 
       <div class="filter-group">
         <span class="text-muted">Źródło:</span>
@@ -166,6 +177,9 @@ export class SuggestionsPage implements OnInit {
 
   protected bulkApproving = signal(false);
 
+  /** Preferencja czasu dokumentów — trzymana lokalnie, wysyłana z każdą synchronizacją. */
+  protected documentMinutesDraft = this.loadDocumentMinutes();
+
   /** Sugestie z jednoznacznie dopasowaną sprawą — te można zatwierdzić hurtem, bez zastanowienia. */
   protected autoMatchedCount = computed(() =>
     this.statusFilter() === 'pending'
@@ -188,7 +202,10 @@ export class SuggestionsPage implements OnInit {
     this.syncReport.set(null);
     this.syncStage.set(null);
     try {
-      const report = await this.api.syncNow((stage) => this.syncStage.set(stage));
+      const report = await this.api.syncNow(
+        (stage) => this.syncStage.set(stage),
+        this.normalizedDocumentMinutes(),
+      );
       this.syncReport.set(report);
       await this.loadData();
       await this.summaryStore.refresh();
@@ -296,5 +313,28 @@ export class SuggestionsPage implements OnInit {
 
   private toUserMessage(error: unknown, fallback: string): string {
     return error instanceof Error ? `${fallback} ${error.message}` : fallback;
+  }
+
+  protected saveDocumentMinutes(): void {
+    const value = this.normalizedDocumentMinutes();
+    if (value !== undefined) {
+      localStorage.setItem(DOCUMENT_MINUTES_STORAGE_KEY, String(value));
+    }
+  }
+
+  /** Wartość spoza zakresu traktujemy jak brak preferencji — backend użyje swojej konfiguracji. */
+  private normalizedDocumentMinutes(): number | undefined {
+    const value = Number(this.documentMinutesDraft);
+    const isValid = Number.isInteger(value)
+      && value >= DOCUMENT_MINUTES_MIN
+      && value <= DOCUMENT_MINUTES_MAX;
+    return isValid ? value : undefined;
+  }
+
+  private loadDocumentMinutes(): number | null {
+    const stored = Number(localStorage.getItem(DOCUMENT_MINUTES_STORAGE_KEY));
+    return Number.isInteger(stored) && stored >= DOCUMENT_MINUTES_MIN && stored <= DOCUMENT_MINUTES_MAX
+      ? stored
+      : null;
   }
 }

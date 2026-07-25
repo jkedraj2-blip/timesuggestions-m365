@@ -46,6 +46,20 @@ Content-Type: application/json
 ### Odrzucenie sugestii (id=2)
 POST {{TimeSuggestions_HostAddress}}/api/suggestions/2/reject
 
+### Przywrócenie odrzuconej sugestii na listę oczekujących (id=2)
+POST {{TimeSuggestions_HostAddress}}/api/suggestions/2/restore
+
+### Lista odrzuconych sugestii
+GET {{TimeSuggestions_HostAddress}}/api/suggestions?status=rejected
+Accept: application/json
+
+### Podsumowanie do kafelków (liczniki, łączny czas, ostatnia synchronizacja)
+GET {{TimeSuggestions_HostAddress}}/api/summary
+Accept: application/json
+
+### Usunięcie wpisu czasu (id=1) — przywraca sugestię źródłową do oczekujących
+DELETE {{TimeSuggestions_HostAddress}}/api/time-entries/1
+
 ### Aktywne sprawy (do dropdownu edycji)
 GET {{TimeSuggestions_HostAddress}}/api/cases
 Accept: application/json

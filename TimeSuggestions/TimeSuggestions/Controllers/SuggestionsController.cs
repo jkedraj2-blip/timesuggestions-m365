@@ -85,4 +85,18 @@ public class SuggestionsController(AppDbContext db, ApprovalService approvalServ
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
     }
+
+    [HttpPost("{id:int}/restore")]
+    public async Task<IActionResult> Restore(int id, CancellationToken cancellationToken)
+    {
+        var result = await approvalService.RestoreAsync(id, cancellationToken);
+
+        return result.Outcome switch
+        {
+            ApprovalOutcome.Success => NoContent(),
+            ApprovalOutcome.SuggestionNotFound => NotFound(new { message = "Sugestia nie istnieje." }),
+            ApprovalOutcome.SuggestionNotRejected => Conflict(new { message = "Przywrócić można tylko odrzuconą sugestię." }),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
+        };
+    }
 }

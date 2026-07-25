@@ -10,7 +10,9 @@ public enum ApprovalOutcome
     Success,
     SuggestionNotFound,
     SuggestionNotPending,
+    SuggestionNotRejected,
     CaseNotFound,
+    TimeEntryNotFound,
 }
 
 /// <summary>Jawny wynik zamiast wyjątków — kontroler tłumaczy go na kody HTTP.</summary>
@@ -84,6 +86,52 @@ public class ApprovalService(AppDbContext db)
         }
 
         suggestion.Status = SuggestionStatus.Rejected;
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ApprovalResult(ApprovalOutcome.Success);
+    }
+
+    /// <summary>Przywraca odrzuconą sugestię na listę oczekujących — pomyłka nie może być nieodwracalna.</summary>
+    public async Task<ApprovalResult> RestoreAsync(int suggestionId, CancellationToken cancellationToken)
+    {
+        var suggestion = await db.Suggestions
+            .FirstOrDefaultAsync(candidate => candidate.Id == suggestionId, cancellationToken);
+        if (suggestion is null)
+        {
+            return new ApprovalResult(ApprovalOutcome.SuggestionNotFound);
+        }
+
+        if (suggestion.Status != SuggestionStatus.Rejected)
+        {
+            return new ApprovalResult(ApprovalOutcome.SuggestionNotRejected);
+        }
+
+        suggestion.Status = SuggestionStatus.Pending;
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ApprovalResult(ApprovalOutcome.Success);
+    }
+
+    /// <summary>
+    /// Usuwa wpis czasu i przywraca powiązaną sugestię do oczekujących.
+    /// Jedno SaveChanges = jedna transakcja: albo oba kroki, albo żaden.
+    /// </summary>
+    public async Task<ApprovalResult> DeleteTimeEntryAsync(int timeEntryId, CancellationToken cancellationToken)
+    {
+        var timeEntry = await db.TimeEntries
+            .Include(entry => entry.Suggestion)
+            .FirstOrDefaultAsync(entry => entry.Id == timeEntryId, cancellationToken);
+        if (timeEntry is null)
+        {
+            return new ApprovalResult(ApprovalOutcome.TimeEntryNotFound);
+        }
+
+        if (timeEntry.Suggestion is not null)
+        {
+            timeEntry.Suggestion.Status = SuggestionStatus.Pending;
+        }
+
+        db.TimeEntries.Remove(timeEntry);
         await db.SaveChangesAsync(cancellationToken);
 
         return new ApprovalResult(ApprovalOutcome.Success);

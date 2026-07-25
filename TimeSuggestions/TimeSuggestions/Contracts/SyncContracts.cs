@@ -71,5 +71,6 @@ public record SyncReport(
     SyncFilteredOutCounts FilteredOut,
     int Aggregated,
     int Created,
+    int Updated,
     int SkippedExisting,
     SyncMatchedCounts Matched);

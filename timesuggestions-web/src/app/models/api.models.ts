@@ -117,6 +117,8 @@ export interface SyncReport {
   filteredOut: SyncFilteredOutCounts;
   aggregated: number;
   created: number;
+  /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku). */
+  updated: number;
   skippedExisting: number;
   matched: SyncMatchedCounts;
 }

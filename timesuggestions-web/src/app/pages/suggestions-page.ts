@@ -68,6 +68,9 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
           @if (report.aggregated > 0) {
             <li>Zwinięto {{ report.aggregated }} {{ report.aggregated === 1 ? 'dodatkową edycję' : 'dodatkowych edycji' }} tego samego pliku w jedną sugestię dziennie.</li>
           }
+          @if (report.updated > 0) {
+            <li>Zaktualizowano {{ report.updated }} {{ report.updated === 1 ? 'istniejącą sugestię' : 'istniejących sugestii' }} (np. po zmianie nazwy pliku lub tytułu spotkania).</li>
+          }
           @if (report.created > 0) {
             <li>
               Dopasowanie nowych: {{ report.matched.single }} automatycznie,

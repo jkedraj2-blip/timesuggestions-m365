@@ -59,6 +59,7 @@ public class ApprovalService(AppDbContext db)
             CreatedFromSuggestion = true,
             Source = suggestion.Source,
             SuggestionId = suggestion.Id,
+            Suggestion = suggestion,
             CreatedAt = nowUtc,
         };
 

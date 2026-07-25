@@ -81,8 +81,14 @@ public record TimeEntryDto(
     string Description,
     bool CreatedFromSuggestion,
     SuggestionSource Source,
-    int SuggestionId)
+    int SuggestionId,
+    string? SourceTitle,
+    DateTime? SourceStartedAt)
 {
+    /// <summary>
+    /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
+    /// lub nazwa pliku) — opis mógł zostać nadpisany przez użytkownika przy zatwierdzaniu.
+    /// </summary>
     public static TimeEntryDto FromEntity(TimeEntry entry) => new(
         entry.Id,
         entry.CaseId,
@@ -92,5 +98,7 @@ public record TimeEntryDto(
         entry.Description,
         entry.CreatedFromSuggestion,
         entry.Source,
-        entry.SuggestionId);
+        entry.SuggestionId,
+        entry.Suggestion?.Title,
+        entry.Suggestion?.StartedAt);
 }

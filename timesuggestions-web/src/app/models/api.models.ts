@@ -63,6 +63,9 @@ export interface TimeEntry {
   createdFromSuggestion: boolean;
   source: SuggestionSource;
   suggestionId: number;
+  /** Tytuł spotkania / nazwa pliku, z którego powstał wpis — kotwica w realnym zdarzeniu. */
+  sourceTitle: string | null;
+  sourceStartedAt: string | null;
 }
 
 /** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */

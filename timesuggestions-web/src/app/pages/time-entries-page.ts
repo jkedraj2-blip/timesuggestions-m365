@@ -48,11 +48,24 @@ import { DurationPipe } from '../pipes/duration.pipe';
                     <span class="badge badge-neutral">{{ entry.source === 'calendar' ? '📅 Spotkanie' : '📄 Dokument' }}</span>
                     <strong>{{ entry.caseName }}</strong>
                     <span class="badge badge-success">{{ entry.durationMinutes | duration }}</span>
-                    @if (entry.createdFromSuggestion) {
-                      <span class="badge badge-neutral" title="Wpis powstał z automatycznej sugestii">z sugestii</span>
-                    }
                   </div>
                   <p class="description text-muted">{{ entry.description }}</p>
+                  @if (entry.sourceTitle) {
+                    <!-- Kotwica w realnym zdarzeniu — opis powyżej mógł zostać nadpisany przy zatwierdzaniu. -->
+                    <p class="origin text-muted">
+                      @if (entry.source === 'calendar') {
+                        ze spotkania: „{{ entry.sourceTitle }}"
+                        @if (entry.sourceStartedAt) {
+                          <span>, {{ entry.sourceStartedAt | date: 'dd.MM HH:mm' }}</span>
+                        }
+                      } @else {
+                        z dokumentu: „{{ entry.sourceTitle }}"
+                        @if (entry.sourceStartedAt) {
+                          <span>, {{ entry.sourceStartedAt | date: 'dd.MM' }}</span>
+                        }
+                      }
+                    </p>
+                  }
                 </div>
                 <button class="btn btn-danger" (click)="deleteEntry(entry)" [disabled]="busyId() === entry.id">
                   Usuń
@@ -73,6 +86,7 @@ import { DurationPipe } from '../pipes/duration.pipe';
     .entry-main { flex: 1; }
     .entry-header { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
     .description { margin: var(--space-1) 0 0; }
+    .origin { margin: var(--space-1) 0 0; font-size: var(--font-size-sm); }
   `,
 })
 export class TimeEntriesPage implements OnInit {

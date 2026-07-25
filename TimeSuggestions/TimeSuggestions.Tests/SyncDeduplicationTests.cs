@@ -84,6 +84,45 @@ public sealed class SyncDeduplicationTests : IDisposable
     }
 
     [Fact]
+    public async Task SyncAsync_RaportZawieraLicznikiPobranOdrzucenIDopasowan()
+    {
+        var request = new SyncRequest
+        {
+            CalendarEvents =
+            [
+                new CalendarEventDto
+                {
+                    Id = "event-1",
+                    Subject = "Spotkanie z Kowalski",
+                    StartDateTime = Now.AddDays(-1),
+                    EndDateTime = Now.AddDays(-1).AddHours(1),
+                },
+                new CalendarEventDto
+                {
+                    Id = "event-2",
+                    Subject = "Prywatna wizyta",
+                    StartDateTime = Now.AddDays(-1),
+                    EndDateTime = Now.AddDays(-1).AddHours(1),
+                    Sensitivity = "private",
+                },
+            ],
+            DriveFiles =
+            [
+                new DriveFileDto { Id = "file-1", Name = "zdjecie.png", LastModifiedDateTime = Now.AddDays(-1), LastModifiedByMe = true },
+            ],
+        };
+
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(2, report.Fetched.CalendarEvents);
+        Assert.Equal(1, report.Fetched.DriveFiles);
+        Assert.Equal(1, report.FilteredOut.Private);
+        Assert.Equal(1, report.FilteredOut.NotOfficeDocument);
+        Assert.Equal(1, report.Created);
+        Assert.Equal(1, report.Matched.Single); // "Kowalski" pasuje do sprawy z seedu
+    }
+
+    [Fact]
     public async Task SyncAsync_TenSamPlikWDwaRozneDniTworzyDwieSugestie()
     {
         var request = new SyncRequest

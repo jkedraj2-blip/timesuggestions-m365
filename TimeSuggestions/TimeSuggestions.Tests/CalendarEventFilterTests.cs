@@ -72,6 +72,20 @@ public class CalendarEventFilterTests
     }
 
     [Fact]
+    public void FilterBillable_LiczyOdrzuceniaPerRegula()
+    {
+        // Fixture zawiera: normalne, prywatne, poufne, 4-minutowe, dokładnie 5-minutowe, całodniowe.
+        var events = TestHelpers.LoadCalendarEventsFixture();
+
+        var result = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+
+        Assert.Equal(2, result.PrivateCount); // prywatne + poufne
+        Assert.Equal(1, result.TooShortCount);
+        Assert.Equal(1, result.AllDayCount);
+        Assert.Equal(2, result.Accepted.Count);
+    }
+
+    [Fact]
     public void GetDurationMinutes_WyliczaCzasZPoczatkuIKonca()
     {
         var events = TestHelpers.LoadCalendarEventsFixture();

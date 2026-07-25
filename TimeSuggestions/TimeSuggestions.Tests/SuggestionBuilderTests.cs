@@ -106,6 +106,27 @@ public class SuggestionBuilderTests
     }
 
     [Fact]
+    public void BuildFromDocuments_LiczyOdrzuceniaIAgregacje()
+    {
+        var files = new[]
+        {
+            CreateFile("file-1", "Umowa_NovaTech.docx", Now.AddDays(-1)),                 // przechodzi
+            CreateFile("file-1", "Umowa_NovaTech.docx", Now.AddDays(-1).AddHours(3)),     // zagregowane (ten sam dzień)
+            CreateFile("file-2", "zdjecie.png", Now.AddDays(-1)),                         // nie-dokument
+            CreateFile("file-3", "Stara_umowa.docx", Now.AddDays(-30)),                   // poza oknem
+            CreateFile("file-4", "Cudzy_plik.docx", Now.AddDays(-1), byMe: false),        // cudza modyfikacja
+        };
+
+        var result = CreateBuilder().BuildFromDocuments(files, TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+
+        Assert.Equal(1, result.NotOfficeDocumentCount);
+        Assert.Equal(1, result.OutsideWindowCount);
+        Assert.Equal(1, result.NotModifiedByUserCount);
+        Assert.Equal(1, result.AggregatedCount);
+        Assert.Single(result.Suggestions);
+    }
+
+    [Fact]
     public void BuildFromCalendar_OznaczaNiejednoznaczneDopasowanieBezPrzypisaniaSprawy()
     {
         var calendarEvent = new CalendarEventDto

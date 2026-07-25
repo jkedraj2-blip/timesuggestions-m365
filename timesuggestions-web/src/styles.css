@@ -86,34 +86,34 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-/* Niebieski — nowoczesny, technologiczny: głębokie granaty, wyraźny akcent,
-   oszczędna poświata na elementach aktywnych (nie na tłach tekstu). */
+/* Niebieski — nowoczesny, technologiczny: nasycone granaty (wyraźnie niebieskie,
+   nie grafitowe), jaśniejszy akcent, oszczędna poświata na elementach aktywnych. */
 :root[data-theme='blue'] {
-  --bg: #0a1220;
-  --surface: #101c30;
-  --surface-alt: #16243c;
-  --border: #24395a;
-  --text: #e8eef7;
-  --text-muted: #97abc8;
+  --bg: #123061;
+  --surface: #1a3d77;
+  --surface-alt: #214a8c;
+  --border: #3d69b2;
+  --text: #f0f6ff;
+  --text-muted: #b3cbf2;
 
-  --accent: #1d6fd1;
-  --accent-hover: #2f80e6;
+  --accent: #2d7ff2;
+  --accent-hover: #4f95fa;
   --accent-contrast: #ffffff;
-  --accent-soft: #142b4a;
+  --accent-soft: #1c4d9e;
 
-  --success: #3ddc84;
-  --success-soft: #12332a;
+  --success: #4ce695;
+  --success-soft: #14503c;
 
-  --warn: #ffc94d;
-  --warn-strong: #d4a72c;
-  --warn-soft: #33270f;
+  --warn: #ffd166;
+  --warn-strong: #eab13a;
+  --warn-soft: #4d3c14;
 
-  --danger: #ff6b66;
-  --danger-soft: #351a1e;
+  --danger: #ff8b87;
+  --danger-soft: #59292c;
 
-  --shadow-sm: 0 1px 3px rgba(2, 8, 20, 0.6);
-  --shadow-md: 0 6px 16px rgba(2, 8, 20, 0.7);
-  --glow: 0 0 12px rgba(56, 161, 255, 0.35);
+  --shadow-sm: 0 1px 3px rgba(4, 14, 38, 0.5);
+  --shadow-md: 0 6px 18px rgba(4, 14, 38, 0.6);
+  --glow: 0 0 14px rgba(90, 160, 255, 0.5);
 }
 
 /* Akcenty poświaty w motywie niebieskim — realizowane tokenem, więc

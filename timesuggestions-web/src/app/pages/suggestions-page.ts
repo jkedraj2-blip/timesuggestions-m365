@@ -11,6 +11,8 @@ import { DurationPipe } from '../pipes/duration.pipe';
 const DOCUMENT_MINUTES_STORAGE_KEY = 'timesuggestions.defaultDocumentMinutes';
 const DOCUMENT_MINUTES_MIN = 1;
 const DOCUMENT_MINUTES_MAX = 480;
+/** Wartość startowa pola — odpowiednik Suggestions:DefaultDocumentDurationMinutes w backendzie. */
+const DOCUMENT_MINUTES_DEFAULT = 30;
 
 type SourceFilter = 'all' | SuggestionSource;
 type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
@@ -331,10 +333,10 @@ export class SuggestionsPage implements OnInit {
     return isValid ? value : undefined;
   }
 
-  private loadDocumentMinutes(): number | null {
+  private loadDocumentMinutes(): number {
     const stored = Number(localStorage.getItem(DOCUMENT_MINUTES_STORAGE_KEY));
     return Number.isInteger(stored) && stored >= DOCUMENT_MINUTES_MIN && stored <= DOCUMENT_MINUTES_MAX
       ? stored
-      : null;
+      : DOCUMENT_MINUTES_DEFAULT;
   }
 }

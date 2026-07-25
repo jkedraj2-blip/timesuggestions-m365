@@ -31,12 +31,13 @@ Logika w .NET jest przy tym czysto testowalna (xUnit, bez sieci i logowania).
 
 | Widok | Rola |
 |---|---|
-| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, filtr źródła i statusu, przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego), wskaźnik postępu, przywracanie odrzuconych |
-| **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami — dowód działania aplikacji; usunięcie wpisu przywraca sugestię |
-| **Sprawy** | Lista spraw z numerami i słowami kluczowymi + wyjaśnienie, jak działa dopasowanie |
+| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, filtr źródła i statusu, przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego, co zaktualizowano), wskaźnik postępu, przywracanie odrzuconych, regulowany domyślny czas dokumentu |
+| **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami i pochodzeniem (z jakiego spotkania/pliku powstały); usunięcie wpisu przywraca sugestię |
+| **Sprawy** | Zarządzanie sprawami: dodawanie, edycja (w tym słów kluczowych sterujących dopasowaniem), dezaktywacja — celowo bez twardego usuwania; wyjaśnienie zasady dopasowania |
 
 Nad zakładkami kafelki podsumowania: oczekujące sugestie, zapisane wpisy, łączny czas,
-ostatnia synchronizacja.
+ostatnia synchronizacja. W nagłówku przełącznik trzech motywów (jasny / niebieski / ciemny),
+realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 
 ## Zapisane decyzje projektowe
 
@@ -46,7 +47,9 @@ ostatnia synchronizacja.
 | **Cache `deltaLink` w localStorage** | Pierwszy przebieg delta przechodzi cały dysk (na dużym OneDrive to dziesiątki sekund). Zapamiętany `deltaLink` sprawia, że kolejne synchronizacje pobierają wyłącznie zmiany. Link zapisywany dopiero po udanym zapisie w backendzie; wygaśnięcie (HTTP 410) czyści cache i wymusza pełny przebieg. |
 | **Strefa czasowa przez nagłówek `Prefer`** | Graph domyślnie zwraca czasy w UTC; nagłówek `Prefer: outlook.timezone` przenosi konwersję na serwer Graph. Błąd strefy przekładałby się wprost na złe godziny wpisów. |
 | **Domyślny czas dokumentu jako parametr** | Graph mówi tylko *kiedy* plik zmieniono, nie *jak długo* trwała praca. Domyślne 30 min to parametr `Suggestions:DefaultDocumentDurationMinutes` w `appsettings.json`; użytkownik może poprawić wartość przed zatwierdzeniem. |
-| **Dedup po `(źródło, id z Graph, dzień)`** | Indeks unikalny w bazie + pominięcie istniejących kluczy przy synchronizacji. Powtórny sync nie tworzy duplikatów, a **odrzucona sugestia nie wraca** (status zmieniany, rekord nieusuwany). |
+| **Dedup po `(źródło, id z Graph, dzień)`** | Indeks unikalny w bazie + scalanie z istniejącymi przy synchronizacji. Powtórny sync nie tworzy duplikatów, a **odrzucona sugestia nie wraca** (status zmieniany, rekord nieusuwany). |
+| **Odświeżanie oczekujących przy syncu** | Zmiana nazwy pliku/tytułu spotkania nie zmienia ID w Graph, więc sam dedup zostawiałby stary tytuł. Sugestie **oczekujące** są nadpisywane wartościami ze źródła (z ponownym dopasowaniem); zatwierdzonych i odrzuconych sync nie dotyka. |
+| **Dezaktywacja zamiast usuwania spraw** | Wpisy czasu wskazują na sprawy kluczem obcym — twarde usunięcie niszczyłoby dane rozliczeniowe. `IsActive=false` wyłącza sprawę z dopasowania i list wyboru, zachowując historię. |
 | **Edycja = zatwierdzenie z poprawionymi wartościami** | Jeden endpoint `approve` przyjmuje wartości finalne — mniej ścieżek, ta sama walidacja. |
 | **Raport z synchronizacji** | Backend zwraca liczniki: ile pobrano, ile odfiltrowano per reguła, ile zagregowano, jak dopasowano. Bez tego odfiltrowanie spotkań wygląda dla użytkownika jak zgubione dane. |
 
@@ -54,12 +57,14 @@ ostatnia synchronizacja.
 
 | Metoda i ścieżka | Opis |
 |---|---|
-| `POST /api/sync` | Przyjmuje surowe dane z Graph, zwraca pełny raport synchronizacji |
+| `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalny domyślny czas dokumentu), zwraca pełny raport |
 | `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące) |
 | `POST /api/suggestions/{id}/approve` | Tworzy wpis czasu, zamyka sugestię |
 | `POST /api/suggestions/{id}/reject` | Odrzuca (status, bez usuwania) |
 | `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą do oczekujących |
-| `GET /api/cases` | Aktywne sprawy ze słowami kluczowymi |
+| `GET /api/cases?includeInactive=` | Sprawy ze słowami kluczowymi (domyślnie tylko aktywne) |
+| `POST /api/cases`, `PUT /api/cases/{id}` | Dodawanie i edycja spraw (unikalny numer sprawy) |
+| `POST /api/cases/{id}/activate` / `deactivate` | Przełączanie aktywności (zamiast usuwania) |
 | `GET /api/time-entries` | Wpisy pogrupowane po dniach z sumami |
 | `DELETE /api/time-entries/{id}` | Usuwa wpis i przywraca sugestię |
 | `GET /api/summary` | Liczniki do kafelków podsumowania |
@@ -91,7 +96,7 @@ placeholdera. Client ID jest identyfikatorem publicznym (nie sekretem). Rejestra
 mieć platformę **SPA** z redirect URI `http://localhost:4200`. Aplikacja nie używa
 client secret — działa jako klient publiczny (authorization code + PKCE).
 
-**Testy** (50 testów jednostkowych logiki — bez sieci i logowania):
+**Testy** (60 testów jednostkowych logiki — bez sieci i logowania):
 
 ```bash
 cd TimeSuggestions

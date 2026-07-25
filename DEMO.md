@@ -53,6 +53,15 @@ W **OneDrive** (edytuj pliki, żeby miały świeżą datę modyfikacji):
     - dzięki cache delta sync jest wyraźnie szybszy niż pierwszy.
 12. **Odwracalność** — w „Wpisy czasu" usuń jeden wpis → sugestia wraca do oczekujących;
     w filtrze „odrzucone" przywróć odrzuconą.
+13. **Odświeżanie po zmianie źródła** — zmień w OneDrive nazwę pliku z oczekującej
+    sugestii (np. dopisz nazwę klienta) → „Synchronizuj" → karta pokazuje nowy tytuł
+    i nowe dopasowanie, a raport linijkę „zaktualizowano 1". Odrzuconych i zatwierdzonych
+    sync nie dotyka.
+14. **Zarządzanie sprawami** — w „Sprawach" dodaj nową sprawę z własnym słowem kluczowym,
+    nazwij tak spotkanie/plik i pokaż automatyczne dopasowanie po synchronizacji.
+    Zdezaktywuj sprawę i pokaż, że przestaje brać udział w dopasowaniu (bez usuwania —
+    wpisy czasu wskazują na sprawy).
+15. **Motywy** — przełącz jasny / niebieski / ciemny w nagłówku; wybór zostaje zapamiętany.
 
 ## Materiał do notatki końcowej
 

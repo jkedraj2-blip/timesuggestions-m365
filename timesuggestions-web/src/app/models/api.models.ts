@@ -47,6 +47,15 @@ export interface CaseInfo {
   caseNumber: string;
   clientName: string;
   keywords: string[];
+  isActive: boolean;
+}
+
+/** Dane sprawy przy tworzeniu i edycji. */
+export interface CaseWritePayload {
+  name: string;
+  caseNumber: string;
+  clientName: string;
+  keywords: string[];
 }
 
 export interface ApprovePayload {

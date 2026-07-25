@@ -1,25 +1,17 @@
 import { Injectable, inject } from '@angular/core';
 import { AuthService } from './auth.service';
-
-export interface GraphDateTime {
-  dateTime: string;
-  timeZone: string;
-}
-
-export interface GraphEvent {
-  id: string;
-  subject: string;
-  start: GraphDateTime;
-  end: GraphDateTime;
-  isAllDay: boolean;
-  sensitivity: string;
-}
+import { GraphEvent } from '../models/graph.models';
+import { GRAPH_BASE_URL, OUTLOOK_TIMEZONE } from './graph-config';
 
 @Injectable({ providedIn: 'root' })
-export class GraphService {
+export class GraphCalendarService {
   private auth = inject(AuthService);
 
-  async getEventsLastDays(days = 7): Promise<GraphEvent[]> {
+  /**
+   * Widok kalendarza z jawnym zakresem dat — w odróżnieniu od listy wydarzeń
+   * rozwija serie spotkań cyklicznych na pojedyncze wystąpienia.
+   */
+  async getEventsLastDays(days: number): Promise<GraphEvent[]> {
     const end = new Date();
     const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -32,18 +24,15 @@ export class GraphService {
     });
 
     const token = await this.auth.getToken();
-    const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/calendarView?${params}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Prefer: 'outlook.timezone="Central European Standard Time"',
-        },
+    const response = await fetch(`${GRAPH_BASE_URL}/me/calendarView?${params}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: `outlook.timezone="${OUTLOOK_TIMEZONE}"`,
       },
-    );
+    });
 
     if (!response.ok) {
-      throw new Error(`Graph ${response.status}: ${await response.text()}`);
+      throw new Error(`Nie udało się pobrać kalendarza (Graph ${response.status}).`);
     }
 
     const body = await response.json();

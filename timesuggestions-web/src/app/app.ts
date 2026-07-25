@@ -1,7 +1,8 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { AuthService } from './auth.service';
-import { GraphService, GraphEvent } from './graph.service';
+import { AuthService } from './services/auth.service';
+import { GraphCalendarService } from './services/graph-calendar.service';
+import { GraphEvent } from './models/graph.models';
 
 @Component({
   selector: 'app-root',
@@ -43,7 +44,7 @@ import { GraphService, GraphEvent } from './graph.service';
 })
 export class App implements OnInit {
   protected auth = inject(AuthService);
-  private graph = inject(GraphService);
+  private graph = inject(GraphCalendarService);
 
   protected user = signal<string | null>(null);
   protected events = signal<GraphEvent[]>([]);

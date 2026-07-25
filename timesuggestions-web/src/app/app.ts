@@ -1,10 +1,13 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from './services/auth.service';
+import { SummaryStore } from './services/summary-store';
+import { DurationPipe } from './pipes/duration.pipe';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, DatePipe, DurationPipe],
   template: `
     <header class="app-header">
       <div>
@@ -20,6 +23,33 @@ import { AuthService } from './services/auth.service';
     </header>
 
     @if (user()) {
+      @if (summaryStore.summary(); as summary) {
+        <div class="tiles">
+          <div class="tile">
+            <div class="tile-value">{{ summary.pendingCount }}</div>
+            <div class="tile-label">oczekujące sugestie</div>
+          </div>
+          <div class="tile">
+            <div class="tile-value">{{ summary.approvedCount }}</div>
+            <div class="tile-label">zapisane wpisy</div>
+          </div>
+          <div class="tile">
+            <div class="tile-value">{{ summary.totalLoggedMinutes | duration }}</div>
+            <div class="tile-label">łączny zalogowany czas</div>
+          </div>
+          <div class="tile">
+            <div class="tile-value">
+              @if (summary.lastSyncAt) {
+                {{ summary.lastSyncAt | date: 'dd.MM HH:mm' }}
+              } @else {
+                —
+              }
+            </div>
+            <div class="tile-label">ostatnia synchronizacja</div>
+          </div>
+        </div>
+      }
+
       <nav class="tabs">
         <a class="tab" routerLink="/sugestie" routerLinkActive="active">Sugestie</a>
         <a class="tab" routerLink="/wpisy" routerLinkActive="active">Wpisy czasu</a>
@@ -50,11 +80,15 @@ import { AuthService } from './services/auth.service';
 })
 export class App implements OnInit {
   protected auth = inject(AuthService);
+  protected summaryStore = inject(SummaryStore);
 
   protected user = signal<string | null>(null);
 
   async ngOnInit(): Promise<void> {
     await this.auth.init();
     this.user.set(this.auth.account?.username ?? null);
+    if (this.user()) {
+      await this.summaryStore.refresh();
+    }
   }
 }

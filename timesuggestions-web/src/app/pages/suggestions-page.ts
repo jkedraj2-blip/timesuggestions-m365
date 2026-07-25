@@ -1,6 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
-import { ApiService } from '../services/api.service';
-import { CaseInfo, Suggestion, SuggestionSource, SuggestionStatus } from '../models/api.models';
+import { ApiService, SyncStage } from '../services/api.service';
+import { SummaryStore } from '../services/summary-store';
+import { CaseInfo, Suggestion, SuggestionSource, SuggestionStatus, SyncReport } from '../models/api.models';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
 
 type SourceFilter = 'all' | SuggestionSource;
@@ -29,8 +30,45 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
       </div>
     </div>
 
-    @if (syncMessage()) {
-      <p class="info-box">{{ syncMessage() }}</p>
+    @if (syncing()) {
+      <div class="info-box sync-progress">
+        <span class="spinner"></span>
+        <span>{{ stageLabel() }}</span>
+      </div>
+    }
+
+    @if (syncReport(); as report) {
+      <details class="info-box report" open>
+        <summary>
+          <strong>Synchronizacja zakończona:</strong>
+          utworzono {{ report.created }} {{ report.created === 1 ? 'nową sugestię' : 'nowych sugestii' }},
+          pominięto {{ report.skippedExisting }} (już istniały).
+        </summary>
+        <ul>
+          <li>Pobrano {{ report.fetched.calendarEvents }} spotkań i {{ report.fetched.driveFiles }} plików.</li>
+          @if (report.filteredOut.total > 0) {
+            <li>
+              Odfiltrowano {{ report.filteredOut.total }}:
+              @if (report.filteredOut.private > 0) { <span>{{ report.filteredOut.private }} prywatne/poufne · </span> }
+              @if (report.filteredOut.tooShort > 0) { <span>{{ report.filteredOut.tooShort }} krótsze niż 5 min · </span> }
+              @if (report.filteredOut.allDay > 0) { <span>{{ report.filteredOut.allDay }} całodniowe · </span> }
+              @if (report.filteredOut.notOfficeDocument > 0) { <span>{{ report.filteredOut.notOfficeDocument }} pliki inne niż Word/Excel · </span> }
+              @if (report.filteredOut.outsideWindow > 0) { <span>{{ report.filteredOut.outsideWindow }} poza oknem 7 dni · </span> }
+              @if (report.filteredOut.notModifiedByUser > 0) { <span>{{ report.filteredOut.notModifiedByUser }} zmodyfikowane przez inną osobę</span> }
+            </li>
+          }
+          @if (report.aggregated > 0) {
+            <li>Zwinięto {{ report.aggregated }} {{ report.aggregated === 1 ? 'dodatkową edycję' : 'dodatkowych edycji' }} tego samego pliku w jedną sugestię dziennie.</li>
+          }
+          @if (report.created > 0) {
+            <li>
+              Dopasowanie nowych: {{ report.matched.single }} automatycznie,
+              {{ report.matched.ambiguous }} niejednoznacznie,
+              {{ report.matched.none }} bez sprawy.
+            </li>
+          }
+        </ul>
+      </details>
     }
 
     @if (error()) {
@@ -67,10 +105,20 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
   styles: `
     .toolbar { display: flex; align-items: center; gap: var(--space-5); margin-bottom: var(--space-4); flex-wrap: wrap; }
     .filter-group { display: flex; align-items: center; gap: var(--space-1); }
+    .sync-progress { display: flex; align-items: center; gap: var(--space-3); }
+    .spinner {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid var(--accent-soft); border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .report summary { cursor: pointer; }
+    .report ul { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
   `,
 })
 export class SuggestionsPage implements OnInit {
   private api = inject(ApiService);
+  private summaryStore = inject(SummaryStore);
 
   protected suggestions = signal<Suggestion[]>([]);
   protected cases = signal<CaseInfo[]>([]);
@@ -79,7 +127,23 @@ export class SuggestionsPage implements OnInit {
   protected loading = signal(false);
   protected syncing = signal(false);
   protected error = signal<string | null>(null);
-  protected syncMessage = signal<string | null>(null);
+  protected syncReport = signal<SyncReport | null>(null);
+  protected syncStage = signal<SyncStage | null>(null);
+
+  /** Etap synchronizacji po ludzku — user widzi, że 30-sekundowy sync faktycznie pracuje. */
+  protected stageLabel = computed(() => {
+    const stage = this.syncStage();
+    switch (stage?.kind) {
+      case 'calendar':
+        return 'Pobieram spotkania z kalendarza Outlook…';
+      case 'files':
+        return `Przeglądam pliki na OneDrive (strona ${stage.page})…`;
+      case 'processing':
+        return 'Przetwarzam dane i tworzę sugestie…';
+      default:
+        return 'Rozpoczynam synchronizację…';
+    }
+  });
 
   protected visibleSuggestions = computed(() => {
     const activeFilter = this.sourceFilter();
@@ -99,23 +163,25 @@ export class SuggestionsPage implements OnInit {
   protected async sync(): Promise<void> {
     this.syncing.set(true);
     this.error.set(null);
-    this.syncMessage.set(null);
+    this.syncReport.set(null);
+    this.syncStage.set(null);
     try {
-      const report = await this.api.syncNow();
-      this.syncMessage.set(
-        `Synchronizacja zakończona: ${report.created} nowych sugestii, ${report.skippedExisting} pominiętych (już istniały).`,
-      );
+      const report = await this.api.syncNow((stage) => this.syncStage.set(stage));
+      this.syncReport.set(report);
       await this.loadData();
+      await this.summaryStore.refresh();
     } catch (error) {
       this.error.set(this.toUserMessage(error, 'Synchronizacja nie powiodła się.'));
     } finally {
       this.syncing.set(false);
+      this.syncStage.set(null);
     }
   }
 
   protected onResolved(event: SuggestionResolved): void {
     // Rozstrzygnięta sugestia znika z bieżącej listy bez ponownego pobierania.
     this.suggestions.update((current) => current.filter((s) => s.id !== event.suggestion.id));
+    void this.summaryStore.refresh();
   }
 
   protected async loadData(): Promise<void> {

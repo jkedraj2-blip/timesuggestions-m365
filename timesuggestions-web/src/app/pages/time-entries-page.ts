@@ -1,6 +1,7 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { ApiService } from '../services/api.service';
+import { SummaryStore } from '../services/summary-store';
 import { TimeEntriesResponse, TimeEntry } from '../models/api.models';
 import { DurationPipe } from '../pipes/duration.pipe';
 
@@ -75,6 +76,7 @@ import { DurationPipe } from '../pipes/duration.pipe';
 })
 export class TimeEntriesPage implements OnInit {
   private api = inject(ApiService);
+  private summaryStore = inject(SummaryStore);
 
   protected data = signal<TimeEntriesResponse | null>(null);
   protected loading = signal(false);
@@ -104,6 +106,7 @@ export class TimeEntriesPage implements OnInit {
     try {
       await this.api.deleteTimeEntry(entry.id);
       await this.loadData();
+      await this.summaryStore.refresh();
     } catch (error) {
       this.error.set(error instanceof Error ? error.message : 'Nie udało się usunąć wpisu.');
     } finally {

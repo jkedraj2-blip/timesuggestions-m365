@@ -40,14 +40,14 @@ public sealed class SyncDeduplicationTests : IDisposable
         connection.Dispose();
     }
 
-    private static SyncRequest CreateRequestWithOneEvent() => new()
+    private static SyncRequest CreateRequestWithOneEvent(string subject = "Spotkanie z Kowalski") => new()
     {
         CalendarEvents =
         [
             new CalendarEventDto
             {
                 Id = "event-1",
-                Subject = "Spotkanie z Kowalski",
+                Subject = subject,
                 StartDateTime = Now.AddDays(-1),
                 EndDateTime = Now.AddDays(-1).AddHours(1),
             },
@@ -81,6 +81,96 @@ public sealed class SyncDeduplicationTests : IDisposable
         var suggestions = await db.Suggestions.ToListAsync();
         var survivor = Assert.Single(suggestions);
         Assert.Equal(SuggestionStatus.Rejected, survivor.Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_OdswiezaOczekujacaSugestiePoZmianieTytulu()
+    {
+        // Tytuł bez dopasowania → sugestia "bez sprawy".
+        await syncService.SyncAsync(CreateRequestWithOneEvent("Spotkanie robocze"), Now, CancellationToken.None);
+
+        // Ten sam obiekt Graph (to samo ID), nowy tytuł z nazwą klienta.
+        var rerun = await syncService.SyncAsync(CreateRequestWithOneEvent("Spotkanie z Kowalski"), Now, CancellationToken.None);
+
+        Assert.Equal(0, rerun.Created);
+        Assert.Equal(1, rerun.Updated);
+        var suggestion = await db.Suggestions.SingleAsync();
+        Assert.Equal("Spotkanie z Kowalski", suggestion.Title);
+        Assert.Equal(1, suggestion.CaseId); // ponowne dopasowanie do sprawy z seedu
+    }
+
+    [Fact]
+    public async Task SyncAsync_NieOdswiezaOdrzuconejAniZatwierdzonejSugestii()
+    {
+        await syncService.SyncAsync(CreateRequestWithOneEvent("Spotkanie robocze"), Now, CancellationToken.None);
+        var suggestion = await db.Suggestions.SingleAsync();
+        suggestion.Status = SuggestionStatus.Rejected;
+        await db.SaveChangesAsync();
+
+        var rerunAfterReject = await syncService.SyncAsync(CreateRequestWithOneEvent("Spotkanie z Kowalski"), Now, CancellationToken.None);
+
+        Assert.Equal(0, rerunAfterReject.Updated);
+        Assert.Equal("Spotkanie robocze", (await db.Suggestions.SingleAsync()).Title);
+
+        suggestion.Status = SuggestionStatus.Approved;
+        await db.SaveChangesAsync();
+
+        var rerunAfterApprove = await syncService.SyncAsync(CreateRequestWithOneEvent("Spotkanie z Kowalski"), Now, CancellationToken.None);
+
+        Assert.Equal(0, rerunAfterApprove.Updated);
+        Assert.Equal("Spotkanie robocze", (await db.Suggestions.SingleAsync()).Title);
+    }
+
+    [Fact]
+    public async Task SyncAsync_LicznikUpdatedNieRosnieGdyNicSieNieZmienilo()
+    {
+        await syncService.SyncAsync(CreateRequestWithOneEvent(), Now, CancellationToken.None);
+
+        var rerun = await syncService.SyncAsync(CreateRequestWithOneEvent(), Now, CancellationToken.None);
+
+        Assert.Equal(0, rerun.Updated);
+        Assert.Equal(1, rerun.SkippedExisting);
+    }
+
+    [Fact]
+    public async Task SyncAsync_UzywaCzasuDokumentuZZadaniaZamiastKonfiguracji()
+    {
+        var request = new SyncRequest
+        {
+            DefaultDocumentDurationMinutes = 90,
+            DriveFiles =
+            [
+                new DriveFileDto { Id = "file-1", Name = "Umowa_NovaTech.docx", LastModifiedDateTime = Now.AddDays(-1), LastModifiedByMe = true },
+            ],
+        };
+
+        await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(90, (await db.Suggestions.SingleAsync()).DurationMinutes);
+    }
+
+    [Fact]
+    public void SyncRequest_OdrzucaCzasDokumentuPozaZakresem()
+    {
+        var request = new SyncRequest { DefaultDocumentDurationMinutes = 0 };
+
+        var validationResults = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+        var isValid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
+            request, new System.ComponentModel.DataAnnotations.ValidationContext(request), validationResults, validateAllProperties: true);
+
+        Assert.False(isValid);
+    }
+
+    [Fact]
+    public async Task SyncAsync_ZdezaktywowanaSprawaNieBierzeUdzialuWDopasowaniu()
+    {
+        var kowalskiCase = await db.Cases.SingleAsync(legalCase => legalCase.CaseNumber == "K-2026-001");
+        kowalskiCase.IsActive = false;
+        await db.SaveChangesAsync();
+
+        await syncService.SyncAsync(CreateRequestWithOneEvent("Spotkanie z Kowalski"), Now, CancellationToken.None);
+
+        Assert.Null((await db.Suggestions.SingleAsync()).CaseId);
     }
 
     [Fact]

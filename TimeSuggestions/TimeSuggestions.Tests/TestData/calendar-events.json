@@ -1,0 +1,50 @@
+[
+  {
+    "id": "event-normal",
+    "subject": "Spotkanie z Kowalski — przegląd umowy",
+    "startDateTime": "2026-07-20T10:00:00",
+    "endDateTime": "2026-07-20T11:30:00",
+    "isAllDay": false,
+    "sensitivity": "normal"
+  },
+  {
+    "id": "event-private",
+    "subject": "Wizyta u lekarza",
+    "startDateTime": "2026-07-20T13:00:00",
+    "endDateTime": "2026-07-20T14:00:00",
+    "isAllDay": false,
+    "sensitivity": "private"
+  },
+  {
+    "id": "event-confidential",
+    "subject": "Rozmowa poufna",
+    "startDateTime": "2026-07-20T15:00:00",
+    "endDateTime": "2026-07-20T16:00:00",
+    "isAllDay": false,
+    "sensitivity": "confidential"
+  },
+  {
+    "id": "event-too-short",
+    "subject": "Szybki telefon",
+    "startDateTime": "2026-07-21T09:00:00",
+    "endDateTime": "2026-07-21T09:04:00",
+    "isAllDay": false,
+    "sensitivity": "normal"
+  },
+  {
+    "id": "event-exactly-5-min",
+    "subject": "Telefon do klienta NovaTech",
+    "startDateTime": "2026-07-21T10:00:00",
+    "endDateTime": "2026-07-21T10:05:00",
+    "isAllDay": false,
+    "sensitivity": "normal"
+  },
+  {
+    "id": "event-all-day",
+    "subject": "Urlop",
+    "startDateTime": "2026-07-22T00:00:00",
+    "endDateTime": "2026-07-23T00:00:00",
+    "isAllDay": true,
+    "sensitivity": "normal"
+  }
+]

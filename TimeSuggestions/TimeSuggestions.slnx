@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="TimeSuggestions.Tests/TimeSuggestions.Tests.csproj" />
   <Project Path="TimeSuggestions/TimeSuggestions.csproj" />
 </Solution>

@@ -4,7 +4,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from './services/auth.service';
 import { SummaryStore } from './services/summary-store';
 import { ToastService } from './services/toast.service';
-import { ThemeName, ThemeService } from './services/theme.service';
+import { ThemeService } from './services/theme.service';
 import { DurationPipe } from './pipes/duration.pipe';
 
 @Component({
@@ -17,18 +17,37 @@ import { DurationPipe } from './pipes/duration.pipe';
         <p class="text-muted subtitle">Automatyczne sugestie wpisów czasu pracy z Microsoft 365</p>
       </div>
       <div class="header-controls">
-        <label class="field theme-picker">
-          Motyw
-          <select (change)="onThemeChange($event)">
-            <option value="light" [selected]="themeService.theme() === 'light'">jasny</option>
-            <option value="blue" [selected]="themeService.theme() === 'blue'">niebieski</option>
-            <option value="dark" [selected]="themeService.theme() === 'dark'">ciemny</option>
-          </select>
-        </label>
+        <!-- Segmented control zamiast selecta: wybór widoczny od razu, bez etykiety formularzowej. -->
+        <div class="theme-switch" role="group" aria-label="Motyw kolorystyczny">
+          <button
+            class="theme-option"
+            [class.active]="themeService.theme() === 'light'"
+            (click)="themeService.setTheme('light')"
+            title="Motyw jasny"
+            aria-label="Motyw jasny"
+          >☀️</button>
+          <button
+            class="theme-option"
+            [class.active]="themeService.theme() === 'blue'"
+            (click)="themeService.setTheme('blue')"
+            title="Motyw niebieski"
+            aria-label="Motyw niebieski"
+          >🔵</button>
+          <button
+            class="theme-option"
+            [class.active]="themeService.theme() === 'dark'"
+            (click)="themeService.setTheme('dark')"
+            title="Motyw ciemny"
+            aria-label="Motyw ciemny"
+          >🌙</button>
+        </div>
+
         @if (user()) {
-          <div class="session">
+          <!-- Sesja jako jedna pigułka: kto jest zalogowany + wyjście to jedno pojęcie. -->
+          <div class="session-pill">
             <span class="text-muted">{{ user() }}</span>
-            <button class="btn" (click)="auth.logout()">Wyloguj</button>
+            <span class="pill-divider" aria-hidden="true"></span>
+            <button class="btn btn-ghost logout-btn" (click)="auth.logout()">Wyloguj</button>
           </div>
         }
       </div>
@@ -95,12 +114,52 @@ import { DurationPipe } from './pipes/duration.pipe';
   `,
   styles: `
     :host { display: block; max-width: 960px; margin: 0 auto; padding: var(--space-5) var(--space-4); }
-    .app-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); flex-wrap: wrap; }
+    /* Jedna wspólna oś: tytuł po lewej, obie grupy kontrolek po prawej, wszystko wycentrowane
+       w pionie; cienka linia domyka pasek przed kafelkami. */
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      flex-wrap: wrap;
+      padding-bottom: var(--space-4);
+      margin-bottom: var(--space-4);
+      border-bottom: 1px solid var(--border);
+    }
     h1 { font-size: var(--font-size-xl); }
     .subtitle { margin: var(--space-1) 0 0; font-size: var(--font-size-sm); }
-    .session { display: flex; align-items: center; gap: var(--space-3); }
-    .header-controls { display: flex; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
-    .theme-picker { min-width: 120px; }
+    .header-controls { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+
+    .theme-switch {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .theme-option {
+      border: none;
+      background: transparent;
+      padding: var(--space-1) var(--space-3);
+      cursor: pointer;
+      font-size: var(--font-size-base);
+      line-height: 1.6;
+    }
+    .theme-option:hover { background: var(--surface-alt); }
+    .theme-option.active { background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); }
+
+    .session-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-3);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+      font-size: var(--font-size-sm);
+    }
+    .pill-divider { width: 1px; height: 1.1em; background: var(--border); }
+    .logout-btn { padding: var(--space-1) var(--space-3); font-size: var(--font-size-sm); }
     .login-card { max-width: 480px; margin: var(--space-6) auto; text-align: center; display: flex; flex-direction: column; gap: var(--space-3); align-items: center; }
   `,
 })
@@ -120,8 +179,4 @@ export class App implements OnInit {
     }
   }
 
-  protected onThemeChange(event: Event): void {
-    const value = (event.target as HTMLSelectElement).value as ThemeName;
-    this.themeService.setTheme(value);
-  }
 }

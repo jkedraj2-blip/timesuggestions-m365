@@ -11,6 +11,9 @@
 *.db-shm
 *.db-wal
 
+# Lokalna konfiguracja narzędzi deweloperskich
+.claude/
+
 # User-specific files
 *.rsuser
 *.suo

@@ -1,78 +1,46 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { DatePipe } from '@angular/common';
 import { AuthService } from './services/auth.service';
-import { GraphCalendarService } from './services/graph-calendar.service';
-import { GraphEvent } from './models/graph.models';
+import { SuggestionList } from './components/suggestion-list';
 
 @Component({
   selector: 'app-root',
-  imports: [DatePipe],
+  imports: [SuggestionList],
   template: `
-    <h1>Sugestie wpisów czasu pracy</h1>
+    <header>
+      <h1>Sugestie wpisów czasu pracy</h1>
+      @if (user()) {
+        <div class="session">
+          <span>Zalogowano jako {{ user() }}</span>
+          <button (click)="auth.logout()">Wyloguj</button>
+        </div>
+      }
+    </header>
 
     @if (user()) {
-      <p>Zalogowano jako {{ user() }}</p>
-      <button (click)="load()" [disabled]="loading()">
-        {{ loading() ? 'Pobieram…' : 'Pobierz spotkania z 7 dni' }}
-      </button>
-      <button (click)="auth.logout()">Wyloguj</button>
+      <app-suggestion-list />
     } @else {
-      <button (click)="auth.login()">Zaloguj przez Microsoft</button>
-    }
-
-    @if (error()) {
-      <pre class="error">{{ error() }}</pre>
-    }
-
-    @for (event of events(); track event.id) {
-      <div class="card">
-        <strong>{{ event.subject || '(bez tytułu)' }}</strong>
-        <div>{{ event.start.dateTime | date: 'dd.MM.yyyy HH:mm' }}</div>
-        <div>{{ durationMinutes(event) }} min</div>
-        <div>całodniowe: {{ event.isAllDay }} · widoczność: {{ event.sensitivity }}</div>
-      </div>
-    } @empty {
-      @if (loaded()) {
-        <p>Brak wydarzeń w tym okresie.</p>
-      }
+      <p>Zaloguj się kontem Microsoft, aby pobrać spotkania i dokumenty z ostatnich 7 dni.</p>
+      <button class="primary" (click)="auth.login()">Zaloguj przez Microsoft</button>
     }
   `,
   styles: `
-    .card { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin: 8px 0; max-width: 520px; }
-    .error { color: #a32d2d; white-space: pre-wrap; }
+    :host { display: block; max-width: 720px; margin: 0 auto; padding: 16px; font-family: system-ui, sans-serif; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    h1 { font-size: 1.5em; }
+    .session { display: flex; align-items: center; gap: 12px; color: #555; }
+    button { padding: 6px 14px; border-radius: 6px; border: 1px solid #999; background: #f5f5f5; cursor: pointer; }
+    button:hover { background: #e8e8e8; }
+    button.primary { background: #1863c6; border-color: #1863c6; color: #fff; }
+    button.primary:hover { background: #124e9e; }
   `,
 })
 export class App implements OnInit {
   protected auth = inject(AuthService);
-  private graph = inject(GraphCalendarService);
 
   protected user = signal<string | null>(null);
-  protected events = signal<GraphEvent[]>([]);
-  protected error = signal<string | null>(null);
-  protected loading = signal(false);
-  protected loaded = signal(false);
 
   async ngOnInit(): Promise<void> {
     await this.auth.init();
     this.user.set(this.auth.account?.username ?? null);
-  }
-
-  protected async load(): Promise<void> {
-    this.loading.set(true);
-    this.error.set(null);
-    try {
-      this.events.set(await this.graph.getEventsLastDays(7));
-      this.loaded.set(true);
-    } catch (e) {
-      this.error.set(e instanceof Error ? e.message : String(e));
-    } finally {
-      this.loading.set(false);
-    }
-  }
-
-  protected durationMinutes(event: GraphEvent): number {
-    const start = new Date(event.start.dateTime).getTime();
-    const end = new Date(event.end.dateTime).getTime();
-    return Math.round((end - start) / 60000);
   }
 }

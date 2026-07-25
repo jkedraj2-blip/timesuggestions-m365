@@ -4,6 +4,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from './services/auth.service';
 import { SummaryStore } from './services/summary-store';
 import { ToastService } from './services/toast.service';
+import { ThemeName, ThemeService } from './services/theme.service';
 import { DurationPipe } from './pipes/duration.pipe';
 
 @Component({
@@ -15,12 +16,22 @@ import { DurationPipe } from './pipes/duration.pipe';
         <h1>TimeSuggestions</h1>
         <p class="text-muted subtitle">Automatyczne sugestie wpisów czasu pracy z Microsoft 365</p>
       </div>
-      @if (user()) {
-        <div class="session">
-          <span class="text-muted">{{ user() }}</span>
-          <button class="btn" (click)="auth.logout()">Wyloguj</button>
-        </div>
-      }
+      <div class="header-controls">
+        <label class="field theme-picker">
+          Motyw
+          <select (change)="onThemeChange($event)">
+            <option value="light" [selected]="themeService.theme() === 'light'">jasny</option>
+            <option value="blue" [selected]="themeService.theme() === 'blue'">niebieski</option>
+            <option value="dark" [selected]="themeService.theme() === 'dark'">ciemny</option>
+          </select>
+        </label>
+        @if (user()) {
+          <div class="session">
+            <span class="text-muted">{{ user() }}</span>
+            <button class="btn" (click)="auth.logout()">Wyloguj</button>
+          </div>
+        }
+      </div>
     </header>
 
     @if (user()) {
@@ -88,6 +99,8 @@ import { DurationPipe } from './pipes/duration.pipe';
     h1 { font-size: var(--font-size-xl); }
     .subtitle { margin: var(--space-1) 0 0; font-size: var(--font-size-sm); }
     .session { display: flex; align-items: center; gap: var(--space-3); }
+    .header-controls { display: flex; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
+    .theme-picker { min-width: 120px; }
     .login-card { max-width: 480px; margin: var(--space-6) auto; text-align: center; display: flex; flex-direction: column; gap: var(--space-3); align-items: center; }
   `,
 })
@@ -95,6 +108,7 @@ export class App implements OnInit {
   protected auth = inject(AuthService);
   protected summaryStore = inject(SummaryStore);
   protected toastService = inject(ToastService);
+  protected themeService = inject(ThemeService);
 
   protected user = signal<string | null>(null);
 
@@ -104,5 +118,10 @@ export class App implements OnInit {
     if (this.user()) {
       await this.summaryStore.refresh();
     }
+  }
+
+  protected onThemeChange(event: Event): void {
+    const value = (event.target as HTMLSelectElement).value as ThemeName;
+    this.themeService.setTheme(value);
   }
 }

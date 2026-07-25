@@ -15,6 +15,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />
     <!-- Bezpośrednie przypięcie: wersja 2.0.0 ciągnięta tranzytywnie ma znaną podatność (GHSA-v5pm-xwqc-g5wc) -->
     <PackageReference Include="Microsoft.OpenApi" Version="2.11.0" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.4" />
   </ItemGroup>
 
 </Project>

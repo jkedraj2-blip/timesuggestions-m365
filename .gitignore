@@ -11,8 +11,22 @@
 *.db-shm
 *.db-wal
 
-# Lokalna konfiguracja narzędzi deweloperskich
+# Asystenci AI i narzędzia deweloperskie
 .claude/
+CLAUDE.md
+.claude.json
+.cursor/
+.cursorrules
+.cursorignore
+.aider*
+.github/copilot-instructions.md
+.continue/
+.windsurf/
+.codeium/
+.vscode/mcp.json
+*.local.md
+scratchpad/
+.mcp.json
 
 # User-specific files
 *.rsuser

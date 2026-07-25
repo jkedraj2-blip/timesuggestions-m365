@@ -48,11 +48,29 @@ public class ApproveSuggestionRequest
     public string Description { get; set; } = string.Empty;
 }
 
-public record CaseDto(int Id, string Name, string CaseNumber, string ClientName)
+public record CaseDto(int Id, string Name, string CaseNumber, string ClientName, IReadOnlyList<string> Keywords)
 {
-    public static CaseDto FromEntity(Case legalCase)
-        => new(legalCase.Id, legalCase.Name, legalCase.CaseNumber, legalCase.ClientName);
+    public static CaseDto FromEntity(Case legalCase) => new(
+        legalCase.Id,
+        legalCase.Name,
+        legalCase.CaseNumber,
+        legalCase.ClientName,
+        legalCase.Keywords.Split(';', StringSplitOptions.RemoveEmptyEntries));
 }
+
+/// <summary>Liczniki dla kafelków podsumowania w nagłówku aplikacji.</summary>
+public record SummaryDto(
+    int PendingCount,
+    int ApprovedCount,
+    int RejectedCount,
+    int TotalLoggedMinutes,
+    int TodayLoggedMinutes,
+    DateTime? LastSyncAt);
+
+/// <summary>Wpisy pogrupowane po dniach z sumami — widok "Wpisy czasu" pokazuje je od razu policzone.</summary>
+public record TimeEntriesResponse(int TotalMinutes, IReadOnlyList<TimeEntryDayDto> Days);
+
+public record TimeEntryDayDto(DateOnly Date, int TotalMinutes, IReadOnlyList<TimeEntryDto> Entries);
 
 public record TimeEntryDto(
     int Id,

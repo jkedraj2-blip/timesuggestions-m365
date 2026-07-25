@@ -10,7 +10,7 @@ namespace TimeSuggestions.Controllers;
 public class TimeEntriesController(AppDbContext db) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<List<TimeEntryDto>>> GetTimeEntries(CancellationToken cancellationToken)
+    public async Task<ActionResult<TimeEntriesResponse>> GetTimeEntries(CancellationToken cancellationToken)
     {
         var entries = await db.TimeEntries
             .Include(entry => entry.Case)
@@ -18,6 +18,15 @@ public class TimeEntriesController(AppDbContext db) : ControllerBase
             .ThenByDescending(entry => entry.Id)
             .ToListAsync(cancellationToken);
 
-        return Ok(entries.Select(TimeEntryDto.FromEntity).ToList());
+        // Grupowanie po dniach z sumami — UI dostaje gotowe liczby zamiast liczyć je samo.
+        var days = entries
+            .GroupBy(entry => entry.EntryDate)
+            .Select(group => new TimeEntryDayDto(
+                group.Key,
+                group.Sum(entry => entry.DurationMinutes),
+                group.Select(TimeEntryDto.FromEntity).ToList()))
+            .ToList();
+
+        return Ok(new TimeEntriesResponse(entries.Sum(entry => entry.DurationMinutes), days));
     }
 }

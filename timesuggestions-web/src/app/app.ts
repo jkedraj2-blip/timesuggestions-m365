@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from './services/auth.service';
 import { SummaryStore } from './services/summary-store';
+import { ToastService } from './services/toast.service';
 import { DurationPipe } from './pipes/duration.pipe';
 
 @Component({
@@ -68,6 +69,18 @@ import { DurationPipe } from './pipes/duration.pipe';
         <button class="btn btn-primary" (click)="auth.login()">Zaloguj przez Microsoft</button>
       </div>
     }
+
+    <div class="toasts">
+      @for (toast of toastService.toasts(); track toast.id) {
+        <div class="toast" [class.toast-error]="toast.kind === 'error'">
+          <span>{{ toast.message }}</span>
+          @if (toast.undo) {
+            <button class="btn btn-ghost" (click)="toastService.runUndo(toast)">Cofnij</button>
+          }
+          <button class="btn btn-ghost" (click)="toastService.dismiss(toast.id)" aria-label="Zamknij">✕</button>
+        </div>
+      }
+    </div>
   `,
   styles: `
     :host { display: block; max-width: 960px; margin: 0 auto; padding: var(--space-5) var(--space-4); }
@@ -81,6 +94,7 @@ import { DurationPipe } from './pipes/duration.pipe';
 export class App implements OnInit {
   protected auth = inject(AuthService);
   protected summaryStore = inject(SummaryStore);
+  protected toastService = inject(ToastService);
 
   protected user = signal<string | null>(null);
 

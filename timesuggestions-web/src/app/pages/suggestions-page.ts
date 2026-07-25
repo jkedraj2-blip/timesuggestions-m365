@@ -1,8 +1,10 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { ApiService, SyncStage } from '../services/api.service';
 import { SummaryStore } from '../services/summary-store';
+import { ToastService } from '../services/toast.service';
 import { CaseInfo, Suggestion, SuggestionSource, SuggestionStatus, SyncReport } from '../models/api.models';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
+import { DurationPipe } from '../pipes/duration.pipe';
 
 type SourceFilter = 'all' | SuggestionSource;
 type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
@@ -28,6 +30,12 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
         <button class="btn" [class.btn-ghost]="statusFilter() !== 'pending'" (click)="setStatusFilter('pending')">oczekujące</button>
         <button class="btn" [class.btn-ghost]="statusFilter() !== 'rejected'" (click)="setStatusFilter('rejected')">odrzucone</button>
       </div>
+
+      @if (autoMatchedCount() > 0) {
+        <button class="btn" (click)="approveAllMatched()" [disabled]="bulkApproving()">
+          {{ bulkApproving() ? 'Zatwierdzam…' : 'Zatwierdź wszystkie dopasowane (' + autoMatchedCount() + ')' }}
+        </button>
+      }
     </div>
 
     @if (syncing()) {
@@ -119,6 +127,8 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
 export class SuggestionsPage implements OnInit {
   private api = inject(ApiService);
   private summaryStore = inject(SummaryStore);
+  private toasts = inject(ToastService);
+  private durationPipe = new DurationPipe();
 
   protected suggestions = signal<Suggestion[]>([]);
   protected cases = signal<CaseInfo[]>([]);
@@ -151,6 +161,15 @@ export class SuggestionsPage implements OnInit {
     return activeFilter === 'all' ? all : all.filter((s) => s.source === activeFilter);
   });
 
+  protected bulkApproving = signal(false);
+
+  /** Sugestie z jednoznacznie dopasowaną sprawą — te można zatwierdzić hurtem, bez zastanowienia. */
+  protected autoMatchedCount = computed(() =>
+    this.statusFilter() === 'pending'
+      ? this.visibleSuggestions().filter((s) => s.caseId !== null && !s.isAmbiguous).length
+      : 0,
+  );
+
   async ngOnInit(): Promise<void> {
     await this.loadData();
   }
@@ -182,6 +201,77 @@ export class SuggestionsPage implements OnInit {
     // Rozstrzygnięta sugestia znika z bieżącej listy bez ponownego pobierania.
     this.suggestions.update((current) => current.filter((s) => s.id !== event.suggestion.id));
     void this.summaryStore.refresh();
+    this.showResolvedToast(event);
+  }
+
+  /** Potwierdzenie akcji z możliwością cofnięcia — karta nie znika "w nicość". */
+  private showResolvedToast(event: SuggestionResolved): void {
+    switch (event.action) {
+      case 'approved': {
+        const entry = event.createdEntry;
+        const details = entry
+          ? `${this.durationPipe.transform(entry.durationMinutes)} — ${entry.caseName}`
+          : event.suggestion.title;
+        this.toasts.show(`Zapisano wpis: ${details}. Zobacz zakładkę „Wpisy czasu".`, {
+          undo: entry
+            ? async () => {
+                await this.api.deleteTimeEntry(entry.id);
+                await this.loadData();
+                await this.summaryStore.refresh();
+              }
+            : undefined,
+        });
+        break;
+      }
+      case 'rejected':
+        this.toasts.show(`Odrzucono sugestię „${event.suggestion.title}".`, {
+          undo: async () => {
+            await this.api.restore(event.suggestion.id);
+            await this.loadData();
+            await this.summaryStore.refresh();
+          },
+        });
+        break;
+      case 'restored':
+        this.toasts.show('Sugestia wróciła na listę oczekujących.');
+        break;
+    }
+  }
+
+  /** Hurtowe zatwierdzenie jednoznacznie dopasowanych — obietnica "jednego kliknięcia" w praktyce. */
+  protected async approveAllMatched(): Promise<void> {
+    const matched = this.visibleSuggestions().filter((s) => s.caseId !== null && !s.isAmbiguous);
+    if (matched.length === 0) {
+      return;
+    }
+
+    this.bulkApproving.set(true);
+    this.error.set(null);
+    try {
+      const results = await Promise.allSettled(
+        matched.map((suggestion) =>
+          this.api.approve(suggestion.id, {
+            caseId: suggestion.caseId!,
+            durationMinutes: suggestion.durationMinutes,
+            description: suggestion.proposedDescription || suggestion.title,
+          }),
+        ),
+      );
+
+      const approvedCount = results.filter((result) => result.status === 'fulfilled').length;
+      const failedCount = results.length - approvedCount;
+      this.toasts.show(
+        failedCount === 0
+          ? `Zapisano ${approvedCount} ${approvedCount === 1 ? 'wpis' : 'wpisów'} czasu pracy.`
+          : `Zapisano ${approvedCount}, nie udało się ${failedCount} — spróbuj pojedynczo.`,
+        { kind: failedCount === 0 ? 'success' : 'error' },
+      );
+
+      await this.loadData();
+      await this.summaryStore.refresh();
+    } finally {
+      this.bulkApproving.set(false);
+    }
   }
 
   protected async loadData(): Promise<void> {

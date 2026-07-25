@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { ApiService } from '../services/api.service';
 import { SummaryStore } from '../services/summary-store';
+import { ToastService } from '../services/toast.service';
 import { TimeEntriesResponse, TimeEntry } from '../models/api.models';
 import { DurationPipe } from '../pipes/duration.pipe';
 
@@ -77,6 +78,7 @@ import { DurationPipe } from '../pipes/duration.pipe';
 export class TimeEntriesPage implements OnInit {
   private api = inject(ApiService);
   private summaryStore = inject(SummaryStore);
+  private toasts = inject(ToastService);
 
   protected data = signal<TimeEntriesResponse | null>(null);
   protected loading = signal(false);
@@ -107,6 +109,7 @@ export class TimeEntriesPage implements OnInit {
       await this.api.deleteTimeEntry(entry.id);
       await this.loadData();
       await this.summaryStore.refresh();
+      this.toasts.show('Usunięto wpis — sugestia wróciła na listę oczekujących.');
     } catch (error) {
       this.error.set(error instanceof Error ? error.message : 'Nie udało się usunąć wpisu.');
     } finally {

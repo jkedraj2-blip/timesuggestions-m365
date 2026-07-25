@@ -1,6 +1,3 @@
 @TimeSuggestions_HostAddress = http://localhost:5188
 
-GET {{TimeSuggestions_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###
+# Endpointy zostaną dodane w kolejnych krokach implementacji.

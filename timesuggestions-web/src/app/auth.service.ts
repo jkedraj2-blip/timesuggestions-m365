@@ -11,7 +11,7 @@ export const GRAPH_SCOPES = ['Calendars.Read', 'Files.Read'];
 export class AuthService {
   private msal = new PublicClientApplication({
     auth: {
-      clientId: 'TUTAJ-WKLEJ-IDENTYFIKATOR-APLIKACJI',
+      clientId: '3f813718-6d67-4bca-b359-6d9cb6ab0c35',
       authority: 'https://login.microsoftonline.com/common',
       redirectUri: 'http://localhost:4200',
     },

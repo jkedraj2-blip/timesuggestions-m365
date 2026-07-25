@@ -1,9 +1,11 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { AuthService } from './auth.service';
 import { GraphService, GraphEvent } from './graph.service';
 
 @Component({
   selector: 'app-root',
+  imports: [DatePipe],
   template: `
     <h1>Sugestie wpisów czasu pracy</h1>
 

@@ -1,14 +1,28 @@
+using System.Text.Json.Serialization;
+using TimeSuggestions.Configuration;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
-builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+builder.Services.AddControllers().AddJsonOptions(options =>
+{
+    // Enumy jako czytelne nazwy ("calendar", "pending") zamiast liczb — frontend
+    // nie musi znać wewnętrznej numeracji, a payloady są samoopisujące.
+    options.JsonSerializerOptions.Converters.Add(
+        new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+});
 builder.Services.AddOpenApi();
+
+builder.Services.Configure<SuggestionOptions>(
+    builder.Configuration.GetSection(SuggestionOptions.SectionName));
+
+// CORS zawężony do originów z konfiguracji (frontend deweloperski) — celowo nie AllowAnyOrigin.
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options =>
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -16,7 +30,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseAuthorization();
+app.UseCors();
 
 app.MapControllers();
 

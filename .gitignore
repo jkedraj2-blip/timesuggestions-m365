@@ -6,6 +6,11 @@
 # dotenv files
 .env
 
+# Lokalna baza SQLite — dane lokalne nie trafiają do repozytorium
+*.db
+*.db-shm
+*.db-wal
+
 # User-specific files
 *.rsuser
 *.suo

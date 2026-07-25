@@ -49,7 +49,12 @@ export class ApiService {
       driveFiles: files,
     };
 
-    return this.requestJson<SyncReport>('POST', '/api/sync', request);
+    const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);
+
+    // Wskaźnik delta przesuwamy dopiero po udanym zapisie — nieudany sync nie gubi zmian.
+    this.graphFiles.commitDeltaLink();
+
+    return report;
   }
 
   getSuggestions(filter?: {

@@ -29,6 +29,14 @@ export interface SuggestionResolved {
       <div class="card-details text-muted">
         <span>{{ suggestion().startedAt | date: 'dd.MM.yyyy HH:mm' }}</span>
         <span>{{ suggestion().durationMinutes | duration }}</span>
+        @if (suggestion().source === 'document') {
+          <!-- Tylko dokumenty: czas spotkań jest zmierzony, czas dokumentów — założony.
+               Neutralna plakietka (nie amber) — to informacja, nie ostrzeżenie. -->
+          <span
+            class="badge badge-neutral"
+            title="Microsoft Graph nie podaje, jak długo trwała edycja — to wartość domyślna z konfiguracji. Popraw ją, jeśli pracowałeś dłużej."
+          >czas domyślny</span>
+        }
         @if (suggestion().caseName) {
           <span class="badge badge-success">{{ suggestion().caseName }}</span>
         }

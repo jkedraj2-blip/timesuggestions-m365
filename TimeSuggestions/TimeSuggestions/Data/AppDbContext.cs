@@ -11,6 +11,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
     public DbSet<TimeEntry> TimeEntries => Set<TimeEntry>();
 
+    public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Ochrona przed duplikatami: powtórna synchronizacja tego samego obiektu Graph

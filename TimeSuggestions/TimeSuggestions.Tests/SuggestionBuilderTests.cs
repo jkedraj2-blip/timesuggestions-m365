@@ -42,7 +42,7 @@ public class SuggestionBuilderTests
         var builder = CreateBuilder(defaultDocumentMinutes: 45);
         var file = CreateFile("file-1", "Umowa_NovaTech_v2.docx", Now.AddDays(-1));
 
-        var suggestions = builder.BuildFromDocuments([file], TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+        var suggestions = builder.BuildFromDocuments([file], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         var suggestion = Assert.Single(suggestions);
         Assert.Equal(45, suggestion.DurationMinutes);
@@ -56,7 +56,7 @@ public class SuggestionBuilderTests
         var afternoonEdit = CreateFile("file-1", "Umowa_NovaTech_v2.docx", new DateTime(2026, 7, 24, 16, 0, 0));
 
         var suggestions = CreateBuilder().BuildFromDocuments(
-            [morningEdit, afternoonEdit], TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+            [morningEdit, afternoonEdit], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         var suggestion = Assert.Single(suggestions);
         // Sugestia dostaje godzinę pierwszej modyfikacji danego dnia.
@@ -70,7 +70,7 @@ public class SuggestionBuilderTests
         var thursdayEdit = CreateFile("file-1", "Umowa_NovaTech_v2.docx", new DateTime(2026, 7, 23, 9, 0, 0));
 
         var suggestions = CreateBuilder().BuildFromDocuments(
-            [wednesdayEdit, thursdayEdit], TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+            [wednesdayEdit, thursdayEdit], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         Assert.Equal(2, suggestions.Count);
     }
@@ -80,7 +80,7 @@ public class SuggestionBuilderTests
     {
         var image = CreateFile("file-1", "zdjecie.png", Now.AddDays(-1));
 
-        var suggestions = CreateBuilder().BuildFromDocuments([image], TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+        var suggestions = CreateBuilder().BuildFromDocuments([image], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         Assert.Empty(suggestions);
     }
@@ -90,7 +90,7 @@ public class SuggestionBuilderTests
     {
         var oldFile = CreateFile("file-1", "Umowa_NovaTech.docx", Now.AddDays(-30));
 
-        var suggestions = CreateBuilder().BuildFromDocuments([oldFile], TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+        var suggestions = CreateBuilder().BuildFromDocuments([oldFile], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         Assert.Empty(suggestions);
     }
@@ -100,7 +100,7 @@ public class SuggestionBuilderTests
     {
         var foreignFile = CreateFile("file-1", "Umowa_NovaTech.docx", Now.AddDays(-1), byMe: false);
 
-        var suggestions = CreateBuilder().BuildFromDocuments([foreignFile], TestHelpers.CreateTestCases(), WindowStart, Now, Now);
+        var suggestions = CreateBuilder().BuildFromDocuments([foreignFile], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         Assert.Empty(suggestions);
     }

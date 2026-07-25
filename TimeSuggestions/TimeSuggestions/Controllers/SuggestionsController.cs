@@ -30,7 +30,28 @@ public class SuggestionsController(AppDbContext db, ApprovalService approvalServ
             .OrderBy(suggestion => suggestion.StartedAt)
             .ToListAsync(cancellationToken);
 
-        return Ok(suggestions.Select(SuggestionDto.FromEntity).ToList());
+        // Kandydaci dla niejednoznacznych liczeni w locie z logiki czystej —
+        // encja celowo nie przechowuje listy trafień (bez dodatkowej tabeli).
+        var activeCases = suggestions.Any(suggestion => suggestion.IsAmbiguous)
+            ? await db.Cases.Where(legalCase => legalCase.IsActive).ToListAsync(cancellationToken)
+            : [];
+
+        return Ok(suggestions
+            .Select(suggestion => SuggestionDto.FromEntity(suggestion, GetMatchCandidates(suggestion, activeCases)))
+            .ToList());
+    }
+
+    private static IReadOnlyList<string>? GetMatchCandidates(Suggestion suggestion, List<Case> activeCases)
+    {
+        if (!suggestion.IsAmbiguous)
+        {
+            return null;
+        }
+
+        return CaseMatcher.Match(suggestion.Title, activeCases)
+            .Candidates
+            .Select(candidate => candidate.Name)
+            .ToList();
     }
 
     [HttpPost("{id:int}/approve")]

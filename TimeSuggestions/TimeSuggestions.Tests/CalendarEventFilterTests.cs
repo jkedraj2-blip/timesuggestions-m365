@@ -15,7 +15,7 @@ public class CalendarEventFilterTests
     {
         var events = TestHelpers.LoadCalendarEventsFixture();
 
-        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes).Accepted;
 
         Assert.DoesNotContain(billable, calendarEvent => calendarEvent.Id == "event-private");
     }
@@ -25,7 +25,7 @@ public class CalendarEventFilterTests
     {
         var events = TestHelpers.LoadCalendarEventsFixture();
 
-        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes).Accepted;
 
         Assert.DoesNotContain(billable, calendarEvent => calendarEvent.Id == "event-confidential");
     }
@@ -35,7 +35,7 @@ public class CalendarEventFilterTests
     {
         var events = TestHelpers.LoadCalendarEventsFixture();
 
-        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes).Accepted;
 
         Assert.DoesNotContain(billable, calendarEvent => calendarEvent.Id == "event-too-short");
     }
@@ -46,7 +46,7 @@ public class CalendarEventFilterTests
         // Przypadek graniczny: reguła brzmi "krótsze niż 5 minut", więc równe 5 minut przechodzi.
         var events = TestHelpers.LoadCalendarEventsFixture();
 
-        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes).Accepted;
 
         Assert.Contains(billable, calendarEvent => calendarEvent.Id == "event-exactly-5-min");
     }
@@ -56,7 +56,7 @@ public class CalendarEventFilterTests
     {
         var events = TestHelpers.LoadCalendarEventsFixture();
 
-        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes).Accepted;
 
         Assert.DoesNotContain(billable, calendarEvent => calendarEvent.Id == "event-all-day");
     }
@@ -66,7 +66,7 @@ public class CalendarEventFilterTests
     {
         var events = TestHelpers.LoadCalendarEventsFixture();
 
-        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes);
+        var billable = CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes).Accepted;
 
         Assert.Contains(billable, calendarEvent => calendarEvent.Id == "event-normal");
     }

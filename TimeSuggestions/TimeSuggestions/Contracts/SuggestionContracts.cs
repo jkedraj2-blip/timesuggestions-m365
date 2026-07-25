@@ -13,10 +13,15 @@ public record SuggestionDto(
     int? CaseId,
     string? CaseName,
     bool IsAmbiguous,
+    IReadOnlyList<string> MatchCandidates,
     string ProposedDescription,
     SuggestionStatus Status)
 {
-    public static SuggestionDto FromEntity(Suggestion suggestion) => new(
+    /// <summary>
+    /// Dla sugestii niejednoznacznych przekazujemy nazwy pasujących spraw —
+    /// UI mówi użytkownikowi konkretnie "pasuje do X i Y", a nie tylko "sprawdź to".
+    /// </summary>
+    public static SuggestionDto FromEntity(Suggestion suggestion, IReadOnlyList<string>? matchCandidates = null) => new(
         suggestion.Id,
         suggestion.Source,
         suggestion.Title,
@@ -25,6 +30,7 @@ public record SuggestionDto(
         suggestion.CaseId,
         suggestion.Case?.Name,
         suggestion.IsAmbiguous,
+        matchCandidates ?? [],
         suggestion.ProposedDescription,
         suggestion.Status);
 }

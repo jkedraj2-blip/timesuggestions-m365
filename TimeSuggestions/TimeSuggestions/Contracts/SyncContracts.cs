@@ -45,4 +45,31 @@ public class DriveFileDto
     public bool LastModifiedByMe { get; set; }
 }
 
-public record SyncResult(int Created, int SkippedExisting);
+public record SyncFetchedCounts(int CalendarEvents, int DriveFiles);
+
+/// <summary>Liczniki odrzuceń per reguła — UI tłumaczy użytkownikowi, czemu pozycje odpadły.</summary>
+public record SyncFilteredOutCounts(
+    int Private,
+    int TooShort,
+    int AllDay,
+    int NotOfficeDocument,
+    int OutsideWindow,
+    int NotModifiedByUser)
+{
+    public int Total => Private + TooShort + AllDay + NotOfficeDocument + OutsideWindow + NotModifiedByUser;
+}
+
+/// <summary>Wyniki dopasowania nowo utworzonych sugestii do spraw.</summary>
+public record SyncMatchedCounts(int Single, int None, int Ambiguous);
+
+/// <summary>
+/// Pełny raport synchronizacji. Aplikacja "pokazuje swoją pracę" — bez tego
+/// odfiltrowanie spotkań wygląda dla użytkownika jak zgubione dane.
+/// </summary>
+public record SyncReport(
+    SyncFetchedCounts Fetched,
+    SyncFilteredOutCounts FilteredOut,
+    int Aggregated,
+    int Created,
+    int SkippedExisting,
+    SyncMatchedCounts Matched);

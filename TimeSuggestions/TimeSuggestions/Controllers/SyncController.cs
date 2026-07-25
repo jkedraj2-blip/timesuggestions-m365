@@ -9,9 +9,9 @@ namespace TimeSuggestions.Controllers;
 public class SyncController(SyncService syncService) : ControllerBase
 {
     [HttpPost]
-    public async Task<ActionResult<SyncResult>> Sync(SyncRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<SyncReport>> Sync(SyncRequest request, CancellationToken cancellationToken)
     {
-        var result = await syncService.SyncAsync(request, DateTime.UtcNow, cancellationToken);
-        return Ok(result);
+        var report = await syncService.SyncAsync(request, DateTime.UtcNow, cancellationToken);
+        return Ok(report);
     }
 }

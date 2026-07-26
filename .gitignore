@@ -14,6 +14,12 @@
 # Scenariusz demo — materiał lokalny, poza zdalnym repozytorium
 DEMO.md
 
+# Arkusze Excel (plany testów itp.) — materiały robocze, poza repozytorium
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+
 # Asystenci AI i narzędzia deweloperskie
 .claude/
 CLAUDE.md

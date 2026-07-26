@@ -41,9 +41,16 @@ const EMPTY_DRAFT: CaseFormDraft = { name: '', caseNumber: '', clientName: '', k
       @if (!formVisible()) {
         <button class="btn btn-primary" (click)="startCreate()">Dodaj sprawę</button>
       }
-      <label class="field checkbox">
-        <span><input type="checkbox" [ngModel]="includeInactive()" (ngModelChange)="toggleInactive($event)" /> pokaż nieaktywne</span>
-      </label>
+      <!-- Przełącznik w idiomie filtrów aplikacji (jak Źródło/Status na liście sugestii) —
+           natywny checkbox wyłamywał się z systemu wizualnego. -->
+      <button
+        class="btn"
+        [class.btn-ghost]="!includeInactive()"
+        (click)="toggleInactive(!includeInactive())"
+        [attr.aria-pressed]="includeInactive()"
+      >
+        {{ includeInactive() ? '✓ ' : '' }}pokaż nieaktywne
+      </button>
     </div>
 
     @if (formVisible()) {
@@ -120,8 +127,7 @@ const EMPTY_DRAFT: CaseFormDraft = { name: '', caseNumber: '', clientName: '', k
     }
   `,
   styles: `
-    .toolbar { display: flex; align-items: center; gap: var(--space-5); margin-bottom: var(--space-4); flex-wrap: wrap; }
-    .checkbox { flex-direction: row; align-items: center; }
+    .toolbar { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
     .badge + .badge { margin-left: var(--space-1); }
     code { font-size: var(--font-size-sm); }
     .form-card { margin-bottom: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }

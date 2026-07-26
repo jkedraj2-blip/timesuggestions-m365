@@ -82,9 +82,9 @@ import { DurationPipe } from './pipes/duration.pipe';
       }
 
       <nav class="tabs">
-        <a class="tab" routerLink="/sugestie" routerLinkActive="active">Sugestie</a>
-        <a class="tab" routerLink="/wpisy" routerLinkActive="active">Wpisy czasu</a>
-        <a class="tab" routerLink="/sprawy" routerLinkActive="active">Sprawy</a>
+        <a class="tab" routerLink="/suggestions" routerLinkActive="active">Sugestie</a>
+        <a class="tab" routerLink="/time-entries" routerLinkActive="active">Wpisy czasu</a>
+        <a class="tab" routerLink="/cases" routerLinkActive="active">Sprawy</a>
       </nav>
 
       <router-outlet />

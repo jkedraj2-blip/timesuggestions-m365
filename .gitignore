@@ -11,6 +11,9 @@
 *.db-shm
 *.db-wal
 
+# Scenariusz demo — materiał lokalny, poza zdalnym repozytorium
+DEMO.md
+
 # Asystenci AI i narzędzia deweloperskie
 .claude/
 CLAUDE.md

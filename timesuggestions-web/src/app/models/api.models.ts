@@ -22,6 +22,8 @@ export interface DriveFilePayload {
 export interface SyncRequest {
   calendarEvents: CalendarEventPayload[];
   driveFiles: DriveFilePayload[];
+  /** Opcjonalna preferencja użytkownika — bez wartości obowiązuje konfiguracja backendu. */
+  defaultDocumentDurationMinutes?: number;
 }
 
 export interface Suggestion {
@@ -45,6 +47,15 @@ export interface CaseInfo {
   caseNumber: string;
   clientName: string;
   keywords: string[];
+  isActive: boolean;
+}
+
+/** Dane sprawy przy tworzeniu i edycji. */
+export interface CaseWritePayload {
+  name: string;
+  caseNumber: string;
+  clientName: string;
+  keywords: string[];
 }
 
 export interface ApprovePayload {
@@ -63,6 +74,9 @@ export interface TimeEntry {
   createdFromSuggestion: boolean;
   source: SuggestionSource;
   suggestionId: number;
+  /** Tytuł spotkania / nazwa pliku, z którego powstał wpis — kotwica w realnym zdarzeniu. */
+  sourceTitle: string | null;
+  sourceStartedAt: string | null;
 }
 
 /** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */
@@ -114,6 +128,8 @@ export interface SyncReport {
   filteredOut: SyncFilteredOutCounts;
   aggregated: number;
   created: number;
+  /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku). */
+  updated: number;
   skippedExisting: number;
   matched: SyncMatchedCounts;
 }

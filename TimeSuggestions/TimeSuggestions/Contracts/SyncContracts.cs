@@ -11,6 +11,14 @@ public class SyncRequest
     public List<CalendarEventDto> CalendarEvents { get; set; } = [];
 
     public List<DriveFileDto> DriveFiles { get; set; } = [];
+
+    /// <summary>
+    /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
+    /// Brak wartości = obowiązuje konfiguracja backendu (appsettings.json).
+    /// </summary>
+    [Range(1, Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        ErrorMessage = "Domyślny czas dokumentu musi mieścić się w zakresie 1–480 minut.")]
+    public int? DefaultDocumentDurationMinutes { get; set; }
 }
 
 /// <summary>Wydarzenie z kalendarza Outlook (podzbiór pól Graph potrzebny logice).</summary>
@@ -71,5 +79,6 @@ public record SyncReport(
     SyncFilteredOutCounts FilteredOut,
     int Aggregated,
     int Created,
+    int Updated,
     int SkippedExisting,
     SyncMatchedCounts Matched);

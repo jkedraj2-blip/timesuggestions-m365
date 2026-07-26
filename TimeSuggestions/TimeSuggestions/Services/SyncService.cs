@@ -22,7 +22,15 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .Where(legalCase => legalCase.IsActive)
             .ToListAsync(cancellationToken);
 
-        var builder = new SuggestionBuilder(options);
+        // Preferencja użytkownika z żądania (zwalidowana na granicy API) nadpisuje
+        // konfigurację; sama reguła "co robimy, gdy nie znamy czasu" zostaje w backendzie.
+        var effectiveOptions = new SuggestionOptions
+        {
+            MinimumEventDurationMinutes = options.MinimumEventDurationMinutes,
+            DefaultDocumentDurationMinutes = request.DefaultDocumentDurationMinutes ?? options.DefaultDocumentDurationMinutes,
+            SyncDaysBack = options.SyncDaysBack,
+        };
+        var builder = new SuggestionBuilder(effectiveOptions);
 
         var eventFilterResult = CalendarEventFilter.FilterBillable(
             request.CalendarEvents, options.MinimumEventDurationMinutes);
@@ -39,7 +47,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .Concat(documentResult.Suggestions)
             .ToList();
 
-        var newSuggestions = await FilterOutExistingAsync(candidates, cancellationToken);
+        var (newSuggestions, updatedCount) = await MergeWithExistingAsync(candidates, cancellationToken);
 
         db.Suggestions.AddRange(newSuggestions);
 
@@ -65,30 +73,76 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 NotModifiedByUser: documentResult.NotModifiedByUserCount),
             Aggregated: documentResult.AggregatedCount,
             Created: newSuggestions.Count,
-            SkippedExisting: candidates.Count - newSuggestions.Count,
+            Updated: updatedCount,
+            SkippedExisting: candidates.Count - newSuggestions.Count - updatedCount,
             Matched: CountMatches(newSuggestions));
     }
 
-    private async Task<List<Suggestion>> FilterOutExistingAsync(
+    /// <summary>
+    /// Scala kandydatów z istniejącymi sugestiami. Nowe wracają do wstawienia;
+    /// istniejące OCZEKUJĄCE są odświeżane (np. zmiana nazwy pliku → nowy tytuł
+    /// i ponowne dopasowanie). Rozstrzygniętych (zatwierdzone/odrzucone) nie ruszamy —
+    /// inaczej odrzucona sugestia wróciłaby na listę.
+    /// </summary>
+    private async Task<(List<Suggestion> NewSuggestions, int UpdatedCount)> MergeWithExistingAsync(
         List<Suggestion> candidates,
         CancellationToken cancellationToken)
     {
         if (candidates.Count == 0)
         {
-            return [];
+            return ([], 0);
         }
 
         var candidateExternalIds = candidates.Select(candidate => candidate.ExternalId).ToList();
-        var existingKeys = (await db.Suggestions
+        var existingByKey = (await db.Suggestions
                 .Where(suggestion => candidateExternalIds.Contains(suggestion.ExternalId))
-                .Select(suggestion => new { suggestion.Source, suggestion.ExternalId, suggestion.EntryDate })
                 .ToListAsync(cancellationToken))
-            .Select(key => (key.Source, key.ExternalId, key.EntryDate))
-            .ToHashSet();
+            .ToDictionary(suggestion => (suggestion.Source, suggestion.ExternalId, suggestion.EntryDate));
 
-        return candidates
-            .Where(candidate => !existingKeys.Contains((candidate.Source, candidate.ExternalId, candidate.EntryDate)))
-            .ToList();
+        var newSuggestions = new List<Suggestion>();
+        var updatedCount = 0;
+
+        foreach (var candidate in candidates)
+        {
+            var key = (candidate.Source, candidate.ExternalId, candidate.EntryDate);
+            if (!existingByKey.TryGetValue(key, out var existing))
+            {
+                newSuggestions.Add(candidate);
+                continue;
+            }
+
+            // Licznik rośnie tylko przy faktycznej zmianie — raport nie może kłamać.
+            if (existing.Status == SuggestionStatus.Pending && RefreshFromSource(existing, candidate))
+            {
+                updatedCount++;
+            }
+        }
+
+        return (newSuggestions, updatedCount);
+    }
+
+    /// <summary>Nadpisuje wartości pochodzące ze źródła; zwraca true, gdy coś się realnie zmieniło.</summary>
+    private static bool RefreshFromSource(Suggestion existing, Suggestion fromSource)
+    {
+        var changed = existing.Title != fromSource.Title
+            || existing.StartedAt != fromSource.StartedAt
+            || existing.DurationMinutes != fromSource.DurationMinutes
+            || existing.CaseId != fromSource.CaseId
+            || existing.IsAmbiguous != fromSource.IsAmbiguous
+            || existing.ProposedDescription != fromSource.ProposedDescription;
+
+        if (!changed)
+        {
+            return false;
+        }
+
+        existing.Title = fromSource.Title;
+        existing.StartedAt = fromSource.StartedAt;
+        existing.DurationMinutes = fromSource.DurationMinutes;
+        existing.CaseId = fromSource.CaseId;
+        existing.IsAmbiguous = fromSource.IsAmbiguous;
+        existing.ProposedDescription = fromSource.ProposedDescription;
+        return true;
     }
 
     private static SyncMatchedCounts CountMatches(IReadOnlyList<Suggestion> suggestions) => new(

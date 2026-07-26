@@ -7,6 +7,7 @@ import {
   ApprovePayload,
   CalendarEventPayload,
   CaseInfo,
+  CaseWritePayload,
   Suggestion,
   SuggestionSource,
   SuggestionStatus,
@@ -35,7 +36,10 @@ export class ApiService {
   private baseUrl = environment.apiBaseUrl;
 
   /** Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania. */
-  async syncNow(onStage?: (stage: SyncStage) => void): Promise<SyncReport> {
+  async syncNow(
+    onStage?: (stage: SyncStage) => void,
+    defaultDocumentDurationMinutes?: number,
+  ): Promise<SyncReport> {
     onStage?.({ kind: 'calendar' });
     const events = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK);
 
@@ -47,6 +51,7 @@ export class ApiService {
     const request: SyncRequest = {
       calendarEvents: events.map((event) => this.toCalendarPayload(event)),
       driveFiles: files,
+      defaultDocumentDurationMinutes,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);
@@ -80,8 +85,21 @@ export class ApiService {
     await this.request('POST', `/api/suggestions/${suggestionId}/restore`);
   }
 
-  getCases(): Promise<CaseInfo[]> {
-    return this.requestJson<CaseInfo[]>('GET', '/api/cases');
+  getCases(includeInactive = false): Promise<CaseInfo[]> {
+    const query = includeInactive ? '?includeInactive=true' : '';
+    return this.requestJson<CaseInfo[]>('GET', `/api/cases${query}`);
+  }
+
+  createCase(payload: CaseWritePayload): Promise<CaseInfo> {
+    return this.requestJson<CaseInfo>('POST', '/api/cases', payload);
+  }
+
+  updateCase(caseId: number, payload: CaseWritePayload): Promise<CaseInfo> {
+    return this.requestJson<CaseInfo>('PUT', `/api/cases/${caseId}`, payload);
+  }
+
+  async setCaseActive(caseId: number, isActive: boolean): Promise<void> {
+    await this.request('POST', `/api/cases/${caseId}/${isActive ? 'activate' : 'deactivate'}`);
   }
 
   getTimeEntries(): Promise<TimeEntriesResponse> {

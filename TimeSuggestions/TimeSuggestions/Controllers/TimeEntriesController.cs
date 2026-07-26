@@ -15,6 +15,7 @@ public class TimeEntriesController(AppDbContext db, ApprovalService approvalServ
     {
         var entries = await db.TimeEntries
             .Include(entry => entry.Case)
+            .Include(entry => entry.Suggestion)
             .OrderByDescending(entry => entry.EntryDate)
             .ThenByDescending(entry => entry.Id)
             .ToListAsync(cancellationToken);

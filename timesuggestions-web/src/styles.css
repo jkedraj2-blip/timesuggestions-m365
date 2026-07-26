@@ -50,34 +50,80 @@
   --danger-soft: #fbeaea;
 }
 
-/* Ciemny motyw — te same tokeny, inne wartości; komponenty bez zmian */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14181f;
-    --surface: #1c222c;
-    --surface-alt: #232a36;
-    --border: #333c4a;
-    --text: #e6e9ee;
-    --text-muted: #9aa4b2;
+/* Poświata akcentu — używana tylko w motywie niebieskim (w pozostałych brak). */
+:root {
+  --glow: none;
+}
 
-    --accent: #2e6bc0;
-    --accent-hover: #3d7fd6;
-    --accent-contrast: #ffffff;
-    --accent-soft: #22314a;
+/* Motywy przełączane jawnie przez data-theme na <html> (ThemeService).
+   Przy pierwszej wizycie serwis szanuje prefers-color-scheme, potem decyduje user. */
 
-    --success: #4ec27a;
-    --success-soft: #1d3327;
+/* Ciemny — neutralny grafit */
+:root[data-theme='dark'] {
+  --bg: #14181f;
+  --surface: #1c222c;
+  --surface-alt: #232a36;
+  --border: #333c4a;
+  --text: #e6e9ee;
+  --text-muted: #9aa4b2;
 
-    --warn: #e3b341;
-    --warn-strong: #d4a72c;
-    --warn-soft: #3a3020;
+  --accent: #2e6bc0;
+  --accent-hover: #3d7fd6;
+  --accent-contrast: #ffffff;
+  --accent-soft: #22314a;
 
-    --danger: #e5726e;
-    --danger-soft: #3d2222;
+  --success: #4ec27a;
+  --success-soft: #1d3327;
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  }
+  --warn: #e3b341;
+  --warn-strong: #d4a72c;
+  --warn-soft: #3a3020;
+
+  --danger: #e5726e;
+  --danger-soft: #3d2222;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Niebieski — nowoczesny, technologiczny: nasycone granaty (wyraźnie niebieskie,
+   nie grafitowe), jaśniejszy akcent, oszczędna poświata na elementach aktywnych. */
+:root[data-theme='blue'] {
+  --bg: #123061;
+  --surface: #1a3d77;
+  --surface-alt: #214a8c;
+  --border: #3d69b2;
+  --text: #f0f6ff;
+  --text-muted: #b3cbf2;
+
+  --accent: #2d7ff2;
+  --accent-hover: #4f95fa;
+  --accent-contrast: #ffffff;
+  --accent-soft: #1c4d9e;
+
+  --success: #4ce695;
+  --success-soft: #14503c;
+
+  --warn: #ffd166;
+  --warn-strong: #eab13a;
+  --warn-soft: #4d3c14;
+
+  --danger: #ff8b87;
+  --danger-soft: #59292c;
+
+  --shadow-sm: 0 1px 3px rgba(4, 14, 38, 0.5);
+  --shadow-md: 0 6px 18px rgba(4, 14, 38, 0.6);
+  --glow: 0 0 14px rgba(90, 160, 255, 0.5);
+}
+
+/* Akcenty poświaty w motywie niebieskim — realizowane tokenem, więc
+   w pozostałych motywach (--glow: none) reguły są neutralne. */
+.btn-primary {
+  box-shadow: var(--glow);
+}
+
+.tab.active {
+  text-shadow: var(--glow);
 }
 
 /* ---------- Baza ---------- */

@@ -12,11 +12,13 @@ public class CalendarEventFilterTests
 {
     private const int MinimumDurationMinutes = 5;
 
+    private static readonly TimeZoneInfo Warsaw = TimeZoneInfo.FindSystemTimeZoneById("Europe/Warsaw");
+
     private static readonly DateTime WindowStart = new(2026, 7, 18, 0, 0, 0);
     private static readonly DateTime WindowEnd = new(2026, 7, 25, 12, 0, 0);
 
     private static CalendarFilterResult Filter(IEnumerable<CalendarEventDto> events)
-        => CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes, WindowStart, WindowEnd);
+        => CalendarEventFilter.FilterBillable(events, MinimumDurationMinutes, WindowStart, WindowEnd, Warsaw);
 
     private static CalendarEventDto CreateEvent(
         string id,
@@ -183,6 +185,102 @@ public class CalendarEventFilterTests
         var events = TestHelpers.LoadCalendarEventsFixture();
         var normalEvent = events.Single(calendarEvent => calendarEvent.Id == "event-normal");
 
-        Assert.Equal(90, CalendarEventFilter.GetDurationMinutes(normalEvent));
+        Assert.Equal(90, CalendarEventFilter.GetDurationMinutes(normalEvent, Warsaw));
+    }
+
+    // --- Zmiana czasu: trwanie liczone z instantów UTC, nie z różnicy lokalnych DateTime ---
+
+    [Fact]
+    public void GetDurationMinutes_WiosennaZmianaCzasu_LiczyRealneMinuty()
+    {
+        // Noc 29.03.2026 w Warszawie: 02:00 → 03:00. Zegar ścienny pokazuje
+        // 01:30–03:30 (różnica lokalna 120), ale realnie minęło 60 minut.
+        var meeting = CreateEvent(
+            "event-spring",
+            new DateTime(2026, 3, 29, 1, 30, 0),
+            new DateTime(2026, 3, 29, 3, 30, 0));
+
+        Assert.Equal(60, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
+    }
+
+    [Fact]
+    public void GetDurationMinutes_JesiennaZmianaCzasu_LiczyRealneMinuty()
+    {
+        // Noc 25.10.2026: 03:00 → 02:00. 01:30–03:30 lokalnie to realnie 180 minut.
+        var meeting = CreateEvent(
+            "event-fall",
+            new DateTime(2026, 10, 25, 1, 30, 0),
+            new DateTime(2026, 10, 25, 3, 30, 0));
+
+        Assert.Equal(180, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
+    }
+
+    [Fact]
+    public void GetDurationMinutes_CzasNiejednoznaczny_PierwszeWystapienieBezWyjatku()
+    {
+        // 02:30 w noc jesiennej zmiany występuje dwa razy — konwencja BusinessTime:
+        // pierwsze wystąpienie (czas letni, UTC+2), więc 02:30–03:30 to 120 minut.
+        var meeting = CreateEvent(
+            "event-ambiguous",
+            new DateTime(2026, 10, 25, 2, 30, 0),
+            new DateTime(2026, 10, 25, 3, 30, 0));
+
+        Assert.Equal(120, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
+    }
+
+    [Fact]
+    public void GetDurationMinutes_CzasNieistniejacy_OffsetPoZmianieBezWyjatku()
+    {
+        // 02:30 w noc wiosennej zmiany nie istnieje — konwencja BusinessTime:
+        // offset po zmianie (jakby zegar już przeskoczył), więc 02:30–03:30 to 60 minut.
+        var meeting = CreateEvent(
+            "event-invalid-time",
+            new DateTime(2026, 3, 29, 2, 30, 0),
+            new DateTime(2026, 3, 29, 3, 30, 0));
+
+        Assert.Equal(60, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
+    }
+
+    [Fact]
+    public void GetDurationMinutes_JsonZSufiksemZOffsetemIBezSufiksuLiczySieTakSamo()
+    {
+        // Ten sam odcinek 10:00–11:30 czasu warszawskiego (lipiec = UTC+2) zapisany
+        // na trzy sposoby, jakie może przyjąć deserializacja JSON.
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        string[] payloads =
+        [
+            """{"id":"event-1","startDateTime":"2026-07-24T10:00:00","endDateTime":"2026-07-24T11:30:00"}""",
+            """{"id":"event-1","startDateTime":"2026-07-24T08:00:00Z","endDateTime":"2026-07-24T09:30:00Z"}""",
+            """{"id":"event-1","startDateTime":"2026-07-24T11:00:00+03:00","endDateTime":"2026-07-24T12:30:00+03:00"}""",
+        ];
+
+        foreach (var payload in payloads)
+        {
+            var dto = System.Text.Json.JsonSerializer.Deserialize<CalendarEventDto>(payload, options);
+
+            Assert.NotNull(dto);
+            Assert.Equal(90, CalendarEventFilter.GetDurationMinutes(dto, Warsaw));
+        }
+    }
+
+    [Fact]
+    public void FilterBillable_GranicaOknaWTygodniuZmianyCzasu()
+    {
+        // Okno jak w backendzie: początek dnia lokalnego 6 dni przed "teraz"
+        // (27.10.2026, już po jesiennej zmianie czasu). Wydarzenie dokładnie na
+        // granicy wpada, minutę przed — wypada. Frontend pobiera z dobą zapasu,
+        // więc oba wydarzenia w ogóle do tego filtru docierają.
+        var windowStart = new DateTime(2026, 10, 21, 0, 0, 0);
+        var windowEnd = new DateTime(2026, 10, 27, 14, 0, 0);
+        var atBoundary = CreateEvent("event-boundary", windowStart, windowStart.AddHours(1));
+        var beforeBoundary = CreateEvent(
+            "event-before", windowStart.AddMinutes(-1), windowStart.AddMinutes(59));
+
+        var result = CalendarEventFilter.FilterBillable(
+            [atBoundary, beforeBoundary], MinimumDurationMinutes, windowStart, windowEnd, Warsaw);
+
+        var accepted = Assert.Single(result.Accepted);
+        Assert.Equal("event-boundary", accepted.Id);
+        Assert.Equal(1, result.OutsideWindowCount);
     }
 }

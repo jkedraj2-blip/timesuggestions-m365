@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { AuthService } from './auth.service';
 import { GraphDeltaResponse, GraphDriveItem } from '../models/graph.models';
 import { DriveFilePayload } from '../models/api.models';
-import { GRAPH_BASE_URL } from './graph-config';
+import { FETCH_MARGIN_DAYS, GRAPH_BASE_URL } from './graph-config';
 import { assertTrustedGraphUrl, fetchGraphPage } from './graph-http';
 
 const ALLOWED_EXTENSIONS = ['.docx', '.doc', '.xlsx', '.xls'];
@@ -48,7 +48,9 @@ export class GraphFilesService {
     days: number,
     onPage?: (page: number) => void,
   ): Promise<DriveDeltaResult> {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // Doba zapasu ponad okno backendu (FETCH_MARGIN_DAYS) — wstępny filtr kliencki
+    // nie może odrzucić pliku, który backend uznałby za część okna lokalnego.
+    const since = new Date(Date.now() - (days + FETCH_MARGIN_DAYS) * 24 * 60 * 60 * 1000);
     const items = await this.fetchChangedDriveItems(onPage);
 
     // Semantyka delta: ten sam driveItem.id może wystąpić w feedzie wielokrotnie,

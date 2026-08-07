@@ -50,16 +50,29 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // (Prefer: outlook.timezone).
         var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, businessTimeZone);
-        var windowStartLocal = nowLocal.AddDays(-options.SyncDaysBack);
+
+        // Okno "N dni" = dziś plus N-1 poprzednich pełnych dób lokalnych: początek dnia
+        // lokalnego w strefie biznesowej, nie "N×24h wstecz" — odejmowanie godzin
+        // rozjeżdża się z dobami lokalnymi o godzinę przy zmianie czasu. Frontend
+        // pobiera z Graph z dobą zapasu, a jedynym źródłem prawdy filtru jest backend,
+        // więc rozjazd okien między stronami nie jest możliwy.
+        var windowStartLocal = nowLocal.Date.AddDays(-(options.SyncDaysBack - 1));
 
         var eventFilterResult = CalendarEventFilter.FilterBillable(
             request.CalendarEvents,
             options.MinimumEventDurationMinutes,
             windowStart: windowStartLocal,
-            windowEnd: nowLocal);
+            windowEnd: nowLocal,
+            businessTimeZone);
 
+        // To samo okno dla dokumentów — granica lokalna przeliczona na instant UTC,
+        // bo czasy modyfikacji plików z Graph są w UTC.
         var documentResult = builder.BuildFromDocuments(
-            request.DriveFiles, activeCases, nowUtc.AddDays(-options.SyncDaysBack), nowUtc, nowUtc);
+            request.DriveFiles,
+            activeCases,
+            BusinessTime.ToUtcInstant(windowStartLocal, businessTimeZone),
+            nowUtc,
+            nowUtc);
 
         var candidates = builder
             .BuildFromCalendar(eventFilterResult.Accepted, activeCases, nowUtc)

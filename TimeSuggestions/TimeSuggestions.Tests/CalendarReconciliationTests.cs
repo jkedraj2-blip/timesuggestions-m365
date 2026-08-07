@@ -51,8 +51,9 @@ public sealed class CalendarReconciliationTests : IDisposable
     {
         Id = id,
         Subject = subject,
-        StartDateTime = Now.AddDays(-daysAgo),
-        EndDateTime = Now.AddDays(-daysAgo).AddHours(1),
+        // Kind=Unspecified jak w danych z Graph (czas lokalny bez sufiksu strefy).
+        StartDateTime = DateTime.SpecifyKind(Now.AddDays(-daysAgo), DateTimeKind.Unspecified),
+        EndDateTime = DateTime.SpecifyKind(Now.AddDays(-daysAgo).AddHours(1), DateTimeKind.Unspecified),
         Sensitivity = sensitivity,
         IsCancelled = isCancelled,
     };

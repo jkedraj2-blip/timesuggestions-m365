@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { AuthService } from './auth.service';
 import { GraphCalendarResponse, GraphEvent } from '../models/graph.models';
-import { GRAPH_BASE_URL, OUTLOOK_TIMEZONE } from './graph-config';
+import { FETCH_MARGIN_DAYS, GRAPH_BASE_URL, OUTLOOK_TIMEZONE } from './graph-config';
 import { fetchGraphPage } from './graph-http';
 
 /** Wynik pobierania kalendarza wraz z deklaracją kompletności snapshotu. */
@@ -27,7 +27,8 @@ export class GraphCalendarService {
    */
   async getEventsLastDays(days: number, onPage?: (page: number) => void): Promise<CalendarSnapshot> {
     const end = new Date();
-    const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+    // Doba zapasu ponad okno backendu (FETCH_MARGIN_DAYS) — patrz komentarz w graph-config.
+    const start = new Date(end.getTime() - (days + FETCH_MARGIN_DAYS) * 24 * 60 * 60 * 1000);
 
     const params = new URLSearchParams({
       startDateTime: start.toISOString(),

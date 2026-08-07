@@ -104,14 +104,18 @@ public class SuggestionBuilder(SuggestionOptions options)
         var title = string.IsNullOrWhiteSpace(calendarEvent.Subject) ? "(bez tytułu)" : calendarEvent.Subject;
         var match = CaseMatcher.Match(calendarEvent.Subject, activeCases, MatchTextSource.MeetingTitle);
 
+        // Czasy z Graph przychodzą lokalne (Prefer: outlook.timezone), ale JSON z "Z"
+        // lub offsetem też musi dać spójny czas lokalny strefy biznesowej.
+        var startedAtLocal = BusinessTime.ToBusinessLocal(calendarEvent.StartDateTime, businessTimeZone);
+
         return new Suggestion
         {
             Source = SuggestionSource.Calendar,
             ExternalId = calendarEvent.Id,
             Title = title,
-            StartedAt = calendarEvent.StartDateTime,
-            EntryDate = DateOnly.FromDateTime(calendarEvent.StartDateTime),
-            DurationMinutes = CalendarEventFilter.GetDurationMinutes(calendarEvent),
+            StartedAt = startedAtLocal,
+            EntryDate = DateOnly.FromDateTime(startedAtLocal),
+            DurationMinutes = CalendarEventFilter.GetDurationMinutes(calendarEvent, businessTimeZone),
             CaseId = match.MatchedCase?.Id,
             IsAmbiguous = match.Kind == MatchKind.Multiple,
             ProposedDescription = title,

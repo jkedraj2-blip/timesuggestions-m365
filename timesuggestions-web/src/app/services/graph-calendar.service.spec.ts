@@ -35,6 +35,23 @@ describe('GraphCalendarService', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('pobiera z dobą zapasu ponad okno — granica okna backendu zawsze objęta zapytaniem', async () => {
+    // 27.10.2026 — tydzień po jesiennej zmianie czasu. Okno backendu zaczyna się
+    // 21.10 00:00 czasu warszawskiego (22:00Z 20.10); zapytanie z zapasem sięga
+    // 19.10 12:00Z, więc wydarzenia na styku okna zawsze docierają do backendu,
+    // który jest jedynym źródłem prawdy filtru.
+    vi.useFakeTimers({ now: new Date('2026-10-27T12:00:00Z'), toFake: ['Date'] });
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ value: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await service.getEventsLastDays(7);
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(requestedUrl.searchParams.get('startDateTime')).toBe('2026-10-19T12:00:00.000Z');
+    expect(requestedUrl.searchParams.get('endDateTime')).toBe('2026-10-27T12:00:00.000Z');
   });
 
   it('skleja wszystkie strony wyników przez @odata.nextLink', async () => {

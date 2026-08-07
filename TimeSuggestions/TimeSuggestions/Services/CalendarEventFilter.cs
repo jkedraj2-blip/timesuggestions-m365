@@ -31,7 +31,8 @@ public static class CalendarEventFilter
         IEnumerable<CalendarEventDto> events,
         int minimumDurationMinutes,
         DateTime windowStart,
-        DateTime windowEnd)
+        DateTime windowEnd,
+        TimeZoneInfo businessTimeZone)
     {
         var accepted = new List<CalendarEventDto>();
         var privateCount = 0;
@@ -76,14 +77,17 @@ public static class CalendarEventFilter
                 continue;
             }
 
-            if (calendarEvent.StartDateTime < windowStart || calendarEvent.StartDateTime > windowEnd)
+            // Porównanie z oknem po sprowadzeniu do strefy biznesowej — JSON z "Z",
+            // z offsetem i bez offsetu musi trafiać do tego samego okna.
+            var startLocal = BusinessTime.ToBusinessLocal(calendarEvent.StartDateTime, businessTimeZone);
+            if (startLocal < windowStart || startLocal > windowEnd)
             {
                 outsideWindowCount++;
                 continue;
             }
 
             // Wydarzenie trwające dokładnie tyle, ile próg, przechodzi (warunek "krótsze niż").
-            if (GetDurationMinutes(calendarEvent) < minimumDurationMinutes)
+            if (GetDurationMinutes(calendarEvent, businessTimeZone) < minimumDurationMinutes)
             {
                 tooShortCount++;
                 continue;
@@ -97,8 +101,15 @@ public static class CalendarEventFilter
             cancelledCount, outsideWindowCount, invalidDatesCount);
     }
 
-    public static int GetDurationMinutes(CalendarEventDto calendarEvent)
-        => (int)Math.Round((calendarEvent.EndDateTime - calendarEvent.StartDateTime).TotalMinutes);
+    /// <summary>
+    /// Czas trwania z RÓŻNICY INSTANTÓW UTC, nie lokalnych DateTime — w noc zmiany
+    /// czasu różnica lokalna kłamie o godzinę (01:30–03:30 wiosną to 60 minut,
+    /// jesienią 180). Konwencje czasów niejednoznacznych/nieistniejących: BusinessTime.
+    /// </summary>
+    public static int GetDurationMinutes(CalendarEventDto calendarEvent, TimeZoneInfo businessTimeZone)
+        => (int)Math.Round(
+            (BusinessTime.ToUtcInstant(calendarEvent.EndDateTime, businessTimeZone)
+             - BusinessTime.ToUtcInstant(calendarEvent.StartDateTime, businessTimeZone)).TotalMinutes);
 
     private static bool IsExcludedSensitivity(string? sensitivity)
         => sensitivity is not null

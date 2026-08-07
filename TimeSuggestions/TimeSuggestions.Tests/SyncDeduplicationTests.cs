@@ -210,7 +210,19 @@ public sealed class SyncDeduplicationTests : IDisposable
         Assert.Equal(1, report.FilteredOut.NotOfficeDocument);
         Assert.Equal(1, report.Created);
         Assert.Equal(1, report.Matched.Single); // "Kowalski" pasuje do sprawy z seedu
+        AssertReportSumInvariant(report);
     }
+
+    /// <summary>
+    /// Niezmiennik "uczciwego" raportu: pobrano = zaakceptowane (utworzone,
+    /// zaktualizowane, pominięte) + odfiltrowane + zagregowane. Zakłada brak
+    /// duplikatów klucza wewnątrz jednego żądania (te znikają w dedupie bez licznika).
+    /// </summary>
+    private static void AssertReportSumInvariant(SyncReport report)
+        => Assert.Equal(
+            report.Fetched.CalendarEvents + report.Fetched.DriveFiles,
+            report.Created + report.Updated + report.SkippedExisting
+                + report.FilteredOut.Total + report.Aggregated);
 
     [Fact]
     public async Task SyncAsync_DoliczaLicznikiFiltrowKlienckichDoRaportu()
@@ -235,6 +247,84 @@ public sealed class SyncDeduplicationTests : IDisposable
         Assert.Equal(3, report.FilteredOut.OutsideWindow);
         Assert.Equal(4, report.FilteredOut.NotOfficeDocument);
         Assert.Equal(10, report.FilteredOut.Total);
+        // Pozycje odfiltrowane w przeglądarce liczą się też jako pobrane (per źródło).
+        Assert.Equal(3, report.Fetched.CalendarEvents);
+        Assert.Equal(7, report.Fetched.DriveFiles);
+        AssertReportSumInvariant(report);
+    }
+
+    [Fact]
+    public async Task SyncAsync_PobranoObejmujeWydarzeniaOdfiltrowaneWPrzegladarce()
+    {
+        // Scenariusz z findingu: 4 wydarzenia w Graph — 2 prywatne odfiltrowane
+        // już w przeglądarce (nie ma ich w payloadzie), 1 anulowane odrzucone przez
+        // backend, 1 normalne. Raport: pobrano 4, odfiltrowano 3, zaakceptowane 1.
+        var request = new SyncRequest
+        {
+            CalendarEvents =
+            [
+                new CalendarEventDto
+                {
+                    Id = "event-normal",
+                    Subject = "Spotkanie robocze",
+                    StartDateTime = Now.AddDays(-1),
+                    EndDateTime = Now.AddDays(-1).AddHours(1),
+                },
+                new CalendarEventDto
+                {
+                    Id = "event-cancelled",
+                    Subject = "Odwołane spotkanie",
+                    StartDateTime = Now.AddDays(-1),
+                    EndDateTime = Now.AddDays(-1).AddHours(1),
+                    IsCancelled = true,
+                },
+            ],
+            ClientFilteredCounts = new ClientFilteredCounts { Private = 2 },
+        };
+
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(4, report.Fetched.CalendarEvents);
+        Assert.Equal(3, report.FilteredOut.Total);
+        Assert.Equal(1, report.Created);
+        AssertReportSumInvariant(report);
+    }
+
+    [Fact]
+    public async Task SyncAsync_PobranoObejmujePlikiOdfiltrowaneWPrzegladarce()
+    {
+        // Pliki analogicznie: 1 prawidłowy w payloadzie + 2 odfiltrowane w przeglądarce
+        // = pobrano 3. Tombstone to sygnał usunięcia, nie pobrany plik — nie liczy się
+        // ani do pobranych, ani do odfiltrowanych.
+        await syncService.SyncAsync(new SyncRequest
+        {
+            DriveFiles =
+            [
+                new DriveFileDto { Id = "file-old", Name = "Stara_umowa.docx", LastModifiedDateTime = Now.AddDays(-2), LastModifiedByMe = true },
+            ],
+        }, Now, CancellationToken.None);
+
+        var request = new SyncRequest
+        {
+            DriveFiles =
+            [
+                new DriveFileDto { Id = "file-1", Name = "Umowa_NovaTech.docx", LastModifiedDateTime = Now.AddDays(-1), LastModifiedByMe = true },
+            ],
+            DeletedDriveFileIds = ["file-old"],
+            ClientFilteredCounts = new ClientFilteredCounts
+            {
+                DocumentsOutsideWindow = 1,
+                DocumentsNotOfficeDocument = 1,
+            },
+        };
+
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(3, report.Fetched.DriveFiles);
+        Assert.Equal(2, report.FilteredOut.Total);
+        Assert.Equal(1, report.Created);
+        Assert.Equal(1, report.Removed); // tombstone usunął oczekującą sugestię
+        AssertReportSumInvariant(report);
     }
 
     [Fact]

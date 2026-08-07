@@ -26,7 +26,8 @@ function jsonResponse(body: unknown): Response {
 }
 
 const EMPTY_REPORT = {
-  fetched: { calendarEvents: 1, driveFiles: 0 },
+  // "Pobrano" obejmuje też pozycje odfiltrowane w przeglądarce (semantyka backendu).
+  fetched: { calendarEvents: 4, driveFiles: 0 },
   filteredOut: {
     private: 2, tooShort: 0, allDay: 0, cancelled: 1, invalidDates: 0,
     notOfficeDocument: 0, outsideWindow: 0, notModifiedByUser: 0, total: 3,

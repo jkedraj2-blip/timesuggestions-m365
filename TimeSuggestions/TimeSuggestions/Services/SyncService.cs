@@ -131,7 +131,14 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         var clientCounts = request.ClientFilteredCounts;
 
         return new SyncReport(
-            new SyncFetchedCounts(request.CalendarEvents.Count, request.DriveFiles.Count),
+            // "Pobrano" = dane faktycznie pobrane z Graph: pozycje przekazane do backendu
+            // PLUS odfiltrowane już w przeglądarce (per źródło). Bez tego raport był
+            // arytmetycznie niespójny ("Pobrano 1, odfiltrowano 3"); teraz zachodzi
+            // pobrano = zaakceptowane + odfiltrowane + zagregowane.
+            new SyncFetchedCounts(
+                request.CalendarEvents.Count + clientCounts.Private + clientCounts.Cancelled,
+                request.DriveFiles.Count + clientCounts.DocumentsOutsideWindow
+                    + clientCounts.DocumentsNotOfficeDocument),
             new SyncFilteredOutCounts(
                 Private: eventFilterResult.PrivateCount + clientCounts.Private,
                 TooShort: eventFilterResult.TooShortCount,

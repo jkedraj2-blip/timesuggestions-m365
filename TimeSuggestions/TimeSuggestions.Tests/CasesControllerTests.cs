@@ -51,20 +51,20 @@ public sealed class CasesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_OdrzucaDuplikatNumeruSprawy()
+    public async Task Create_DuplikatNumeruSprawyZwraca409()
     {
-        // "K-2026-001" istnieje w seedzie.
+        // "K-2026-001" istnieje w seedzie — duplikat to konflikt stanu (409), nie błąd żądania.
         var result = await controller.Create(CreateRequest("K-2026-001"), CancellationToken.None);
 
-        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.IsType<ConflictObjectResult>(result.Result);
     }
 
     [Fact]
-    public async Task Update_OdrzucaNumerZajetyPrzezInnaSprawe()
+    public async Task Update_NumerZajetyPrzezInnaSpraweZwraca409()
     {
         var result = await controller.Update(2, CreateRequest("K-2026-001"), CancellationToken.None);
 
-        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.IsType<ConflictObjectResult>(result.Result);
     }
 
     [Fact]

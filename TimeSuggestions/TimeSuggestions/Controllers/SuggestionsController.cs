@@ -67,6 +67,7 @@ public class SuggestionsController(AppDbContext db, ApprovalService approvalServ
             ApprovalOutcome.Success => Ok(TimeEntryDto.FromEntity(result.CreatedEntry!)),
             ApprovalOutcome.SuggestionNotFound => NotFound(new { message = "Sugestia nie istnieje." }),
             ApprovalOutcome.SuggestionNotPending => Conflict(new { message = "Sugestia została już rozstrzygnięta." }),
+            ApprovalOutcome.AlreadyApproved => Conflict(new { message = "Sugestia została już zatwierdzona w innym żądaniu." }),
             ApprovalOutcome.CaseNotFound => BadRequest(new { message = "Wskazana sprawa nie istnieje lub jest nieaktywna." }),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };

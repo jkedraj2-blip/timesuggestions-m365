@@ -8,9 +8,20 @@ using TimeSuggestions.Models;
 namespace TimeSuggestions.Services;
 
 /// <summary>
+/// Trwały konflikt unikalności mimo ponowienia — kontroler tłumaczy go na 409
+/// zamiast pozwolić na nieczytelny błąd 500.
+/// </summary>
+public class SyncConflictException()
+    : Exception("Synchronizacja koliduje z inną trwającą synchronizacją — spróbuj ponownie.");
+
+/// <summary>Wynik scalania kandydatów z istniejącymi sugestiami.</summary>
+internal record MergeOutcome(List<Suggestion> NewSuggestions, int UpdatedCount, int RemovedCount);
+
+/// <summary>
 /// Serwis aplikacyjny synchronizacji: skleja logikę czystą z bazą.
-/// Filtruje surowe dane, buduje sugestie, zapisuje wyłącznie nowe
-/// (klucz: źródło + id z Graph + dzień) i składa pełny raport dla UI.
+/// Filtruje surowe dane, buduje sugestie, scala je z istniejącymi
+/// (klucz: źródło + id z Graph + dzień), rekonsyliuje kalendarz
+/// i składa pełny raport dla UI.
 /// </summary>
 public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAccessor)
 {
@@ -29,6 +40,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             MinimumEventDurationMinutes = options.MinimumEventDurationMinutes,
             DefaultDocumentDurationMinutes = request.DefaultDocumentDurationMinutes ?? options.DefaultDocumentDurationMinutes,
             SyncDaysBack = options.SyncDaysBack,
+            BusinessTimeZoneId = options.BusinessTimeZoneId,
         };
         var builder = new SuggestionBuilder(effectiveOptions);
 
@@ -38,11 +50,12 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // (Prefer: outlook.timezone).
         var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, businessTimeZone);
+        var windowStartLocal = nowLocal.AddDays(-options.SyncDaysBack);
 
         var eventFilterResult = CalendarEventFilter.FilterBillable(
             request.CalendarEvents,
             options.MinimumEventDurationMinutes,
-            windowStart: nowLocal.AddDays(-options.SyncDaysBack),
+            windowStart: windowStartLocal,
             windowEnd: nowLocal);
 
         var documentResult = builder.BuildFromDocuments(
@@ -57,20 +70,47 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .Select(group => group.Last())
             .ToList();
 
-        var (newSuggestions, updatedCount) = await MergeWithExistingAsync(candidates, cancellationToken);
-
-        db.Suggestions.AddRange(newSuggestions);
-
-        // Zapis przebiegu w tej samej transakcji co sugestie — historia synchronizacji
-        // zasila kafelek "ostatnia synchronizacja" w UI.
-        db.SyncRuns.Add(new SyncRun
+        // Konflikt unikalności = równoległa synchronizacja zdążyła zapisać te same klucze.
+        // Po nieudanym SaveChanges kontekst nadal śledzi encje z tej próby, więc proste
+        // ponowienie dodałoby je drugi raz — dlatego ChangeTracker.Clear() i CAŁY merge
+        // od nowa (z ponownym odczytem istniejących). Maksymalnie jedno ponowienie;
+        // inne błędy zapisu propagują bez maskowania.
+        MergeOutcome merge;
+        for (var attempt = 0; ; attempt++)
         {
-            RunAt = nowUtc,
-            Created = newSuggestions.Count,
-            SkippedExisting = candidates.Count - newSuggestions.Count,
-        });
+            merge = await MergeWithExistingAsync(
+                candidates,
+                DateOnly.FromDateTime(windowStartLocal),
+                DateOnly.FromDateTime(nowLocal),
+                request.DeletedDriveFileIds,
+                cancellationToken);
 
-        await db.SaveChangesAsync(cancellationToken);
+            db.Suggestions.AddRange(merge.NewSuggestions);
+
+            // Zapis przebiegu w tej samej transakcji co sugestie — historia synchronizacji
+            // zasila kafelek "ostatnia synchronizacja" w UI. Ta sama formuła
+            // SkippedExisting co w raporcie: kandydaci - nowe - zaktualizowane.
+            db.SyncRuns.Add(new SyncRun
+            {
+                RunAt = nowUtc,
+                Created = merge.NewSuggestions.Count,
+                SkippedExisting = candidates.Count - merge.NewSuggestions.Count - merge.UpdatedCount,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken);
+                break;
+            }
+            catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
+            {
+                db.ChangeTracker.Clear();
+                if (attempt > 0)
+                {
+                    throw new SyncConflictException();
+                }
+            }
+        }
 
         return new SyncReport(
             new SyncFetchedCounts(request.CalendarEvents.Count, request.DriveFiles.Count),
@@ -84,53 +124,136 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 OutsideWindow: documentResult.OutsideWindowCount + eventFilterResult.OutsideWindowCount,
                 NotModifiedByUser: documentResult.NotModifiedByUserCount),
             Aggregated: documentResult.AggregatedCount,
-            Created: newSuggestions.Count,
-            Updated: updatedCount,
-            SkippedExisting: candidates.Count - newSuggestions.Count - updatedCount,
-            Matched: CountMatches(newSuggestions));
+            Created: merge.NewSuggestions.Count,
+            Updated: merge.UpdatedCount,
+            SkippedExisting: candidates.Count - merge.NewSuggestions.Count - merge.UpdatedCount,
+            Removed: merge.RemovedCount,
+            Matched: CountMatches(merge.NewSuggestions));
     }
 
     /// <summary>
-    /// Scala kandydatów z istniejącymi sugestiami. Nowe wracają do wstawienia;
-    /// istniejące OCZEKUJĄCE są odświeżane (np. zmiana nazwy pliku → nowy tytuł
-    /// i ponowne dopasowanie). Rozstrzygniętych (zatwierdzone/odrzucone) nie ruszamy —
-    /// inaczej odrzucona sugestia wróciłaby na listę.
+    /// Scala kandydatów z istniejącymi sugestiami. Dokumenty: klucz
+    /// (źródło, id, dzień) — delta jest przyrostowa, więc nieobecność pliku w feedzie
+    /// niczego nie dowodzi i dokumentów NIE czyścimy na tej podstawie (usuwają je
+    /// wyłącznie jawne tombstone'y). Kalendarz: pełny snapshot okna → rekonsyliacja
+    /// per spotkanie (ExternalId). Rozstrzygniętych (zatwierdzone/odrzucone) nie ruszamy.
     /// </summary>
-    private async Task<(List<Suggestion> NewSuggestions, int UpdatedCount)> MergeWithExistingAsync(
+    private async Task<MergeOutcome> MergeWithExistingAsync(
         List<Suggestion> candidates,
+        DateOnly windowStartDate,
+        DateOnly windowEndDate,
+        IReadOnlyCollection<string> deletedDriveFileIds,
         CancellationToken cancellationToken)
     {
-        if (candidates.Count == 0)
-        {
-            return ([], 0);
-        }
-
-        var candidateExternalIds = candidates.Select(candidate => candidate.ExternalId).ToList();
-        var existingByKey = (await db.Suggestions
-                .Where(suggestion => candidateExternalIds.Contains(suggestion.ExternalId))
-                .ToListAsync(cancellationToken))
-            .ToDictionary(suggestion => (suggestion.Source, suggestion.ExternalId, suggestion.EntryDate));
-
         var newSuggestions = new List<Suggestion>();
         var updatedCount = 0;
+        var removedCount = 0;
 
-        foreach (var candidate in candidates)
+        var documentCandidates = candidates
+            .Where(candidate => candidate.Source == SuggestionSource.Document)
+            .ToList();
+        if (documentCandidates.Count > 0)
         {
-            var key = (candidate.Source, candidate.ExternalId, candidate.EntryDate);
-            if (!existingByKey.TryGetValue(key, out var existing))
+            var documentIds = documentCandidates.Select(candidate => candidate.ExternalId).ToList();
+            var existingByKey = (await db.Suggestions
+                    .Where(suggestion => suggestion.Source == SuggestionSource.Document
+                        && documentIds.Contains(suggestion.ExternalId))
+                    .ToListAsync(cancellationToken))
+                .ToDictionary(suggestion => (suggestion.ExternalId, suggestion.EntryDate));
+
+            foreach (var candidate in documentCandidates)
+            {
+                if (!existingByKey.TryGetValue((candidate.ExternalId, candidate.EntryDate), out var existing))
+                {
+                    newSuggestions.Add(candidate);
+                    continue;
+                }
+
+                // Licznik rośnie tylko przy faktycznej zmianie — raport nie może kłamać.
+                if (existing.Status == SuggestionStatus.Pending && RefreshFromSource(existing, candidate))
+                {
+                    updatedCount++;
+                }
+            }
+        }
+
+        // Tombstone'y z delta: plik usunięty z OneDrive → jego OCZEKUJĄCE sugestie
+        // znikają (dowolny dzień); zatwierdzone i odrzucone zostają.
+        if (deletedDriveFileIds.Count > 0)
+        {
+            var deletedPending = await db.Suggestions
+                .Where(suggestion => suggestion.Source == SuggestionSource.Document
+                    && suggestion.Status == SuggestionStatus.Pending
+                    && deletedDriveFileIds.Contains(suggestion.ExternalId))
+                .ToListAsync(cancellationToken);
+
+            db.Suggestions.RemoveRange(deletedPending);
+            removedCount += deletedPending.Count;
+        }
+
+        // Kalendarz: zbiorem odniesienia są kandydaci pozostali PO WSZYSTKICH filtrach
+        // (rozliczalni). Spotkanie, które nadal istnieje w Graph, ale stało się anulowane,
+        // prywatne czy całodniowe, traktujemy jak usunięte — jego Pending znika.
+        // Założenie: frontend przerywa synchronizację przy błędzie pobierania strony,
+        // więc backend dostaje wyłącznie KOMPLETNE snapshoty okna (api.service.ts).
+        var calendarCandidates = candidates
+            .Where(candidate => candidate.Source == SuggestionSource.Calendar)
+            .ToList();
+        var candidateIds = calendarCandidates.Select(candidate => candidate.ExternalId).ToHashSet();
+        var existingCalendar = await db.Suggestions
+            .Where(suggestion => suggestion.Source == SuggestionSource.Calendar
+                && (candidateIds.Contains(suggestion.ExternalId)
+                    || (suggestion.EntryDate >= windowStartDate && suggestion.EntryDate <= windowEndDate)))
+            .ToListAsync(cancellationToken);
+        var existingByExternalId = existingCalendar
+            .GroupBy(suggestion => suggestion.ExternalId)
+            .ToDictionary(group => group.Key, group => group.ToList());
+
+        // Sugestie "zagospodarowane" przez kandydatów — pozostałe Pending w oknie znikną.
+        var retained = new HashSet<Suggestion>();
+
+        foreach (var candidate in calendarCandidates)
+        {
+            if (!existingByExternalId.TryGetValue(candidate.ExternalId, out var existingForMeeting))
             {
                 newSuggestions.Add(candidate);
                 continue;
             }
 
-            // Licznik rośnie tylko przy faktycznej zmianie — raport nie może kłamać.
-            if (existing.Status == SuggestionStatus.Pending && RefreshFromSource(existing, candidate))
+            // Spotkanie już rozstrzygnięte (dowolna data) → nie tworzymy duplikatu pod
+            // nową datą: odrzucenie jest "lepkie" per spotkanie, a zatwierdzonego
+            // spotkania nie rozliczamy drugi raz po przesunięciu (świadoma decyzja —
+            // wpis czasu już istnieje). Liczy się jako SkippedExisting.
+            if (existingForMeeting.Any(suggestion => suggestion.Status != SuggestionStatus.Pending))
+            {
+                continue;
+            }
+
+            // Oczekująca: aktualizacja w miejscu — po przesunięciu spotkania zmieniają
+            // się też EntryDate i StartedAt, zamiast powstawać nowa sugestia-duch.
+            var pending = existingForMeeting.FirstOrDefault(suggestion => suggestion.EntryDate == candidate.EntryDate)
+                ?? existingForMeeting[0];
+            if (RefreshFromSource(pending, candidate))
             {
                 updatedCount++;
             }
+
+            retained.Add(pending);
         }
 
-        return (newSuggestions, updatedCount);
+        // Usuwanie: Pending w oknie syncu, których spotkanie zniknęło ze snapshotu albo
+        // przestało być rozliczalne — oraz osierocone duplikaty tego samego spotkania.
+        // Okno odnosi się do EntryDate sugestii. Approved/Rejected nie ruszamy.
+        var stalePending = existingCalendar
+            .Where(suggestion => suggestion.Status == SuggestionStatus.Pending
+                && suggestion.EntryDate >= windowStartDate
+                && suggestion.EntryDate <= windowEndDate
+                && !retained.Contains(suggestion))
+            .ToList();
+        db.Suggestions.RemoveRange(stalePending);
+        removedCount += stalePending.Count;
+
+        return new MergeOutcome(newSuggestions, updatedCount, removedCount);
     }
 
     /// <summary>Nadpisuje wartości pochodzące ze źródła; zwraca true, gdy coś się realnie zmieniło.</summary>
@@ -138,6 +261,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     {
         var changed = existing.Title != fromSource.Title
             || existing.StartedAt != fromSource.StartedAt
+            || existing.EntryDate != fromSource.EntryDate
             || existing.DurationMinutes != fromSource.DurationMinutes
             || existing.CaseId != fromSource.CaseId
             || existing.IsAmbiguous != fromSource.IsAmbiguous
@@ -150,6 +274,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
 
         existing.Title = fromSource.Title;
         existing.StartedAt = fromSource.StartedAt;
+        existing.EntryDate = fromSource.EntryDate;
         existing.DurationMinutes = fromSource.DurationMinutes;
         existing.CaseId = fromSource.CaseId;
         existing.IsAmbiguous = fromSource.IsAmbiguous;

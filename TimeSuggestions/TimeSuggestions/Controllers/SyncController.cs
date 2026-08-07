@@ -11,7 +11,15 @@ public class SyncController(SyncService syncService) : ControllerBase
     [HttpPost]
     public async Task<ActionResult<SyncReport>> Sync(SyncRequest request, CancellationToken cancellationToken)
     {
-        var report = await syncService.SyncAsync(request, DateTime.UtcNow, cancellationToken);
-        return Ok(report);
+        try
+        {
+            var report = await syncService.SyncAsync(request, DateTime.UtcNow, cancellationToken);
+            return Ok(report);
+        }
+        catch (SyncConflictException exception)
+        {
+            // Konflikt unikalności przetrwał ponowienie — dwie synchronizacje naraz.
+            return Conflict(new { message = exception.Message });
+        }
     }
 }

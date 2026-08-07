@@ -6,11 +6,18 @@ namespace TimeSuggestions.Contracts;
 /// Surowe dane z Microsoft Graph przysyłane przez frontend.
 /// Backend celowo nie woła Graph sam — token użytkownika nigdy nie opuszcza przeglądarki.
 /// </summary>
-public class SyncRequest
+public class SyncRequest : IValidatableObject
 {
     public List<CalendarEventDto> CalendarEvents { get; set; } = [];
 
     public List<DriveFileDto> DriveFiles { get; set; } = [];
+
+    /// <summary>
+    /// Identyfikatory plików usuniętych z OneDrive (tombstone'y z delta query) —
+    /// backend usuwa ich OCZEKUJĄCE sugestie. Pole opcjonalne: starszy frontend
+    /// go nie wysyła, a pusta lista nie zmienia zachowania.
+    /// </summary>
+    public List<string> DeletedDriveFileIds { get; set; } = [];
 
     /// <summary>
     /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
@@ -19,6 +26,16 @@ public class SyncRequest
     [Range(1, Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
         ErrorMessage = "Domyślny czas dokumentu musi mieścić się w zakresie 1–480 minut.")]
     public int? DefaultDocumentDurationMinutes { get; set; }
+
+    /// <summary>Elementy listy tombstone'ów walidowane jak pozostałe identyfikatory z Graph.</summary>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (DeletedDriveFileIds.Any(id => string.IsNullOrEmpty(id) || id.Length > CalendarEventDto.MaxTextLength))
+        {
+            yield return new ValidationResult(
+                "Identyfikator usuniętego pliku jest pusty albo za długi.", [nameof(DeletedDriveFileIds)]);
+        }
+    }
 }
 
 /// <summary>Wydarzenie z kalendarza Outlook (podzbiór pól Graph potrzebny logice).</summary>
@@ -94,4 +111,5 @@ public record SyncReport(
     int Created,
     int Updated,
     int SkippedExisting,
+    int Removed,
     SyncMatchedCounts Matched);

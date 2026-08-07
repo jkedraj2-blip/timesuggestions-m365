@@ -5,8 +5,11 @@
  *   do obcej domeny),
  * - token pobierany per strona (MSAL cache'uje) — długi pierwszy przebieg
  *   delta nie padnie na wygasłym tokenie,
- * - ponowienia dla błędów przejściowych (429/502/503/504) z odczytem Retry-After,
- * - limit czasu żądania przez AbortController.
+ * - ponowienia dla błędów przejściowych (429/502/503/504) z odczytem Retry-After
+ *   (sekundy lub data HTTP, z górnym limitem oczekiwania),
+ * - limit czasu przez AbortController obejmujący CAŁE żądanie łącznie z odczytem
+ *   i parsowaniem body — zatrzymany strumień nie może wisieć bez limitu, dlatego
+ *   helper zwraca już sparsowany JSON zamiast surowego Response.
  * Komunikaty błędów po polsku, bez tokenów i pełnych adresów.
  */
 
@@ -16,6 +19,8 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const DEFAULT_RETRY_DELAY_MS = 1000;
+/** Górny limit czekania na ponowienie — Graph potrafi przysłać datę daleko w przyszłości. */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 /** Rzuca, gdy adres nie jest HTTPS-owym adresem hosta graph.microsoft.com. */
 export function assertTrustedGraphUrl(url: string): void {
@@ -33,14 +38,23 @@ export function assertTrustedGraphUrl(url: string): void {
 }
 
 /**
- * Pobiera jedną stronę z Graph. Zwraca odpowiedź (także nie-OK, np. 410 Gone —
- * decyzję podejmuje wywołujący); ponawia wyłącznie błędy przejściowe.
+ * Strona odpowiedzi Graph ze sparsowanym body. Unia dyskryminowana po `ok`:
+ * dla odpowiedzi nie-OK body nie jest czytane (decyzję podejmuje wywołujący
+ * po samym statusie, np. 410 Gone dla delty).
  */
-export async function fetchGraphPage(
+export type GraphPageResult<T> =
+  | { ok: true; status: number; body: T }
+  | { ok: false; status: number; body: null };
+
+/**
+ * Pobiera i parsuje jedną stronę z Graph. Zwraca też odpowiedzi nie-OK
+ * (np. 410 Gone); ponawia wyłącznie błędy przejściowe.
+ */
+export async function fetchGraphPage<T>(
   url: string,
   getToken: () => Promise<string>,
   extraHeaders?: Record<string, string>,
-): Promise<Response> {
+): Promise<GraphPageResult<T>> {
   assertTrustedGraphUrl(url);
 
   for (let attempt = 1; ; attempt++) {
@@ -50,34 +64,64 @@ export async function fetchGraphPage(
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let response: Response;
     try {
-      response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}`, ...extraHeaders },
-        signal: controller.signal,
-      });
-    } catch {
-      if (controller.signal.aborted) {
-        throw new Error('Przekroczono limit czasu żądania do Microsoft Graph.');
+      try {
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}`, ...extraHeaders },
+          signal: controller.signal,
+        });
+      } catch {
+        if (controller.signal.aborted) {
+          throw new Error('Przekroczono limit czasu żądania do Microsoft Graph.');
+        }
+        throw new Error('Błąd połączenia z Microsoft Graph.');
       }
-      throw new Error('Błąd połączenia z Microsoft Graph.');
+
+      if (!RETRYABLE_STATUSES.has(response.status) || attempt >= MAX_ATTEMPTS) {
+        if (!response.ok) {
+          return { ok: false, status: response.status, body: null };
+        }
+
+        // Body czytane i parsowane wciąż POD limitem czasu (timeout czyszczony
+        // dopiero w finally) — serwer nie może zawiesić klienta zatrzymanym strumieniem.
+        try {
+          const body = (await response.json()) as T;
+          return { ok: true, status: response.status, body };
+        } catch {
+          if (controller.signal.aborted) {
+            throw new Error('Przekroczono limit czasu żądania do Microsoft Graph.');
+          }
+          throw new Error('Nieprawidłowa odpowiedź Microsoft Graph.');
+        }
+      }
     } finally {
       clearTimeout(timeout);
-    }
-
-    if (!RETRYABLE_STATUSES.has(response.status) || attempt >= MAX_ATTEMPTS) {
-      return response;
     }
 
     await delay(retryDelayMs(response, attempt));
   }
 }
 
-/** Retry-After w sekundach, gdy Graph go podaje; inaczej prosty rosnący backoff. */
+/**
+ * Retry-After wg RFC 9110: liczba sekund ALBO data HTTP. Wynik przycinany do
+ * MAX_RETRY_AFTER_MS (data w przeszłości → 0); wartość nieparsowalna → rosnący backoff.
+ */
 function retryDelayMs(response: Response, attempt: number): number {
-  const retryAfterSeconds = Number(response.headers.get('Retry-After'));
-  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-    return retryAfterSeconds * 1000;
+  const header = response.headers.get('Retry-After')?.trim();
+  const fallbackMs = DEFAULT_RETRY_DELAY_MS * attempt;
+  if (!header) {
+    return fallbackMs;
   }
-  return DEFAULT_RETRY_DELAY_MS * attempt;
+
+  if (/^\d+$/.test(header)) {
+    return Math.min(Number(header) * 1000, MAX_RETRY_AFTER_MS);
+  }
+
+  const dateMs = Date.parse(header);
+  if (!Number.isNaN(dateMs)) {
+    return Math.min(Math.max(dateMs - Date.now(), 0), MAX_RETRY_AFTER_MS);
+  }
+
+  return fallbackMs;
 }
 
 function delay(ms: number): Promise<void> {

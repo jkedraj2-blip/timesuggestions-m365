@@ -83,4 +83,80 @@ describe('fetchGraphPage', () => {
     expect(response.status).toBe(410);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('honoruje Retry-After w formacie daty HTTP', async () => {
+    vi.useFakeTimers({ now: new Date('2026-08-07T12:00:00Z') });
+    const retryAt = new Date('2026-08-07T12:00:05Z').toUTCString(); // za 5 s
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': retryAt } }))
+      .mockResolvedValueOnce(jsonResponse({ value: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = fetchGraphPage('https://graph.microsoft.com/v1.0/me', () => Promise.resolve('token'));
+    // Po 4 s ponowienia jeszcze nie ma — data HTTP nie może dawać NaN i retry po 1 s.
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    const response = await pending;
+
+    expect(response.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('dla nieparsowalnego Retry-After stosuje rosnący backoff', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': 'wkrotce-moze' } }))
+      .mockResolvedValueOnce(jsonResponse({ value: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = fetchGraphPage('https://graph.microsoft.com/v1.0/me', () => Promise.resolve('token'));
+    await vi.advanceTimersByTimeAsync(1000); // fallback pierwszej próby: 1 s
+    const response = await pending;
+
+    expect(response.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('przycina Retry-After z odległą datą do górnego limitu 60 s', async () => {
+    vi.useFakeTimers({ now: new Date('2026-08-07T12:00:00Z') });
+    const farFuture = new Date('2026-08-07T13:00:00Z').toUTCString(); // za godzinę
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': farFuture } }))
+      .mockResolvedValueOnce(jsonResponse({ value: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = fetchGraphPage('https://graph.microsoft.com/v1.0/me', () => Promise.resolve('token'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    const response = await pending;
+
+    expect(response.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('przerywa żądanie, gdy body nigdy się nie kończy — timeout obejmuje odczyt i parsowanie', async () => {
+    vi.useFakeTimers();
+    // Nagłówki przyszły, ale strumień body nigdy się nie domyka — json() wisi
+    // aż do abortu z naszego kontrolera.
+    const fetchMock = vi.fn((_url: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+          }),
+      } as unknown as Response),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = fetchGraphPage('https://graph.microsoft.com/v1.0/me', () => Promise.resolve('token'));
+    const expectation = expect(pending).rejects.toThrow('limit czasu');
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expectation;
+  });
 });

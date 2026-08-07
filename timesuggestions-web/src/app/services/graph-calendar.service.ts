@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { AuthService } from './auth.service';
 import { GraphCalendarResponse, GraphEvent } from '../models/graph.models';
 import { FETCH_MARGIN_DAYS, GRAPH_BASE_URL, OUTLOOK_TIMEZONE } from './graph-config';
-import { fetchGraphPage } from './graph-http';
+import { fetchGraphPage, GraphPageResult } from './graph-http';
 
 /** Wynik pobierania kalendarza wraz z deklaracją kompletności snapshotu. */
 export interface CalendarSnapshot {
@@ -45,9 +45,10 @@ export class GraphCalendarService {
     while (url) {
       page++;
       onPage?.(page);
-      const response = await fetchGraphPage(url, () => this.auth.getToken(), {
-        Prefer: `outlook.timezone="${OUTLOOK_TIMEZONE}"`,
-      });
+      const response: GraphPageResult<GraphCalendarResponse> =
+        await fetchGraphPage<GraphCalendarResponse>(url, () => this.auth.getToken(), {
+          Prefer: `outlook.timezone="${OUTLOOK_TIMEZONE}"`,
+        });
 
       if (!response.ok) {
         // Pierwsza strona: awaria jest najpewniej systemowa (uprawnienia, token) —
@@ -61,9 +62,8 @@ export class GraphCalendarService {
         return { events, snapshotComplete: false };
       }
 
-      const body: GraphCalendarResponse = await response.json();
-      events.push(...body.value);
-      url = body['@odata.nextLink'];
+      events.push(...response.body.value);
+      url = response.body['@odata.nextLink'];
     }
 
     return { events, snapshotComplete: true };

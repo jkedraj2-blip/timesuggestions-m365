@@ -3,7 +3,7 @@ import { AuthService } from './auth.service';
 import { GraphDeltaResponse, GraphDriveItem } from '../models/graph.models';
 import { DriveFilePayload } from '../models/api.models';
 import { FETCH_MARGIN_DAYS, GRAPH_BASE_URL } from './graph-config';
-import { assertTrustedGraphUrl, fetchGraphPage } from './graph-http';
+import { assertTrustedGraphUrl, fetchGraphPage, GraphPageResult } from './graph-http';
 
 const ALLOWED_EXTENSIONS = ['.docx', '.doc', '.xlsx', '.xls'];
 
@@ -128,7 +128,8 @@ export class GraphFilesService {
     while (url) {
       page++;
       onPage?.(page);
-      const response = await fetchGraphPage(url, () => this.auth.getToken());
+      const response: GraphPageResult<GraphDeltaResponse> =
+        await fetchGraphPage<GraphDeltaResponse>(url, () => this.auth.getToken());
 
       if (response.status === HTTP_GONE && startedFromStoredLink) {
         // Wygasły deltaLink — 410 może przyjść także na KOLEJNEJ stronie przebiegu
@@ -148,13 +149,12 @@ export class GraphFilesService {
         throw new Error(`Nie udało się pobrać plików z OneDrive (Graph ${response.status}).`);
       }
 
-      const body: GraphDeltaResponse = await response.json();
-      items.push(...body.value);
+      items.push(...response.body.value);
 
-      if (body['@odata.deltaLink']) {
-        this.pendingDeltaLink = body['@odata.deltaLink'];
+      if (response.body['@odata.deltaLink']) {
+        this.pendingDeltaLink = response.body['@odata.deltaLink'];
       }
-      url = body['@odata.nextLink'];
+      url = response.body['@odata.nextLink'];
     }
 
     return items;

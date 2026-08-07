@@ -44,8 +44,8 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
-
+// Celowo bez UseHttpsRedirection: aplikacja działa na profilu http (localhost),
+// który nie ma endpointu https — przekierowanie psułoby preflighty CORS.
 app.UseCors();
 
 app.MapControllers();

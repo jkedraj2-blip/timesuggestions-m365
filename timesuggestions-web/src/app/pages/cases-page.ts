@@ -27,8 +27,10 @@ const EMPTY_DRAFT: CaseFormDraft = { name: '', caseNumber: '', clientName: '', k
     <p class="info-box">
       Aplikacja dopasowuje sugestie automatycznie: szuka w tytule spotkania lub nazwie pliku
       <strong>nazwy klienta</strong>, <strong>numeru sprawy</strong> albo
-      <strong>słowa kluczowego</strong> z poniższej listy. Wielkość liter, polskie znaki
-      i separatory (podkreślenia, myślniki) nie mają znaczenia.
+      <strong>słowa kluczowego</strong> z poniższej listy. Dopasowywane są pełne słowa
+      („Alfa" nie pasuje do „Alfabet"); odmiany (np. „Kowalskiego") dodaj jako słowa
+      kluczowe. Wielkość liter, polskie znaki i separatory (podkreślenia, myślniki)
+      nie mają znaczenia.
     </p>
 
     @if (error()) {

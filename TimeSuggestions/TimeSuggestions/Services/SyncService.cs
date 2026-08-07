@@ -112,16 +112,21 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             }
         }
 
+        // Liczniki filtrów klienckich doliczane do raportu: backend celowo nie widzi
+        // np. tytułów prywatnych wydarzeń, więc bez tych liczb raport zaniżałby odrzucenia.
+        var clientCounts = request.ClientFilteredCounts;
+
         return new SyncReport(
             new SyncFetchedCounts(request.CalendarEvents.Count, request.DriveFiles.Count),
             new SyncFilteredOutCounts(
-                Private: eventFilterResult.PrivateCount,
+                Private: eventFilterResult.PrivateCount + clientCounts.Private,
                 TooShort: eventFilterResult.TooShortCount,
                 AllDay: eventFilterResult.AllDayCount,
-                Cancelled: eventFilterResult.CancelledCount,
+                Cancelled: eventFilterResult.CancelledCount + clientCounts.Cancelled,
                 InvalidDates: eventFilterResult.InvalidDatesCount,
-                NotOfficeDocument: documentResult.NotOfficeDocumentCount,
-                OutsideWindow: documentResult.OutsideWindowCount + eventFilterResult.OutsideWindowCount,
+                NotOfficeDocument: documentResult.NotOfficeDocumentCount + clientCounts.DocumentsNotOfficeDocument,
+                OutsideWindow: documentResult.OutsideWindowCount + eventFilterResult.OutsideWindowCount
+                    + clientCounts.DocumentsOutsideWindow,
                 NotModifiedByUser: documentResult.NotModifiedByUserCount),
             Aggregated: documentResult.AggregatedCount,
             Created: merge.NewSuggestions.Count,

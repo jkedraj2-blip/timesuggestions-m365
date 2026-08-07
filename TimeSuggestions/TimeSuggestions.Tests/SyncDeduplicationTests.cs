@@ -213,6 +213,31 @@ public sealed class SyncDeduplicationTests : IDisposable
     }
 
     [Fact]
+    public async Task SyncAsync_DoliczaLicznikiFiltrowKlienckichDoRaportu()
+    {
+        // Backend celowo nie widzi pozycji odfiltrowanych w przeglądarce (prywatność) —
+        // raport pokazuje prawdę tylko dzięki doliczeniu liczników klienckich.
+        var request = new SyncRequest
+        {
+            ClientFilteredCounts = new ClientFilteredCounts
+            {
+                Private = 2,
+                Cancelled = 1,
+                DocumentsOutsideWindow = 3,
+                DocumentsNotOfficeDocument = 4,
+            },
+        };
+
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(2, report.FilteredOut.Private);
+        Assert.Equal(1, report.FilteredOut.Cancelled);
+        Assert.Equal(3, report.FilteredOut.OutsideWindow);
+        Assert.Equal(4, report.FilteredOut.NotOfficeDocument);
+        Assert.Equal(10, report.FilteredOut.Total);
+    }
+
+    [Fact]
     public async Task SyncAsync_DuplikatKandydataWJednymZadaniuTworzyJednaSugestie()
     {
         // Ten sam obiekt Graph dwa razy w jednym payloadzie — bez deduplikacji

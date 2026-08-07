@@ -21,9 +21,12 @@ import { GraphEvent } from '../models/graph.models';
 
 /** Etapy synchronizacji raportowane do UI — user widzi, że coś się dzieje. */
 export type SyncStage =
-  | { kind: 'calendar' }
+  | { kind: 'calendar'; page: number }
   | { kind: 'files'; page: number }
   | { kind: 'processing' };
+
+/** Wydarzenia o tych poufnościach nie opuszczają przeglądarki (spójnie z filtrem backendu). */
+const EXCLUDED_SENSITIVITIES = ['personal', 'private', 'confidential'];
 
 /**
  * REST do backendu TimeSuggestions. Celowo bez nagłówka Authorization —
@@ -35,28 +38,59 @@ export class ApiService {
   private graphFiles = inject(GraphFilesService);
   private baseUrl = environment.apiBaseUrl;
 
-  /** Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania. */
+  /**
+   * Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania.
+   * Błąd pobierania którejkolwiek strony przerywa całą synchronizację — backend
+   * dostaje wyłącznie kompletne snapshoty (założenie rekonsyliacji kalendarza).
+   */
   async syncNow(
     onStage?: (stage: SyncStage) => void,
     defaultDocumentDurationMinutes?: number,
   ): Promise<SyncReport> {
-    onStage?.({ kind: 'calendar' });
-    const events = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK);
+    const rawEvents = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK, (page) =>
+      onStage?.({ kind: 'calendar', page }),
+    );
 
-    const files = await this.graphFiles.getRecentDocuments(SYNC_DAYS_BACK, (page) =>
+    // Filtr prywatności w przeglądarce: TYTUŁY wydarzeń prywatnych/poufnych/osobistych
+    // i anulowanych nie mogą w ogóle trafić do API. Backend powtarza swoje filtry
+    // (klientowi nie ufa) — a odrzucenia stąd raportujemy licznikami, żeby raport
+    // syncu pokazywał prawdę.
+    let privateCount = 0;
+    let cancelledCount = 0;
+    const events = rawEvents.filter((event) => {
+      if (event.isCancelled) {
+        cancelledCount++;
+        return false;
+      }
+      if (event.sensitivity && EXCLUDED_SENSITIVITIES.includes(event.sensitivity.toLowerCase())) {
+        privateCount++;
+        return false;
+      }
+      return true;
+    });
+
+    const driveResult = await this.graphFiles.getRecentDocuments(SYNC_DAYS_BACK, (page) =>
       onStage?.({ kind: 'files', page }),
     );
 
     onStage?.({ kind: 'processing' });
     const request: SyncRequest = {
       calendarEvents: events.map((event) => this.toCalendarPayload(event)),
-      driveFiles: files,
+      driveFiles: driveResult.files,
+      deletedDriveFileIds: driveResult.deletedDriveFileIds,
+      clientFilteredCounts: {
+        private: privateCount,
+        cancelled: cancelledCount,
+        documentsOutsideWindow: driveResult.documentsOutsideWindow,
+        documentsNotOfficeDocument: driveResult.documentsNotOfficeDocument,
+      },
       defaultDocumentDurationMinutes,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);
 
-    // Wskaźnik delta przesuwamy dopiero po udanym zapisie — nieudany sync nie gubi zmian.
+    // Wskaźnik delta przesuwamy dopiero po udanym zapisie (obejmującym też
+    // tombstone'y) — nieudany sync nie gubi zmian.
     this.graphFiles.commitDeltaLink();
 
     return report;
@@ -122,6 +156,7 @@ export class ApiService {
       endDateTime: event.end.dateTime,
       isAllDay: event.isAllDay,
       sensitivity: event.sensitivity ?? null,
+      isCancelled: event.isCancelled ?? false,
     };
   }
 

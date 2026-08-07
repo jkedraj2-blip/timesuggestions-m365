@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
+import { toUserMessage } from '../services/user-message';
 import { CaseInfo, CaseWritePayload } from '../models/api.models';
 
 /** Robocze pola formularza sprawy — słowa kluczowe jako tekst rozdzielany przecinkami. */
@@ -162,7 +163,7 @@ export class CasesPage implements OnInit {
     try {
       this.cases.set(await this.api.getCases(this.includeInactive()));
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Nie udało się pobrać listy spraw.');
+      this.error.set(toUserMessage(error, 'Nie udało się pobrać listy spraw.'));
     } finally {
       this.loading.set(false);
     }
@@ -216,7 +217,7 @@ export class CasesPage implements OnInit {
       this.cancelForm();
       await this.loadData();
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Nie udało się zapisać sprawy.');
+      this.error.set(toUserMessage(error, 'Nie udało się zapisać sprawy.'));
     } finally {
       this.busy.set(false);
     }
@@ -234,7 +235,7 @@ export class CasesPage implements OnInit {
       );
       await this.loadData();
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Nie udało się zmienić statusu sprawy.');
+      this.error.set(toUserMessage(error, 'Nie udało się zmienić statusu sprawy.'));
     } finally {
       this.busy.set(false);
     }

@@ -3,28 +3,39 @@ import { AuthService } from './auth.service';
 import { GraphDeltaResponse, GraphDriveItem } from '../models/graph.models';
 import { DriveFilePayload } from '../models/api.models';
 import { GRAPH_BASE_URL } from './graph-config';
+import { assertTrustedGraphUrl, fetchGraphPage } from './graph-http';
 
 const ALLOWED_EXTENSIONS = ['.docx', '.doc', '.xlsx', '.xls'];
 
 /** Graph zwraca 410 Gone, gdy zapamiętany deltaLink wygasł — trzeba zacząć pełny przebieg od nowa. */
 const HTTP_GONE = 410;
 
+/** Wynik przebiegu delta: pliki do payloadu, tombstone'y i liczniki filtrów klienckich. */
+export interface DriveDeltaResult {
+  files: DriveFilePayload[];
+  /** Identyfikatory usuniętych plików (facet `deleted`) — backend czyści ich oczekujące sugestie. */
+  deletedDriveFileIds: string[];
+  /** Odrzucenia po stronie klienta — raport syncu ma pokazywać prawdę, nie zera. */
+  documentsOutsideWindow: number;
+  documentsNotOfficeDocument: number;
+}
+
 /**
  * Pobieranie ostatnio edytowanych dokumentów Word/Excel z OneDrive.
  *
  * Decyzja: endpoint /me/drive/recent jest oznaczony przez Microsoft jako wycofywany,
  * dlatego używamy wspieranego zapytania delta (/me/drive/root/delta), które zwraca
- * elementy dysku wraz ze zmianami. Filtrowanie (okno czasu, rozszerzenia, autor
- * modyfikacji) wykonujemy po stronie klienta, bo delta nie wspiera $filter.
- * Alternatywy rozważone: wyszukiwanie z sortowaniem po dacie modyfikacji
- * (niestabilne wsparcie $orderby w search) oraz endpointy aktywności (niedostępne
- * dla kont osobistych).
+ * elementy dysku wraz ze zmianami (w tym tombstone'y usuniętych plików).
+ * Filtrowanie (okno czasu, rozszerzenia, autor modyfikacji) wykonujemy po stronie
+ * klienta, bo delta nie wspiera $filter. Alternatywy rozważone: wyszukiwanie
+ * z sortowaniem po dacie modyfikacji (niestabilne wsparcie $orderby w search)
+ * oraz endpointy aktywności (niedostępne dla kont osobistych).
  *
  * Wydajność: pierwszy przebieg delta przechodzi cały dysk (na dużym OneDrive
  * to dziesiątki sekund), dlatego zapamiętujemy deltaLink w localStorage —
  * kolejne synchronizacje pobierają wyłącznie zmiany i trwają ułamek sekundy.
- * Link zapisujemy dopiero po udanym zapisie w backendzie (commitDeltaLink),
- * żeby nieudany sync nie "zjadł" zmian.
+ * Link zapisujemy dopiero po udanym zapisie w backendzie (commitDeltaLink) —
+ * obejmującym także tombstone'y — żeby nieudany sync nie "zjadł" zmian.
  */
 @Injectable({ providedIn: 'root' })
 export class GraphFilesService {
@@ -36,13 +47,44 @@ export class GraphFilesService {
   async getRecentDocuments(
     days: number,
     onPage?: (page: number) => void,
-  ): Promise<DriveFilePayload[]> {
+  ): Promise<DriveDeltaResult> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const items = await this.fetchChangedDriveItems(onPage);
 
-    return items
-      .filter((item) => this.isRecentDocument(item, since))
-      .map((item) => this.toPayload(item));
+    // Semantyka delta: ten sam driveItem.id może wystąpić w feedzie wielokrotnie,
+    // a obowiązuje OSTATNIE wystąpienie (np. plik zmieniony, potem usunięty).
+    const latestById = new Map<string, GraphDriveItem>();
+    for (const item of items) {
+      latestById.set(item.id, item);
+    }
+
+    const files: DriveFilePayload[] = [];
+    const deletedDriveFileIds: string[] = [];
+    let documentsOutsideWindow = 0;
+    let documentsNotOfficeDocument = 0;
+
+    for (const item of latestById.values()) {
+      if (item.deleted) {
+        // Tombstone bywa pozbawiony nazwy i dat — nie czytamy z niego nic poza id.
+        deletedDriveFileIds.push(item.id);
+        continue;
+      }
+      if (!item.file) {
+        continue; // folder albo pakiet — nie dokument
+      }
+      const name = item.name ?? '';
+      if (!ALLOWED_EXTENSIONS.some((extension) => name.toLowerCase().endsWith(extension))) {
+        documentsNotOfficeDocument++;
+        continue;
+      }
+      if (!item.lastModifiedDateTime || new Date(item.lastModifiedDateTime) < since) {
+        documentsOutsideWindow++;
+        continue;
+      }
+      files.push(this.toPayload(item, name, item.lastModifiedDateTime));
+    }
+
+    return { files, deletedDriveFileIds, documentsOutsideWindow, documentsNotOfficeDocument };
   }
 
   /** Wywoływane przez ApiService po udanym POST /api/sync — dopiero wtedy przesuwamy "wskaźnik" delta. */
@@ -55,11 +97,23 @@ export class GraphFilesService {
 
   /** Delta stronicuje wyniki — podążamy za @odata.nextLink aż do końca, raportując postęp do UI. */
   private async fetchChangedDriveItems(onPage?: (page: number) => void): Promise<GraphDriveItem[]> {
-    const token = await this.auth.getToken();
-    const select = '$select=id,name,file,lastModifiedDateTime,lastModifiedBy';
+    const select = '$select=id,name,file,deleted,lastModifiedDateTime,lastModifiedBy';
     const fullCrawlUrl = `${GRAPH_BASE_URL}/me/drive/root/delta?${select}`;
 
+    // Zapisany deltaLink to dane z localStorage — mógł zostać podmieniony.
+    // Walidacja PRZED użyciem: podejrzany adres czyścimy i przerywamy z czytelnym
+    // błędem zamiast wysyłać token pod obcy host.
     const storedDeltaLink = localStorage.getItem(this.deltaLinkStorageKey());
+    if (storedDeltaLink !== null) {
+      try {
+        assertTrustedGraphUrl(storedDeltaLink);
+      } catch {
+        localStorage.removeItem(this.deltaLinkStorageKey());
+        throw new Error(
+          'Zapisany wskaźnik synchronizacji OneDrive był nieprawidłowy i został wyczyszczony — spróbuj ponownie.',
+        );
+      }
+    }
     let url: string | undefined = storedDeltaLink ?? fullCrawlUrl;
 
     const items: GraphDriveItem[] = [];
@@ -67,9 +121,7 @@ export class GraphFilesService {
     while (url) {
       page++;
       onPage?.(page);
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await fetchGraphPage(url, () => this.auth.getToken());
 
       if (response.status === HTTP_GONE && storedDeltaLink && items.length === 0) {
         // Wygasły deltaLink — czyścimy i robimy pełny przebieg od zera.
@@ -100,21 +152,11 @@ export class GraphFilesService {
     return `timesuggestions.deltaLink.${this.auth.account?.homeAccountId ?? 'unknown'}`;
   }
 
-  private isRecentDocument(item: GraphDriveItem, since: Date): boolean {
-    if (!item.file) {
-      return false; // folder albo pakiet — nie dokument
-    }
-    if (!ALLOWED_EXTENSIONS.some((extension) => item.name.toLowerCase().endsWith(extension))) {
-      return false;
-    }
-    return new Date(item.lastModifiedDateTime) >= since;
-  }
-
-  private toPayload(item: GraphDriveItem): DriveFilePayload {
+  private toPayload(item: GraphDriveItem, name: string, lastModifiedDateTime: string): DriveFilePayload {
     return {
       id: item.id,
-      name: item.name,
-      lastModifiedDateTime: item.lastModifiedDateTime,
+      name,
+      lastModifiedDateTime,
       lastModifiedByMe: this.isModifiedByCurrentUser(item),
     };
   }

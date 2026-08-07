@@ -37,6 +37,14 @@ export class ToastService {
 
   async runUndo(toast: Toast): Promise<void> {
     this.dismiss(toast.id);
-    await toast.undo?.();
+    try {
+      await toast.undo?.();
+    } catch (error) {
+      // Błąd cofnięcia nie może zniknąć bez śladu — pokazujemy go tam, gdzie była akcja.
+      this.show(
+        error instanceof Error ? error.message : 'Nie udało się cofnąć operacji.',
+        { kind: 'error' },
+      );
+    }
   }
 }

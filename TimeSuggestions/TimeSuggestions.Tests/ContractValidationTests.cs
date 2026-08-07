@@ -96,6 +96,16 @@ public class ContractValidationTests
         Assert.Equal("Klient", request.ClientName);
     }
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(100_001)]
+    public void ClientFilteredCounts_OdrzucaWartosciPozaZakresem(int count)
+    {
+        var counts = new ClientFilteredCounts { Private = count };
+
+        Assert.NotEmpty(Validate(counts));
+    }
+
     [Fact]
     public void CalendarEventDto_OdrzucaZbytDlugiTytul()
     {

@@ -10,6 +10,7 @@ export interface CalendarEventPayload {
   endDateTime: string;
   isAllDay: boolean;
   sensitivity: string | null;
+  isCancelled: boolean;
 }
 
 export interface DriveFilePayload {
@@ -19,9 +20,21 @@ export interface DriveFilePayload {
   lastModifiedByMe: boolean;
 }
 
+/** Liczniki pozycji odfiltrowanych w przeglądarce — backend dolicza je do raportu. */
+export interface ClientFilteredCounts {
+  private: number;
+  cancelled: number;
+  documentsOutsideWindow: number;
+  documentsNotOfficeDocument: number;
+}
+
 export interface SyncRequest {
   calendarEvents: CalendarEventPayload[];
   driveFiles: DriveFilePayload[];
+  /** Tombstone'y z delta OneDrive — backend usuwa oczekujące sugestie usuniętych plików. */
+  deletedDriveFileIds?: string[];
+  /** Liczniki filtrów klienckich (prywatność + wstępne filtrowanie dokumentów). */
+  clientFilteredCounts?: ClientFilteredCounts;
   /** Opcjonalna preferencja użytkownika — bez wartości obowiązuje konfiguracja backendu. */
   defaultDocumentDurationMinutes?: number;
 }
@@ -110,6 +123,8 @@ export interface SyncFilteredOutCounts {
   private: number;
   tooShort: number;
   allDay: number;
+  cancelled: number;
+  invalidDates: number;
   notOfficeDocument: number;
   outsideWindow: number;
   notModifiedByUser: number;
@@ -128,8 +143,10 @@ export interface SyncReport {
   filteredOut: SyncFilteredOutCounts;
   aggregated: number;
   created: number;
-  /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku). */
+  /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku lub dacie spotkania). */
   updated: number;
   skippedExisting: number;
+  /** Oczekujące usunięte przez rekonsyliację (spotkania zniknięte/nierozliczalne, tombstone'y plików). */
+  removed: number;
   matched: SyncMatchedCounts;
 }

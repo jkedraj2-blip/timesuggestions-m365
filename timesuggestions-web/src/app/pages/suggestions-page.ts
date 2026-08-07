@@ -1,11 +1,13 @@
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal, untracked } from '@angular/core';
 import { ApiService, SyncStage } from '../services/api.service';
+import { DataRefreshService } from '../services/data-refresh.service';
 import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
+import { toUserMessage } from '../services/user-message';
 import { CaseInfo, Suggestion, SuggestionSource, SuggestionStatus, SyncReport } from '../models/api.models';
 import { FormsModule } from '@angular/forms';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
-import { DurationPipe } from '../pipes/duration.pipe';
+import { formatDuration } from '../pipes/duration.pipe';
 
 /** Klucz localStorage z preferencją użytkownika dla czasu dokumentów. */
 const DOCUMENT_MINUTES_STORAGE_KEY = 'timesuggestions.defaultDocumentMinutes';
@@ -13,6 +15,15 @@ const DOCUMENT_MINUTES_MIN = 1;
 const DOCUMENT_MINUTES_MAX = 480;
 /** Wartość startowa pola — odpowiednik Suggestions:DefaultDocumentDurationMinutes w backendzie. */
 const DOCUMENT_MINUTES_DEFAULT = 30;
+
+/** Wartość spoza zakresu traktujemy jak brak preferencji — backend użyje swojej konfiguracji. */
+export function normalizedDocumentMinutes(raw: unknown): number | undefined {
+  const value = Number(raw);
+  const isValid = Number.isInteger(value)
+    && value >= DOCUMENT_MINUTES_MIN
+    && value <= DOCUMENT_MINUTES_MAX;
+  return isValid ? value : undefined;
+}
 
 type SourceFilter = 'all' | SuggestionSource;
 type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
@@ -69,12 +80,14 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
           <li>Pobrano {{ report.fetched.calendarEvents }} spotkań i {{ report.fetched.driveFiles }} plików.</li>
           @if (report.filteredOut.total > 0) {
             <li>
-              Odfiltrowano {{ report.filteredOut.total }}:
-              @if (report.filteredOut.private > 0) { <span>{{ report.filteredOut.private }} prywatne/poufne · </span> }
-              @if (report.filteredOut.tooShort > 0) { <span>{{ report.filteredOut.tooShort }} krótsze niż 5 min · </span> }
+              Odfiltrowano {{ report.filteredOut.total }} (łącznie z filtrami w przeglądarce):
+              @if (report.filteredOut.private > 0) { <span>{{ report.filteredOut.private }} prywatne/poufne/osobiste · </span> }
+              @if (report.filteredOut.cancelled > 0) { <span>{{ report.filteredOut.cancelled }} anulowane · </span> }
+              @if (report.filteredOut.tooShort > 0) { <span>{{ report.filteredOut.tooShort }} zbyt krótkie · </span> }
               @if (report.filteredOut.allDay > 0) { <span>{{ report.filteredOut.allDay }} całodniowe · </span> }
+              @if (report.filteredOut.invalidDates > 0) { <span>{{ report.filteredOut.invalidDates }} z nieprawidłowymi datami · </span> }
               @if (report.filteredOut.notOfficeDocument > 0) { <span>{{ report.filteredOut.notOfficeDocument }} pliki inne niż Word/Excel · </span> }
-              @if (report.filteredOut.outsideWindow > 0) { <span>{{ report.filteredOut.outsideWindow }} poza oknem 7 dni · </span> }
+              @if (report.filteredOut.outsideWindow > 0) { <span>{{ report.filteredOut.outsideWindow }} poza oknem synchronizacji · </span> }
               @if (report.filteredOut.notModifiedByUser > 0) { <span>{{ report.filteredOut.notModifiedByUser }} zmodyfikowane przez inną osobę</span> }
             </li>
           }
@@ -82,7 +95,10 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
             <li>Zwinięto {{ report.aggregated }} {{ report.aggregated === 1 ? 'dodatkową edycję' : 'dodatkowych edycji' }} tego samego pliku w jedną sugestię dziennie.</li>
           }
           @if (report.updated > 0) {
-            <li>Zaktualizowano {{ report.updated }} {{ report.updated === 1 ? 'istniejącą sugestię' : 'istniejących sugestii' }} (np. po zmianie nazwy pliku lub tytułu spotkania).</li>
+            <li>Zaktualizowano {{ report.updated }} {{ report.updated === 1 ? 'istniejącą sugestię' : 'istniejących sugestii' }} (np. po zmianie nazwy pliku, tytułu lub terminu spotkania).</li>
+          }
+          @if (report.removed > 0) {
+            <li>Usunięto {{ report.removed }} {{ report.removed === 1 ? 'nieaktualną sugestię' : 'nieaktualnych sugestii' }} (spotkania usunięte lub nierozliczalne, skasowane pliki).</li>
           }
           @if (report.created > 0) {
             <li>
@@ -144,7 +160,20 @@ export class SuggestionsPage implements OnInit {
   private api = inject(ApiService);
   private summaryStore = inject(SummaryStore);
   private toasts = inject(ToastService);
-  private durationPipe = new DurationPipe();
+  private dataRefresh = inject(DataRefreshService);
+
+  constructor() {
+    // Przeładowanie po operacjach spoza tego widoku (np. "Cofnij" z toastu,
+    // który mógł zostać kliknięty już po zmianie zakładki).
+    let lastSeen: number | null = null;
+    effect(() => {
+      const version = this.dataRefresh.changes();
+      if (lastSeen !== null && version !== lastSeen) {
+        untracked(() => void this.loadData());
+      }
+      lastSeen = version;
+    });
+  }
 
   protected suggestions = signal<Suggestion[]>([]);
   protected cases = signal<CaseInfo[]>([]);
@@ -161,7 +190,7 @@ export class SuggestionsPage implements OnInit {
     const stage = this.syncStage();
     switch (stage?.kind) {
       case 'calendar':
-        return 'Pobieram spotkania z kalendarza Outlook…';
+        return `Pobieram spotkania z kalendarza Outlook (strona ${stage.page})…`;
       case 'files':
         return `Przeglądam pliki na OneDrive (strona ${stage.page})…`;
       case 'processing':
@@ -206,13 +235,13 @@ export class SuggestionsPage implements OnInit {
     try {
       const report = await this.api.syncNow(
         (stage) => this.syncStage.set(stage),
-        this.normalizedDocumentMinutes(),
+        normalizedDocumentMinutes(this.documentMinutesDraft),
       );
       this.syncReport.set(report);
       await this.loadData();
       await this.summaryStore.refresh();
     } catch (error) {
-      this.error.set(this.toUserMessage(error, 'Synchronizacja nie powiodła się.'));
+      this.error.set(toUserMessage(error, 'Synchronizacja nie powiodła się.'));
     } finally {
       this.syncing.set(false);
       this.syncStage.set(null);
@@ -226,19 +255,24 @@ export class SuggestionsPage implements OnInit {
     this.showResolvedToast(event);
   }
 
-  /** Potwierdzenie akcji z możliwością cofnięcia — karta nie znika "w nicość". */
+  /**
+   * Potwierdzenie akcji z możliwością cofnięcia — karta nie znika "w nicość".
+   * Callback undo celowo NIE woła loadData() tego komponentu (mógł już zostać
+   * zniszczony po zmianie zakładki) — tylko API + powiadomienie o zmianie danych,
+   * na które bieżący widok reaguje przeładowaniem.
+   */
   private showResolvedToast(event: SuggestionResolved): void {
     switch (event.action) {
       case 'approved': {
         const entry = event.createdEntry;
         const details = entry
-          ? `${this.durationPipe.transform(entry.durationMinutes)} — ${entry.caseName}`
+          ? `${formatDuration(entry.durationMinutes)} — ${entry.caseName}`
           : event.suggestion.title;
         this.toasts.show(`Zapisano wpis: ${details}. Zobacz zakładkę „Wpisy czasu".`, {
           undo: entry
             ? async () => {
                 await this.api.deleteTimeEntry(entry.id);
-                await this.loadData();
+                this.dataRefresh.notify();
                 await this.summaryStore.refresh();
               }
             : undefined,
@@ -249,7 +283,7 @@ export class SuggestionsPage implements OnInit {
         this.toasts.show(`Odrzucono sugestię „${event.suggestion.title}".`, {
           undo: async () => {
             await this.api.restore(event.suggestion.id);
-            await this.loadData();
+            this.dataRefresh.notify();
             await this.summaryStore.refresh();
           },
         });
@@ -307,30 +341,17 @@ export class SuggestionsPage implements OnInit {
       this.suggestions.set(suggestions);
       this.cases.set(cases);
     } catch (error) {
-      this.error.set(this.toUserMessage(error, 'Nie udało się pobrać danych z backendu.'));
+      this.error.set(toUserMessage(error, 'Nie udało się pobrać danych z backendu.'));
     } finally {
       this.loading.set(false);
     }
   }
 
-  private toUserMessage(error: unknown, fallback: string): string {
-    return error instanceof Error ? `${fallback} ${error.message}` : fallback;
-  }
-
   protected saveDocumentMinutes(): void {
-    const value = this.normalizedDocumentMinutes();
+    const value = normalizedDocumentMinutes(this.documentMinutesDraft);
     if (value !== undefined) {
       localStorage.setItem(DOCUMENT_MINUTES_STORAGE_KEY, String(value));
     }
-  }
-
-  /** Wartość spoza zakresu traktujemy jak brak preferencji — backend użyje swojej konfiguracji. */
-  private normalizedDocumentMinutes(): number | undefined {
-    const value = Number(this.documentMinutesDraft);
-    const isValid = Number.isInteger(value)
-      && value >= DOCUMENT_MINUTES_MIN
-      && value <= DOCUMENT_MINUTES_MAX;
-    return isValid ? value : undefined;
   }
 
   private loadDocumentMinutes(): number {

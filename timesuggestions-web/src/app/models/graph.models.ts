@@ -12,14 +12,25 @@ export interface GraphEvent {
   end: GraphDateTime;
   isAllDay: boolean;
   sensitivity: string;
+  isCancelled: boolean;
 }
 
-/** Element dysku z zapytania delta — pliki i foldery; foldery odfiltrowujemy po polu `file`. */
+/** Stronicowana odpowiedź widoku kalendarza. */
+export interface GraphCalendarResponse {
+  value: GraphEvent[];
+  '@odata.nextLink'?: string;
+}
+
+/**
+ * Element dysku z zapytania delta — pliki, foldery i tombstone'y (facet `deleted`
+ * dla elementów usuniętych; taki wpis może nie mieć nazwy ani daty modyfikacji).
+ */
 export interface GraphDriveItem {
   id: string;
-  name: string;
+  name?: string;
   file?: { mimeType: string };
-  lastModifiedDateTime: string;
+  deleted?: { state?: string };
+  lastModifiedDateTime?: string;
   lastModifiedBy?: {
     user?: { displayName?: string; email?: string; id?: string };
   };

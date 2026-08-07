@@ -20,6 +20,14 @@ public class SyncRequest : IValidatableObject
     public List<string> DeletedDriveFileIds { get; set; } = [];
 
     /// <summary>
+    /// Liczniki pozycji odfiltrowanych po stronie przeglądarki, zanim payload
+    /// powstał (prywatność: tytuły prywatnych wydarzeń nie opuszczają przeglądarki;
+    /// dokumenty: frontend filtruje delta feed przed wysyłką). Opcjonalne —
+    /// starszy frontend go nie wysyła, a zerowe liczniki nic nie zmieniają.
+    /// </summary>
+    public ClientFilteredCounts ClientFilteredCounts { get; set; } = new();
+
+    /// <summary>
     /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
     /// Brak wartości = obowiązuje konfiguracja backendu (appsettings.json).
     /// </summary>
@@ -78,6 +86,30 @@ public class DriveFileDto
 
     /// <summary>Czy modyfikacji dokonał zalogowany użytkownik — frontend ustala to porównując konto MSAL z lastModifiedBy.</summary>
     public bool LastModifiedByMe { get; set; }
+}
+
+/// <summary>
+/// Liczniki filtrów klienckich — backend nie widzi odfiltrowanych pozycji
+/// (celowo, prywatność), więc dolicza deklarowane liczby do raportu, aby ten
+/// pokazywał prawdę. Wartości walidowane jako nieujemne i rozsądnie ograniczone.
+/// </summary>
+public class ClientFilteredCounts
+{
+    public const int MaxCount = 100_000;
+
+    private const string RangeMessage = "Licznik filtrowania klienckiego musi być z zakresu 0–100000.";
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int Private { get; set; }
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int Cancelled { get; set; }
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int DocumentsOutsideWindow { get; set; }
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int DocumentsNotOfficeDocument { get; set; }
 }
 
 public record SyncFetchedCounts(int CalendarEvents, int DriveFiles);

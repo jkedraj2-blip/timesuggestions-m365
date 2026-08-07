@@ -44,9 +44,25 @@ public class SyncRequest : IValidatableObject
         ErrorMessage = "Domyślny czas dokumentu musi mieścić się w zakresie 1–480 minut.")]
     public int? DefaultDocumentDurationMinutes { get; set; }
 
-    /// <summary>Elementy listy tombstone'ów walidowane jak pozostałe identyfikatory z Graph.</summary>
+    /// <summary>
+    /// Elementy listy tombstone'ów walidowane jak pozostałe identyfikatory z Graph.
+    /// MVC nie odrzuca null WEWNĄTRZ kolekcji (waliduje tylko niepuste elementy),
+    /// więc puste pozycje łapiemy tu jawnie — czytelny 400 zamiast 500 w logice.
+    /// </summary>
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
+        if (CalendarEvents.Any(calendarEvent => calendarEvent is null))
+        {
+            yield return new ValidationResult(
+                "Lista wydarzeń kalendarza zawiera pusty element.", [nameof(CalendarEvents)]);
+        }
+
+        if (DriveFiles.Any(file => file is null))
+        {
+            yield return new ValidationResult(
+                "Lista plików zawiera pusty element.", [nameof(DriveFiles)]);
+        }
+
         if (DeletedDriveFileIds.Any(id => string.IsNullOrEmpty(id) || id.Length > CalendarEventDto.MaxTextLength))
         {
             yield return new ValidationResult(

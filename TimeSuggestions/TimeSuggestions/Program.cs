@@ -51,3 +51,6 @@ app.UseCors();
 app.MapControllers();
 
 app.Run();
+
+/// <summary>Marker dla WebApplicationFactory — testy integracyjne uruchamiają pełny pipeline HTTP.</summary>
+public partial class Program;

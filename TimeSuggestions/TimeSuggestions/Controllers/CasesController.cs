@@ -43,7 +43,7 @@ public class CasesController(AppDbContext db) : ControllerBase
             Name = request.Name,
             CaseNumber = request.CaseNumber,
             ClientName = request.ClientName,
-            Keywords = request.JoinedKeywords,
+            Keywords = request.JoinKeywords(),
             IsActive = true,
         };
 
@@ -78,7 +78,7 @@ public class CasesController(AppDbContext db) : ControllerBase
         legalCase.Name = request.Name;
         legalCase.CaseNumber = request.CaseNumber;
         legalCase.ClientName = request.ClientName;
-        legalCase.Keywords = request.JoinedKeywords;
+        legalCase.Keywords = request.JoinKeywords();
 
         try
         {

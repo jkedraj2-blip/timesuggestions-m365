@@ -98,13 +98,21 @@ public class CaseWriteRequest : IValidatableObject
 
     /// <summary>
     /// Średnik to separator formatu bazy — słowo kluczowe z ';' odrzucamy jawnym błędem
-    /// zamiast po cichu modyfikować dane użytkownika.
+    /// zamiast po cichu modyfikować dane użytkownika. MVC nie odrzuca null wewnątrz
+    /// kolekcji, więc puste elementy łapiemy tu jawnie (400 zamiast 500).
     /// </summary>
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
         foreach (var keyword in Keywords)
         {
-            var trimmed = keyword?.Trim() ?? string.Empty;
+            if (keyword is null)
+            {
+                yield return new ValidationResult(
+                    "Lista słów kluczowych zawiera pusty element.", [nameof(Keywords)]);
+                continue;
+            }
+
+            var trimmed = keyword.Trim();
             if (trimmed.Contains(';'))
             {
                 yield return new ValidationResult(
@@ -119,8 +127,14 @@ public class CaseWriteRequest : IValidatableObject
         }
     }
 
-    /// <summary>Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej tabeli — YAGNI).</summary>
-    public string JoinedKeywords => string.Join(';', Keywords
+    /// <summary>
+    /// Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej
+    /// tabeli — YAGNI). Metoda, nie właściwość: walidacja modelu MVC czyta wszystkie
+    /// publiczne właściwości, a getter rzucał NRE dla null w Keywords zanim
+    /// Validate() zdążył zwrócić czytelny błąd 400.
+    /// </summary>
+    public string JoinKeywords() => string.Join(';', Keywords
+        .Where(keyword => keyword is not null)
         .Select(keyword => keyword.Trim())
         .Where(keyword => keyword.Length > 0));
 }

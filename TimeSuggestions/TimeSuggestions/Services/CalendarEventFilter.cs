@@ -45,6 +45,13 @@ public static class CalendarEventFilter
 
         foreach (var calendarEvent in events)
         {
+            // Defensywnie: null w kolekcji odrzuca już walidacja kontraktu (400),
+            // ale czysta logika nie może paść z NRE, gdy dostanie go inną drogą.
+            if (calendarEvent is null)
+            {
+                continue;
+            }
+
             if (calendarEvent.IsCancelled)
             {
                 cancelledCount++;

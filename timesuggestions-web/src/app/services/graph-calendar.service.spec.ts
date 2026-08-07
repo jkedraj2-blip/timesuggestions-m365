@@ -46,12 +46,36 @@ describe('GraphCalendarService', () => {
     vi.stubGlobal('fetch', fetchMock);
     const pages: number[] = [];
 
-    const events = await service.getEventsLastDays(7, (page) => pages.push(page));
+    const snapshot = await service.getEventsLastDays(7, (page) => pages.push(page));
 
-    expect(events.map((event) => event.id)).toEqual(['event-1', 'event-2']);
+    expect(snapshot.events.map((event) => event.id)).toEqual(['event-1', 'event-2']);
+    // Wszystkie strony pobrane bez błędu → snapshot zadeklarowany jako kompletny.
+    expect(snapshot.snapshotComplete).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][0]).toBe(nextLink);
     expect(pages).toEqual([1, 2]);
+  });
+
+  it('zwraca częściowy snapshot bez deklaracji kompletności, gdy kolejna strona padnie', async () => {
+    const nextLink = 'https://graph.microsoft.com/v1.0/me/calendarView?$skip=50';
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ value: [createEvent('event-1')], '@odata.nextLink': nextLink }))
+      .mockResolvedValueOnce(new Response('server error', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const snapshot = await service.getEventsLastDays(7);
+
+    // Backend nie może uznać spotkań z niepobranych stron za usunięte.
+    expect(snapshot.snapshotComplete).toBe(false);
+    expect(snapshot.events.map((event) => event.id)).toEqual(['event-1']);
+  });
+
+  it('rzuca błąd, gdy padnie pierwsza strona — awaria systemowa musi być widoczna', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('unauthorized', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(service.getEventsLastDays(7)).rejects.toThrow('Graph 401');
   });
 
   it('odrzuca nextLink prowadzący poza graph.microsoft.com bez wykonania żądania', async () => {

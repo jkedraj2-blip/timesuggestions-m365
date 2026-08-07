@@ -40,16 +40,18 @@ export class ApiService {
 
   /**
    * Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania.
-   * Błąd pobierania którejkolwiek strony przerywa całą synchronizację — backend
-   * dostaje wyłącznie kompletne snapshoty (założenie rekonsyliacji kalendarza).
+   * Kompletność snapshotu kalendarza jest deklarowana jawnie (calendarSnapshotComplete):
+   * częściowo pobrany kalendarz trafia do backendu bez tej deklaracji, więc
+   * destrukcyjna rekonsyliacja się nie uruchamia.
    */
   async syncNow(
     onStage?: (stage: SyncStage) => void,
     defaultDocumentDurationMinutes?: number,
   ): Promise<SyncReport> {
-    const rawEvents = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK, (page) =>
+    const calendarSnapshot = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK, (page) =>
       onStage?.({ kind: 'calendar', page }),
     );
+    const rawEvents = calendarSnapshot.events;
 
     // Filtr prywatności w przeglądarce: TYTUŁY wydarzeń prywatnych/poufnych/osobistych
     // i anulowanych nie mogą w ogóle trafić do API. Backend powtarza swoje filtry
@@ -76,6 +78,9 @@ export class ApiService {
     onStage?.({ kind: 'processing' });
     const request: SyncRequest = {
       calendarEvents: events.map((event) => this.toCalendarPayload(event)),
+      // Destrukcyjna rekonsyliacja kalendarza w backendzie tylko przy KOMPLETNYM
+      // snapshocie okna — częściowe pobranie nie może kasować prawidłowych sugestii.
+      calendarSnapshotComplete: calendarSnapshot.snapshotComplete,
       driveFiles: driveResult.files,
       deletedDriveFileIds: driveResult.deletedDriveFileIds,
       clientFilteredCounts: {

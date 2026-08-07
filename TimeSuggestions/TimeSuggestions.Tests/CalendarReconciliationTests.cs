@@ -57,8 +57,9 @@ public sealed class CalendarReconciliationTests : IDisposable
         IsCancelled = isCancelled,
     };
 
+    /// <summary>Domyślnie kompletny snapshot — dotychczasowe zachowanie rekonsyliacji.</summary>
     private static SyncRequest CalendarRequest(params CalendarEventDto[] events)
-        => new() { CalendarEvents = [.. events] };
+        => new() { CalendarEvents = [.. events], CalendarSnapshotComplete = true };
 
     private static SyncRequest DocumentRequest(params DriveFileDto[] files)
         => new() { DriveFiles = [.. files] };
@@ -156,6 +157,55 @@ public sealed class CalendarReconciliationTests : IDisposable
 
         Assert.Equal(2, report.Removed);
         Assert.Equal(0, await db.Suggestions.CountAsync());
+    }
+
+    [Fact]
+    public async Task SyncAsync_NiekompletnySnapshotNieUsuwaZadnejOczekujacejSugestii()
+    {
+        await syncService.SyncAsync(
+            CalendarRequest(CreateEvent("event-1", daysAgo: 1), CreateEvent("event-2", daysAgo: 2)),
+            Now, CancellationToken.None);
+
+        // Pusty payload BEZ deklaracji kompletności (np. przerwane stronicowanie) —
+        // nieobecność spotkań niczego nie dowodzi, nic nie znika.
+        var incomplete = new SyncRequest { CalendarSnapshotComplete = false };
+        var report = await syncService.SyncAsync(incomplete, Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Removed);
+        Assert.Equal(2, await db.Suggestions.CountAsync());
+    }
+
+    [Fact]
+    public async Task SyncAsync_NiekompletnySnapshotNadalAktualizujeWMiejscu()
+    {
+        await syncService.SyncAsync(CalendarRequest(CreateEvent(daysAgo: 1)), Now, CancellationToken.None);
+
+        // Aktualizacje w miejscu działają zawsze — tylko część destrukcyjna wymaga flagi.
+        var incomplete = new SyncRequest { CalendarEvents = [CreateEvent(daysAgo: 2)] };
+        var report = await syncService.SyncAsync(incomplete, Now, CancellationToken.None);
+
+        Assert.Equal(1, report.Updated);
+        Assert.Equal(0, report.Removed);
+        var suggestion = await db.Suggestions.SingleAsync();
+        Assert.Equal(DateOnly.FromDateTime(Now.AddDays(-2)), suggestion.EntryDate);
+    }
+
+    [Fact]
+    public async Task SyncRequest_BezPolaCalendarSnapshotCompleteTraktowanyJakNiekompletny()
+    {
+        // Starszy klient nie przysyła pola — deserializacja daje false i sync
+        // nie może destrukcyjnie rekonsyliować kalendarza.
+        var json = """{"calendarEvents":[],"driveFiles":[]}""";
+        var request = JsonSerializer.Deserialize<SyncRequest>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.NotNull(request);
+        Assert.False(request.CalendarSnapshotComplete);
+
+        await syncService.SyncAsync(CalendarRequest(CreateEvent()), Now, CancellationToken.None);
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Removed);
+        Assert.Equal(1, await db.Suggestions.CountAsync());
     }
 
     [Fact]

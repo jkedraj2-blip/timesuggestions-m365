@@ -111,6 +111,41 @@ describe('ApiService.syncNow', () => {
       documentsNotOfficeDocument: 0,
     });
     expect(request.deletedDriveFileIds).toEqual(['file-deleted']);
+    // Kalendarz pobrany w całości → jawna deklaracja kompletności snapshotu.
+    expect(request.calendarSnapshotComplete).toBe(true);
     expect(report.created).toBe(1);
+  });
+
+  it('nie deklaruje kompletności snapshotu, gdy pobieranie stron kalendarza przerwał błąd', async () => {
+    let capturedRequest: SyncRequest | null = null;
+    const nextLink = 'https://graph.microsoft.com/v1.0/me/calendarView?$skip=50';
+    let calendarCall = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/me/calendarView')) {
+        calendarCall++;
+        return calendarCall === 1
+          ? jsonResponse({ value: [createEvent('event-1')], '@odata.nextLink': nextLink })
+          : new Response('server error', { status: 500 });
+      }
+      if (url.includes('/me/drive/root/delta')) {
+        return jsonResponse({ value: [] });
+      }
+      if (url.includes('/api/sync')) {
+        capturedRequest = JSON.parse(String(init?.body)) as SyncRequest;
+        return jsonResponse(EMPTY_REPORT);
+      }
+      throw new Error(`Nieoczekiwany adres w teście: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await service.syncNow();
+
+    expect(capturedRequest).not.toBeNull();
+    const request = capturedRequest!;
+    // Częściowy snapshot: pobrane spotkania płyną dalej, ale bez deklaracji
+    // kompletności backend nie usunie sugestii nieobecnych spotkań.
+    expect(request.calendarEvents.map((event) => event.id)).toEqual(['event-1']);
+    expect(request.calendarSnapshotComplete).toBe(false);
   });
 });

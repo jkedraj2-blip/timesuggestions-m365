@@ -28,6 +28,15 @@ public class SyncRequest : IValidatableObject
     public ClientFilteredCounts ClientFilteredCounts { get; set; } = new();
 
     /// <summary>
+    /// Czy CalendarEvents to KOMPLETNY snapshot okna synchronizacji (wszystkie strony
+    /// @odata.nextLink pobrane bez błędu). Tylko wtedy backend wykonuje destrukcyjną
+    /// część rekonsyliacji kalendarza (usuwanie oczekujących sugestii spotkań
+    /// nieobecnych w payloadzie). Domyślnie false — klient, który pola nie przysłał
+    /// (starsza wersja, przerwane stronicowanie), nie może skasować prawidłowych sugestii.
+    /// </summary>
+    public bool CalendarSnapshotComplete { get; set; }
+
+    /// <summary>
     /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
     /// Brak wartości = obowiązuje konfiguracja backendu (appsettings.json).
     /// </summary>

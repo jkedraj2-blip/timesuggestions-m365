@@ -4,6 +4,17 @@ import { GraphCalendarResponse, GraphEvent } from '../models/graph.models';
 import { GRAPH_BASE_URL, OUTLOOK_TIMEZONE } from './graph-config';
 import { fetchGraphPage } from './graph-http';
 
+/** Wynik pobierania kalendarza wraz z deklaracją kompletności snapshotu. */
+export interface CalendarSnapshot {
+  events: GraphEvent[];
+  /**
+   * true WYŁĄCZNIE po przejściu wszystkich stron @odata.nextLink bez błędu —
+   * tylko wtedy backend może destrukcyjnie rekonsyliować kalendarz (usuwać
+   * oczekujące sugestie spotkań nieobecnych w payloadzie).
+   */
+  snapshotComplete: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class GraphCalendarService {
   private auth = inject(AuthService);
@@ -14,7 +25,7 @@ export class GraphCalendarService {
    * calendarView stronicuje wyniki ($top to rozmiar strony, nie limit całości) —
    * podążamy za @odata.nextLink aż do końca, inaczej część spotkań po cichu przepada.
    */
-  async getEventsLastDays(days: number, onPage?: (page: number) => void): Promise<GraphEvent[]> {
+  async getEventsLastDays(days: number, onPage?: (page: number) => void): Promise<CalendarSnapshot> {
     const end = new Date();
     const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -38,7 +49,15 @@ export class GraphCalendarService {
       });
 
       if (!response.ok) {
-        throw new Error(`Nie udało się pobrać kalendarza (Graph ${response.status}).`);
+        // Pierwsza strona: awaria jest najpewniej systemowa (uprawnienia, token) —
+        // użytkownik musi zobaczyć błąd zamiast pustej, "udanej" synchronizacji.
+        if (page === 1) {
+          throw new Error(`Nie udało się pobrać kalendarza (Graph ${response.status}).`);
+        }
+
+        // Kolejna strona padła: zwracamy częściowy snapshot BEZ deklaracji
+        // kompletności — backend nie uzna brakujących spotkań za usunięte.
+        return { events, snapshotComplete: false };
       }
 
       const body: GraphCalendarResponse = await response.json();
@@ -46,6 +65,6 @@ export class GraphCalendarService {
       url = body['@odata.nextLink'];
     }
 
-    return events;
+    return { events, snapshotComplete: true };
   }
 }

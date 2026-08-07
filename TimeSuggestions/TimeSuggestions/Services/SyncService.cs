@@ -83,6 +83,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 DateOnly.FromDateTime(windowStartLocal),
                 DateOnly.FromDateTime(nowLocal),
                 request.DeletedDriveFileIds,
+                request.CalendarSnapshotComplete,
                 cancellationToken);
 
             db.Suggestions.AddRange(merge.NewSuggestions);
@@ -140,14 +141,16 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     /// Scala kandydatów z istniejącymi sugestiami. Dokumenty: klucz
     /// (źródło, id, dzień) — delta jest przyrostowa, więc nieobecność pliku w feedzie
     /// niczego nie dowodzi i dokumentów NIE czyścimy na tej podstawie (usuwają je
-    /// wyłącznie jawne tombstone'y). Kalendarz: pełny snapshot okna → rekonsyliacja
-    /// per spotkanie (ExternalId). Rozstrzygniętych (zatwierdzone/odrzucone) nie ruszamy.
+    /// wyłącznie jawne tombstone'y). Kalendarz: rekonsyliacja per spotkanie (ExternalId);
+    /// część destrukcyjna wymaga zadeklarowanego kompletnego snapshotu okna.
+    /// Rozstrzygniętych (zatwierdzone/odrzucone) nie ruszamy.
     /// </summary>
     private async Task<MergeOutcome> MergeWithExistingAsync(
         List<Suggestion> candidates,
         DateOnly windowStartDate,
         DateOnly windowEndDate,
         IReadOnlyCollection<string> deletedDriveFileIds,
+        bool calendarSnapshotComplete,
         CancellationToken cancellationToken)
     {
         var newSuggestions = new List<Suggestion>();
@@ -199,8 +202,6 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // Kalendarz: zbiorem odniesienia są kandydaci pozostali PO WSZYSTKICH filtrach
         // (rozliczalni). Spotkanie, które nadal istnieje w Graph, ale stało się anulowane,
         // prywatne czy całodniowe, traktujemy jak usunięte — jego Pending znika.
-        // Założenie: frontend przerywa synchronizację przy błędzie pobierania strony,
-        // więc backend dostaje wyłącznie KOMPLETNE snapshoty okna (api.service.ts).
         var calendarCandidates = candidates
             .Where(candidate => candidate.Source == SuggestionSource.Calendar)
             .ToList();
@@ -249,14 +250,20 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // Usuwanie: Pending w oknie syncu, których spotkanie zniknęło ze snapshotu albo
         // przestało być rozliczalne — oraz osierocone duplikaty tego samego spotkania.
         // Okno odnosi się do EntryDate sugestii. Approved/Rejected nie ruszamy.
-        var stalePending = existingCalendar
-            .Where(suggestion => suggestion.Status == SuggestionStatus.Pending
-                && suggestion.EntryDate >= windowStartDate
-                && suggestion.EntryDate <= windowEndDate
-                && !retained.Contains(suggestion))
-            .ToList();
-        db.Suggestions.RemoveRange(stalePending);
-        removedCount += stalePending.Count;
+        // WYŁĄCZNIE przy zadeklarowanym kompletnym snapshocie: nieobecność spotkania
+        // w niepełnym payloadzie (przerwane stronicowanie, starszy klient) niczego
+        // nie dowodzi i nie może kasować prawidłowych sugestii.
+        if (calendarSnapshotComplete)
+        {
+            var stalePending = existingCalendar
+                .Where(suggestion => suggestion.Status == SuggestionStatus.Pending
+                    && suggestion.EntryDate >= windowStartDate
+                    && suggestion.EntryDate <= windowEndDate
+                    && !retained.Contains(suggestion))
+                .ToList();
+            db.Suggestions.RemoveRange(stalePending);
+            removedCount += stalePending.Count;
+        }
 
         return new MergeOutcome(newSuggestions, updatedCount, removedCount);
     }

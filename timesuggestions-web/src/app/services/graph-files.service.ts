@@ -116,18 +116,29 @@ export class GraphFilesService {
     }
     let url: string | undefined = storedDeltaLink ?? fullCrawlUrl;
 
-    const items: GraphDriveItem[] = [];
+    // Czy bieżący przebieg zaczął się od zapisanego wskaźnika — tylko taki przebieg
+    // wolno JEDNOKROTNIE zrestartować po 410; pełny crawl (bez cache) już nie,
+    // inaczej groziłaby pętla resetów.
+    let startedFromStoredLink = storedDeltaLink !== null;
+
+    let items: GraphDriveItem[] = [];
     let page = 0;
     while (url) {
       page++;
       onPage?.(page);
       const response = await fetchGraphPage(url, () => this.auth.getToken());
 
-      if (response.status === HTTP_GONE && storedDeltaLink && items.length === 0) {
-        // Wygasły deltaLink — czyścimy i robimy pełny przebieg od zera.
+      if (response.status === HTTP_GONE && startedFromStoredLink) {
+        // Wygasły deltaLink — 410 może przyjść także na KOLEJNEJ stronie przebiegu
+        // (nextLink należy do unieważnionej sesji delta). Częściowo zebrane elementy
+        // odrzucamy: pochodzą z nieaktualnego przebiegu, a pełny crawl i tak zwróci
+        // bieżący stan dysku. Czyścimy oba wskaźniki i zaczynamy od zera.
         localStorage.removeItem(this.deltaLinkStorageKey());
+        this.pendingDeltaLink = null;
+        items = [];
         url = fullCrawlUrl;
         page = 0;
+        startedFromStoredLink = false;
         continue;
       }
 

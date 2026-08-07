@@ -102,7 +102,7 @@ public class SuggestionBuilder(SuggestionOptions options)
         DateTime createdAt)
     {
         var title = string.IsNullOrWhiteSpace(calendarEvent.Subject) ? "(bez tytułu)" : calendarEvent.Subject;
-        var match = CaseMatcher.Match(calendarEvent.Subject, activeCases);
+        var match = CaseMatcher.Match(calendarEvent.Subject, activeCases, MatchTextSource.MeetingTitle);
 
         return new Suggestion
         {
@@ -125,7 +125,7 @@ public class SuggestionBuilder(SuggestionOptions options)
         IReadOnlyList<Case> activeCases,
         DateTime createdAt)
     {
-        var match = CaseMatcher.Match(file.Name, activeCases);
+        var match = CaseMatcher.Match(file.Name, activeCases, MatchTextSource.DocumentName);
 
         // StartedAt i EntryDate z tego samego czasu lokalnego — dokumenty i kalendarz
         // (przychodzący już w strefie lokalnej) mają wspólną podstawę czasu.

@@ -48,7 +48,13 @@ public class SuggestionsController(AppDbContext db, ApprovalService approvalServ
             return null;
         }
 
-        return CaseMatcher.Match(suggestion.Title, activeCases)
+        // Tryb normalizacji zgodny ze źródłem sugestii — tytuł sugestii dokumentowej
+        // to nazwa pliku, kalendarzowej — tytuł spotkania.
+        var textSource = suggestion.Source == SuggestionSource.Document
+            ? MatchTextSource.DocumentName
+            : MatchTextSource.MeetingTitle;
+
+        return CaseMatcher.Match(suggestion.Title, activeCases, textSource)
             .Candidates
             .Select(candidate => candidate.Name)
             .ToList();

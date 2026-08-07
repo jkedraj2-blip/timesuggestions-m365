@@ -7,6 +7,14 @@ namespace TimeSuggestions.Services;
 /// <summary>
 /// Normalizacja tekstu przed dopasowaniem do spraw. Czysta funkcja — bez stanu i zależności.
 /// Dzięki normalizacji "Umowa_KlientX_v2.docx" i "umowa klientx" porównują się tak samo.
+///
+/// Dwa jawne tryby:
+/// - <see cref="NormalizeDocumentName"/> — pełny pipeline dla NAZW PLIKÓW: rozszerzenie,
+///   diakrytyki, separatory, tokeny vN/(N) i końcowe słowa wersji ("final", "kopia").
+/// - <see cref="NormalizeText"/> — tryb leksykalny dla terminów spraw i tytułów spotkań:
+///   tylko wielkość liter, diakrytyki i separatory. Rozszerzenia plików i oznaczenia
+///   wersji to zjawiska nazw plików — w prozie "final" czy "v2" są zwykłymi słowami
+///   ("Final review", "Sprint v2"), a klient może nazywać się "Biuro Kopia".
 /// </summary>
 public static partial class TextNormalizer
 {
@@ -22,7 +30,13 @@ public static partial class TextNormalizer
     [GeneratedRegex(@"^\(\d+\)$")]
     private static partial Regex CopyNumberTokenPattern();
 
-    public static string Normalize(string? text)
+    /// <summary>Normalizacja nazwy pliku — pełny pipeline łącznie z oznaczeniami wersji.</summary>
+    public static string NormalizeDocumentName(string? text) => NormalizeCore(text, isDocumentName: true);
+
+    /// <summary>Normalizacja leksykalna (terminy spraw, tytuły spotkań) — bez logiki plikowej.</summary>
+    public static string NormalizeText(string? text) => NormalizeCore(text, isDocumentName: false);
+
+    private static string NormalizeCore(string? text, bool isDocumentName)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -30,13 +44,22 @@ public static partial class TextNormalizer
         }
 
         var lowered = text.Trim().ToLowerInvariant();
-        lowered = RemoveFileExtension(lowered);
+        if (isDocumentName)
+        {
+            lowered = RemoveFileExtension(lowered);
+        }
+
         lowered = RemoveDiacritics(lowered);
         lowered = ReplaceSeparatorsWithSpaces(lowered);
 
-        // Tokeny vN i (N) są jednoznacznymi oznaczeniami wersji — usuwane wszędzie.
-        var meaningfulTokens = lowered
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+        var tokens = lowered.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (!isDocumentName)
+        {
+            return string.Join(' ', tokens);
+        }
+
+        // Tokeny vN i (N) są w nazwach plików jednoznacznymi oznaczeniami wersji — usuwane wszędzie.
+        var meaningfulTokens = tokens
             .Where(token => !IsVersionToken(token))
             .ToList();
 

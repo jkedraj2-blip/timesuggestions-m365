@@ -10,6 +10,16 @@ public enum MatchKind
 }
 
 /// <summary>
+/// Skąd pochodzi dopasowywany tekst — wybiera tryb normalizacji (nazwy plików
+/// przechodzą pełny pipeline plikowy, tytuły spotkań tylko leksykalny).
+/// </summary>
+public enum MatchTextSource
+{
+    MeetingTitle,
+    DocumentName,
+}
+
+/// <summary>
 /// Jawny wynik dopasowania zamiast null/wyjątków — trzy stany muszą być
 /// rozróżnialne w interfejsie (przypisana sprawa / do sprawdzenia / niejednoznaczna).
 /// </summary>
@@ -32,9 +42,19 @@ public record MatchResult(MatchKind Kind, Case? MatchedCase, IReadOnlyList<Case>
 /// </summary>
 public static class CaseMatcher
 {
-    public static MatchResult Match(string? rawText, IEnumerable<Case> activeCases)
+    public static MatchResult Match(string? rawText, IEnumerable<Case> activeCases, MatchTextSource source)
     {
-        var normalizedText = TextNormalizer.Normalize(rawText);
+        // Obie strony porównania przechodzą przez TEN SAM tryb normalizacji — porównanie
+        // odbywa się w jednej przestrzeni kanonicznej. Dla nazw plików obie strony tracą
+        // oznaczenia wersji (keyword "raport final" pasuje do "raport-final.docx"); dla
+        // tytułów spotkań "final"/"kopia" pozostają zwykłymi słowami, więc keyword
+        // "raport final" NIE pasuje już do "Raport roboczy", a keyword "final" pasuje
+        // do "Final review".
+        var normalize = source == MatchTextSource.DocumentName
+            ? TextNormalizer.NormalizeDocumentName
+            : (Func<string?, string>)TextNormalizer.NormalizeText;
+
+        var normalizedText = normalize(rawText);
         if (normalizedText.Length == 0)
         {
             return MatchResult.None;
@@ -42,7 +62,7 @@ public static class CaseMatcher
 
         var textTokens = normalizedText.Split(' ');
         var matchedCases = activeCases
-            .Where(candidate => MatchesAnyTerm(textTokens, candidate))
+            .Where(candidate => MatchesAnyTerm(textTokens, candidate, normalize))
             .ToList();
 
         return matchedCases.Count switch
@@ -53,9 +73,9 @@ public static class CaseMatcher
         };
     }
 
-    private static bool MatchesAnyTerm(string[] textTokens, Case candidate)
+    private static bool MatchesAnyTerm(string[] textTokens, Case candidate, Func<string?, string> normalize)
         => GetSearchTerms(candidate)
-            .Select(TextNormalizer.Normalize)
+            .Select(normalize)
             .Where(term => term.Length > 0)
             .Any(term => ContainsTokenSequence(textTokens, term.Split(' ')));
 

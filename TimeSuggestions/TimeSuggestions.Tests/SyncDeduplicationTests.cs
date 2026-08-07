@@ -213,6 +213,40 @@ public sealed class SyncDeduplicationTests : IDisposable
     }
 
     [Fact]
+    public async Task SyncAsync_DuplikatKandydataWJednymZadaniuTworzyJednaSugestie()
+    {
+        // Ten sam obiekt Graph dwa razy w jednym payloadzie — bez deduplikacji
+        // w obrębie żądania zapis skończyłby się naruszeniem indeksu i błędem 500.
+        var request = new SyncRequest
+        {
+            CalendarEvents =
+            [
+                new CalendarEventDto
+                {
+                    Id = "event-1",
+                    Subject = "Spotkanie robocze",
+                    StartDateTime = Now.AddDays(-1),
+                    EndDateTime = Now.AddDays(-1).AddHours(1),
+                },
+                new CalendarEventDto
+                {
+                    Id = "event-1",
+                    Subject = "Spotkanie z Kowalski",
+                    StartDateTime = Now.AddDays(-1),
+                    EndDateTime = Now.AddDays(-1).AddHours(1),
+                },
+            ],
+        };
+
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(1, report.Created);
+        var suggestion = await db.Suggestions.SingleAsync();
+        // Wygrywa ostatnie wystąpienie klucza w payloadzie.
+        Assert.Equal("Spotkanie z Kowalski", suggestion.Title);
+    }
+
+    [Fact]
     public async Task SyncAsync_TenSamPlikWDwaRozneDniTworzyDwieSugestie()
     {
         var request = new SyncRequest

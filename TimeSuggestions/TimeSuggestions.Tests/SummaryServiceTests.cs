@@ -78,6 +78,30 @@ public sealed class SummaryServiceTests : IDisposable
         Assert.Equal(new DateTime(2026, 7, 25, 9, 0, 0), summary.LastSyncAt);
     }
 
+    [Fact]
+    public void GetBusinessToday_PrzeliczaUtcNaStrefeBiznesowa()
+    {
+        // 22:30 UTC 6 sierpnia = 00:30 CEST 7 sierpnia — "dzisiaj" liczone w strefie
+        // biznesowej, nie w UTC ani w czasie lokalnym serwera. Test potwierdza też,
+        // że ID IANA "Europe/Warsaw" działa na Windows (konwersja przez ICU).
+        var nowUtc = new DateTime(2026, 8, 6, 22, 30, 0, DateTimeKind.Utc);
+
+        var today = SummaryService.GetBusinessToday(nowUtc, "Europe/Warsaw");
+
+        Assert.Equal(new DateOnly(2026, 8, 7), today);
+    }
+
+    [Fact]
+    public void GetBusinessToday_ZimaUzywaPrzesunieciaCET()
+    {
+        // Grudzień = CET (UTC+1): 23:30 UTC to już następny dzień lokalny.
+        var nowUtc = new DateTime(2026, 12, 6, 23, 30, 0, DateTimeKind.Utc);
+
+        var today = SummaryService.GetBusinessToday(nowUtc, "Europe/Warsaw");
+
+        Assert.Equal(new DateOnly(2026, 12, 7), today);
+    }
+
     private static TimeEntry CreateEntry(DateOnly entryDate, int minutes)
     {
         // Wpis wymaga sugestii źródłowej (FK) — tworzymy minimalną parę.

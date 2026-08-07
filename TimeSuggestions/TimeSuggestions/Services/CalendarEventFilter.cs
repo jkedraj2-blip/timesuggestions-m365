@@ -10,28 +10,47 @@ public record CalendarFilterResult(
     List<CalendarEventDto> Accepted,
     int PrivateCount,
     int TooShortCount,
-    int AllDayCount);
+    int AllDayCount,
+    int CancelledCount,
+    int OutsideWindowCount,
+    int InvalidDatesCount);
 
 /// <summary>
 /// Reguły odsiewania wydarzeń, które nie powinny stać się sugestiami.
-/// Czysta funkcja — próg minimalnego czasu przychodzi parametrem (z konfiguracji).
+/// Czysta funkcja — próg minimalnego czasu i okno czasu przychodzą parametrami.
+/// Okno jest liczone w strefie biznesowej i porównywane bezpośrednio z lokalnymi
+/// czasami wydarzeń (Prefer: outlook.timezone) — bez tolerancji, która maskowałaby błędne dane.
 /// </summary>
 public static class CalendarEventFilter
 {
     // Graph zwraca sensitivity jako: normal / personal / private / confidential.
-    private static readonly string[] ExcludedSensitivities = ["private", "confidential"];
+    // "personal" też wykluczamy — to nie jest czas rozliczalny.
+    private static readonly string[] ExcludedSensitivities = ["personal", "private", "confidential"];
 
     public static CalendarFilterResult FilterBillable(
         IEnumerable<CalendarEventDto> events,
-        int minimumDurationMinutes)
+        int minimumDurationMinutes,
+        DateTime windowStart,
+        DateTime windowEnd)
     {
         var accepted = new List<CalendarEventDto>();
         var privateCount = 0;
         var tooShortCount = 0;
         var allDayCount = 0;
+        // Anulowane liczone osobno (nie do prywatnych) — to inna przyczyna odrzucenia
+        // i raport ma mówić prawdę o każdej z nich.
+        var cancelledCount = 0;
+        var outsideWindowCount = 0;
+        var invalidDatesCount = 0;
 
         foreach (var calendarEvent in events)
         {
+            if (calendarEvent.IsCancelled)
+            {
+                cancelledCount++;
+                continue;
+            }
+
             if (calendarEvent.IsAllDay)
             {
                 allDayCount++;
@@ -41,6 +60,18 @@ public static class CalendarEventFilter
             if (IsExcludedSensitivity(calendarEvent.Sensitivity))
             {
                 privateCount++;
+                continue;
+            }
+
+            if (calendarEvent.EndDateTime < calendarEvent.StartDateTime)
+            {
+                invalidDatesCount++;
+                continue;
+            }
+
+            if (calendarEvent.StartDateTime < windowStart || calendarEvent.StartDateTime > windowEnd)
+            {
+                outsideWindowCount++;
                 continue;
             }
 
@@ -54,7 +85,9 @@ public static class CalendarEventFilter
             accepted.Add(calendarEvent);
         }
 
-        return new CalendarFilterResult(accepted, privateCount, tooShortCount, allDayCount);
+        return new CalendarFilterResult(
+            accepted, privateCount, tooShortCount, allDayCount,
+            cancelledCount, outsideWindowCount, invalidDatesCount);
     }
 
     public static int GetDurationMinutes(CalendarEventDto calendarEvent)

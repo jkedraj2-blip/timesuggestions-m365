@@ -46,5 +46,22 @@
     "endDateTime": "2026-07-23T00:00:00",
     "isAllDay": true,
     "sensitivity": "normal"
+  },
+  {
+    "id": "event-personal",
+    "subject": "Trening",
+    "startDateTime": "2026-07-21T17:00:00",
+    "endDateTime": "2026-07-21T18:00:00",
+    "isAllDay": false,
+    "sensitivity": "personal"
+  },
+  {
+    "id": "event-cancelled",
+    "subject": "Odwołane spotkanie",
+    "startDateTime": "2026-07-22T10:00:00",
+    "endDateTime": "2026-07-22T11:00:00",
+    "isAllDay": false,
+    "sensitivity": "normal",
+    "isCancelled": true
   }
 ]

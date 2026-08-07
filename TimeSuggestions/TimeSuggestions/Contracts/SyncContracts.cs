@@ -24,9 +24,14 @@ public class SyncRequest
 /// <summary>Wydarzenie z kalendarza Outlook (podzbiór pól Graph potrzebny logice).</summary>
 public class CalendarEventDto
 {
+    /// <summary>Górna granica długości pól tekstowych z Graph — ochrona przed absurdalnie dużym payloadem.</summary>
+    public const int MaxTextLength = 2000;
+
     [Required]
+    [MaxLength(MaxTextLength, ErrorMessage = "Identyfikator wydarzenia jest za długi.")]
     public required string Id { get; set; }
 
+    [MaxLength(MaxTextLength, ErrorMessage = "Tytuł wydarzenia jest za długi.")]
     public string? Subject { get; set; }
 
     public DateTime StartDateTime { get; set; }
@@ -36,15 +41,20 @@ public class CalendarEventDto
     public bool IsAllDay { get; set; }
 
     public string? Sensitivity { get; set; }
+
+    /// <summary>Anulowane spotkania nie są czasem przepracowanym — backend je odrzuca.</summary>
+    public bool IsCancelled { get; set; }
 }
 
 /// <summary>Plik z OneDrive (podzbiór pól Graph potrzebny logice).</summary>
 public class DriveFileDto
 {
     [Required]
+    [MaxLength(CalendarEventDto.MaxTextLength, ErrorMessage = "Identyfikator pliku jest za długi.")]
     public required string Id { get; set; }
 
     [Required]
+    [MaxLength(CalendarEventDto.MaxTextLength, ErrorMessage = "Nazwa pliku jest za długa.")]
     public required string Name { get; set; }
 
     public DateTime LastModifiedDateTime { get; set; }
@@ -60,11 +70,14 @@ public record SyncFilteredOutCounts(
     int Private,
     int TooShort,
     int AllDay,
+    int Cancelled,
+    int InvalidDates,
     int NotOfficeDocument,
     int OutsideWindow,
     int NotModifiedByUser)
 {
-    public int Total => Private + TooShort + AllDay + NotOfficeDocument + OutsideWindow + NotModifiedByUser;
+    public int Total => Private + TooShort + AllDay + Cancelled + InvalidDates
+        + NotOfficeDocument + OutsideWindow + NotModifiedByUser;
 }
 
 /// <summary>Wyniki dopasowania nowo utworzonych sugestii do spraw.</summary>

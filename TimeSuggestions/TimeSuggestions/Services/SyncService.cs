@@ -32,19 +32,29 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         };
         var builder = new SuggestionBuilder(effectiveOptions);
 
-        var eventFilterResult = CalendarEventFilter.FilterBillable(
-            request.CalendarEvents, options.MinimumEventDurationMinutes);
+        // Backend nie ufa filtrom frontendu i powtarza własne (granica systemu):
+        // dokumenty walidowane w oryginalnym UTC z Graph, kalendarz — bezpośrednio
+        // w strefie biznesowej, bo czasy wydarzeń przychodzą już lokalne
+        // (Prefer: outlook.timezone).
+        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
+        var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, businessTimeZone);
 
-        // Backend powtarza walidację okna czasu po swojej stronie — frontendowi nie ufamy (granica systemu).
-        var windowEnd = nowUtc;
-        var windowStart = nowUtc.AddDays(-options.SyncDaysBack);
+        var eventFilterResult = CalendarEventFilter.FilterBillable(
+            request.CalendarEvents,
+            options.MinimumEventDurationMinutes,
+            windowStart: nowLocal.AddDays(-options.SyncDaysBack),
+            windowEnd: nowLocal);
 
         var documentResult = builder.BuildFromDocuments(
-            request.DriveFiles, activeCases, windowStart, windowEnd, nowUtc);
+            request.DriveFiles, activeCases, nowUtc.AddDays(-options.SyncDaysBack), nowUtc, nowUtc);
 
         var candidates = builder
             .BuildFromCalendar(eventFilterResult.Accepted, activeCases, nowUtc)
             .Concat(documentResult.Suggestions)
+            // Duplikaty w obrębie jednego żądania nie mogą kończyć się naruszeniem
+            // indeksu unikalnego — wygrywa ostatnie wystąpienie klucza.
+            .GroupBy(candidate => (candidate.Source, candidate.ExternalId, candidate.EntryDate))
+            .Select(group => group.Last())
             .ToList();
 
         var (newSuggestions, updatedCount) = await MergeWithExistingAsync(candidates, cancellationToken);
@@ -68,8 +78,10 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 Private: eventFilterResult.PrivateCount,
                 TooShort: eventFilterResult.TooShortCount,
                 AllDay: eventFilterResult.AllDayCount,
+                Cancelled: eventFilterResult.CancelledCount,
+                InvalidDates: eventFilterResult.InvalidDatesCount,
                 NotOfficeDocument: documentResult.NotOfficeDocumentCount,
-                OutsideWindow: documentResult.OutsideWindowCount,
+                OutsideWindow: documentResult.OutsideWindowCount + eventFilterResult.OutsideWindowCount,
                 NotModifiedByUser: documentResult.NotModifiedByUserCount),
             Aggregated: documentResult.AggregatedCount,
             Created: newSuggestions.Count,

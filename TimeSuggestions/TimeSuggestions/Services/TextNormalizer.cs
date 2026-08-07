@@ -12,7 +12,8 @@ public static partial class TextNormalizer
 {
     private static readonly string[] FileExtensions = [".docx", ".doc", ".xlsx", ".xls"];
 
-    // Słowa-sufiksy wersji spotykane w nazwach plików; usuwane w całości jako tokeny.
+    // Słowa-sufiksy wersji spotykane w nazwach plików; usuwane wyłącznie jako końcowe
+    // tokeny (oznaczenie wersji pliku) — w środku tekstu to zwykłe słowa.
     private static readonly string[] VersionWords = ["final", "kopia"];
 
     [GeneratedRegex(@"^v\d+$")]
@@ -33,9 +34,18 @@ public static partial class TextNormalizer
         lowered = RemoveDiacritics(lowered);
         lowered = ReplaceSeparatorsWithSpaces(lowered);
 
+        // Tokeny vN i (N) są jednoznacznymi oznaczeniami wersji — usuwane wszędzie.
         var meaningfulTokens = lowered
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(token => !IsVersionToken(token));
+            .Where(token => !IsVersionToken(token))
+            .ToList();
+
+        // Słowa wersji ("final", "kopia") tylko z końca — "Analiza final klienta"
+        // zachowuje "final" jako zwykłe słowo w środku tekstu.
+        while (meaningfulTokens.Count > 0 && VersionWords.Contains(meaningfulTokens[^1]))
+        {
+            meaningfulTokens.RemoveAt(meaningfulTokens.Count - 1);
+        }
 
         return string.Join(' ', meaningfulTokens);
     }
@@ -75,7 +85,6 @@ public static partial class TextNormalizer
         => text.Replace('_', ' ').Replace('.', ' ').Replace('-', ' ').Replace('/', ' ');
 
     private static bool IsVersionToken(string token)
-        => VersionWords.Contains(token)
-           || VersionTokenPattern().IsMatch(token)
+        => VersionTokenPattern().IsMatch(token)
            || CopyNumberTokenPattern().IsMatch(token);
 }

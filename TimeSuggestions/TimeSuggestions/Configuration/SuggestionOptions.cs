@@ -20,4 +20,11 @@ public class SuggestionOptions
 
     /// <summary>Okno synchronizacji wstecz w dniach.</summary>
     public int SyncDaysBack { get; set; } = 7;
+
+    /// <summary>
+    /// Strefa czasowa biznesowa (ID IANA; .NET konwertuje przez ICU także na Windows).
+    /// Kalendarz przychodzi w czasie lokalnym (Prefer: outlook.timezone), dokumenty w UTC —
+    /// wspólna strefa sprowadza EntryDate i StartedAt obu źródeł do tej samej podstawy.
+    /// </summary>
+    public string BusinessTimeZoneId { get; set; } = "Europe/Warsaw";
 }

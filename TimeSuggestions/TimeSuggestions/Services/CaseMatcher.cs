@@ -23,8 +23,12 @@ public record MatchResult(MatchKind Kind, Case? MatchedCase, IReadOnlyList<Case>
 }
 
 /// <summary>
-/// Dopasowanie tekstu (tytułu spotkania / nazwy pliku) do sprawy — proste porównanie
-/// zawierania na znormalizowanym tekście, bez uczenia maszynowego (świadoma decyzja zakresu).
+/// Dopasowanie tekstu (tytułu spotkania / nazwy pliku) do sprawy — porównanie
+/// pełnych tokenów znormalizowanego tekstu, bez uczenia maszynowego (świadoma decyzja zakresu).
+/// Termin jednowyrazowy pasuje tylko do identycznego tokenu, wielowyrazowy — do ciągu
+/// kolejnych pełnych tokenów; dzięki temu "Alfa" nie pasuje do "Alfabet".
+/// Świadomy kompromis: odmiany fleksyjne ("Kowalskiego") nie są już dopasowywane —
+/// można je dodać jako słowa kluczowe sprawy.
 /// </summary>
 public static class CaseMatcher
 {
@@ -36,8 +40,9 @@ public static class CaseMatcher
             return MatchResult.None;
         }
 
+        var textTokens = normalizedText.Split(' ');
         var matchedCases = activeCases
-            .Where(candidate => MatchesAnyTerm(normalizedText, candidate))
+            .Where(candidate => MatchesAnyTerm(textTokens, candidate))
             .ToList();
 
         return matchedCases.Count switch
@@ -48,10 +53,39 @@ public static class CaseMatcher
         };
     }
 
-    private static bool MatchesAnyTerm(string normalizedText, Case candidate)
+    private static bool MatchesAnyTerm(string[] textTokens, Case candidate)
         => GetSearchTerms(candidate)
             .Select(TextNormalizer.Normalize)
-            .Any(term => term.Length > 0 && normalizedText.Contains(term, StringComparison.Ordinal));
+            .Where(term => term.Length > 0)
+            .Any(term => ContainsTokenSequence(textTokens, term.Split(' ')));
+
+    /// <summary>
+    /// Sprawdza, czy tokeny terminu występują w tekście jako ciąg kolejnych pełnych tokenów.
+    /// Numery spraw działają bez zmian: normalizacja zamienia separatory na spacje,
+    /// więc "NT-2026-113" i tekst "Analiza NT-2026-113" dają te same tokeny.
+    /// </summary>
+    private static bool ContainsTokenSequence(string[] textTokens, string[] termTokens)
+    {
+        for (var start = 0; start <= textTokens.Length - termTokens.Length; start++)
+        {
+            var allMatch = true;
+            for (var offset = 0; offset < termTokens.Length; offset++)
+            {
+                if (!string.Equals(textTokens[start + offset], termTokens[offset], StringComparison.Ordinal))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static IEnumerable<string> GetSearchTerms(Case candidate)
     {

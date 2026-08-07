@@ -37,8 +37,19 @@ public class TextNormalizerTests
     [InlineData("Umowa KlientX (1)", "umowa klientx")]
     [InlineData("Umowa KlientX final", "umowa klientx")]
     [InlineData("Umowa KlientX kopia", "umowa klientx")]
+    [InlineData("Umowa KlientX final kopia", "umowa klientx")]
     public void Normalize_PomijaSufiksyWersji(string input, string expected)
     {
+        Assert.Equal(expected, TextNormalizer.Normalize(input));
+    }
+
+    [Theory]
+    [InlineData("Analiza final klienta", "analiza final klienta")]
+    [InlineData("Kopia umowy KlientX", "kopia umowy klientx")]
+    public void Normalize_ZachowujeSlowaWersjiWSrodkuTekstu(string input, string expected)
+    {
+        // "final"/"kopia" to oznaczenia wersji tylko na końcu nazwy pliku —
+        // w środku tekstu są zwykłymi słowami i zostają.
         Assert.Equal(expected, TextNormalizer.Normalize(input));
     }
 

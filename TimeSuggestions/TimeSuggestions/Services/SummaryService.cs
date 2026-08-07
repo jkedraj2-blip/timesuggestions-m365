@@ -11,6 +11,16 @@ namespace TimeSuggestions.Services;
 /// </summary>
 public class SummaryService(AppDbContext db)
 {
+    /// <summary>
+    /// "Dzisiaj" liczone w strefie biznesowej z aktualnego UTC — czas lokalny serwera
+    /// mógłby rozjechać kafelek "dzisiaj" o dobę względem dat wpisów.
+    /// </summary>
+    public static DateOnly GetBusinessToday(DateTime nowUtc, string businessTimeZoneId)
+    {
+        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(businessTimeZoneId);
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(nowUtc, businessTimeZone));
+    }
+
     public async Task<SummaryDto> GetSummaryAsync(DateOnly today, CancellationToken cancellationToken)
     {
         var pendingCount = await db.Suggestions

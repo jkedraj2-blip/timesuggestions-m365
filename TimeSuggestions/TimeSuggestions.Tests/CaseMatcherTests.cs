@@ -61,4 +61,34 @@ public class CaseMatcherTests
         Assert.Equal(MatchKind.Single, result.Kind);
         Assert.Equal(3, result.MatchedCase?.Id);
     }
+
+    [Fact]
+    public void Match_NieDopasowujePodciaguWewnatrzInnegoSlowa()
+    {
+        // "Alfa" (słowo kluczowe sprawy #4) nie może pasować do "Alfabet" —
+        // dopasowanie działa po pełnych tokenach, nie po podciągach.
+        var result = CaseMatcher.Match("Alfabet_cwiczenia.docx", TestHelpers.CreateTestCases());
+
+        Assert.Equal(MatchKind.None, result.Kind);
+    }
+
+    [Fact]
+    public void Match_DopasowujeTerminWielowyrazowyJakoCiagKolejnychTokenow()
+    {
+        // "Alfa Holding" (nazwa klienta sprawy #4) pasuje jako ciąg pełnych tokenów.
+        var result = CaseMatcher.Match("Prezentacja dla Alfa Holding", TestHelpers.CreateTestCases());
+
+        Assert.Equal(MatchKind.Single, result.Kind);
+        Assert.Equal(4, result.MatchedCase?.Id);
+    }
+
+    [Fact]
+    public void Match_NieDopasowujeOdmianyFleksyjnej_SwiadomyKompromis()
+    {
+        // Kompromis dopasowania po pełnych tokenach: "Kowalskiego" ≠ "Kowalski".
+        // Odmiany można dodać jako słowa kluczowe sprawy.
+        var result = CaseMatcher.Match("Spotkanie u Kowalskiego", TestHelpers.CreateTestCases());
+
+        Assert.Equal(MatchKind.None, result.Kind);
+    }
 }

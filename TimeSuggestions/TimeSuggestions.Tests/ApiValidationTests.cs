@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Mvc.Testing;
+using TimeSuggestions.Contracts;
 
 namespace TimeSuggestions.Tests;
 
@@ -77,5 +78,62 @@ public sealed class ApiValidationTests : IDisposable
         var response = await PostJsonAsync("/api/sync", """{"calendarEvents":[],"driveFiles":[]}""");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    // --- Limity długości pól tekstowych i brak odbijania niezaufanych wartości ---
+
+    private static string SyncJsonWithSensitivity(string sensitivity) =>
+        $$"""
+        {"calendarEvents":[{"id":"event-1","subject":"Spotkanie","startDateTime":"2026-08-06T10:00:00",
+        "endDateTime":"2026-08-06T11:00:00","sensitivity":"{{sensitivity}}"}],"driveFiles":[]}
+        """;
+
+    [Fact]
+    public async Task Sync_Sensitivity10000Znakow_Daje400()
+    {
+        var response = await PostJsonAsync("/api/sync", SyncJsonWithSensitivity(new string('x', 10_000)));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Sync_SensitivityNaGranicyLimitu_Przechodzi()
+    {
+        var response = await PostJsonAsync(
+            "/api/sync", SyncJsonWithSensitivity(new string('x', CalendarEventDto.MaxSensitivityLength)));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Cases_Keyword5000Znakow_Daje400BezOdbijaniaWejscia()
+    {
+        // Średnik w środku trafia w ścieżkę komunikatu z podglądem wartości —
+        // odpowiedź nie może odbić pełnego wejścia.
+        var keyword = new string('x', 4_999) + ";";
+        var response = await PostJsonAsync("/api/cases", CaseJson($"[\"{keyword}\"]"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(body.Length < 1000, $"Odpowiedź walidacji jest za długa ({body.Length} znaków).");
+        Assert.DoesNotContain(keyword, body);
+    }
+
+    [Fact]
+    public async Task Cases_KeywordNaGranicyLimitu_Przechodzi()
+    {
+        var keyword = new string('k', CaseWriteRequest.MaxKeywordLength);
+        var response = await PostJsonAsync("/api/cases", CaseJson($"[\"{keyword}\"]"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Sync_TombstoneIdZSamychSpacji_Daje400()
+    {
+        var response = await PostJsonAsync(
+            "/api/sync", """{"calendarEvents":[],"driveFiles":[],"deletedDriveFileIds":["   "]}""");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 }

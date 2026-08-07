@@ -115,8 +115,11 @@ public class CaseWriteRequest : IValidatableObject
             var trimmed = keyword.Trim();
             if (trimmed.Contains(';'))
             {
+                // Komunikat nie odbija pełnej wartości wejściowej (niezaufane dane
+                // dowolnej długości) — tylko krótki ucięty podgląd.
                 yield return new ValidationResult(
-                    $"Słowo kluczowe nie może zawierać średnika: \"{trimmed}\".", [nameof(Keywords)]);
+                    $"Słowo kluczowe nie może zawierać średnika: \"{TruncateForMessage(trimmed)}\".",
+                    [nameof(Keywords)]);
             }
 
             if (trimmed.Length > MaxKeywordLength)
@@ -126,6 +129,9 @@ public class CaseWriteRequest : IValidatableObject
             }
         }
     }
+
+    private static string TruncateForMessage(string value)
+        => value.Length <= 32 ? value : $"{value[..32]}…";
 
     /// <summary>
     /// Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej

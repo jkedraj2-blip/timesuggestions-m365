@@ -63,7 +63,8 @@ public class SyncRequest : IValidatableObject
                 "Lista plików zawiera pusty element.", [nameof(DriveFiles)]);
         }
 
-        if (DeletedDriveFileIds.Any(id => string.IsNullOrEmpty(id) || id.Length > CalendarEventDto.MaxTextLength))
+        // IsNullOrWhiteSpace: identyfikator z samych spacji jest tak samo bezużyteczny jak pusty.
+        if (DeletedDriveFileIds.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > CalendarEventDto.MaxTextLength))
         {
             yield return new ValidationResult(
                 "Identyfikator usuniętego pliku jest pusty albo za długi.", [nameof(DeletedDriveFileIds)]);
@@ -76,6 +77,12 @@ public class CalendarEventDto
 {
     /// <summary>Górna granica długości pól tekstowych z Graph — ochrona przed absurdalnie dużym payloadem.</summary>
     public const int MaxTextLength = 2000;
+
+    /// <summary>
+    /// Sensitivity to krótka wartość słownikowa Graph (normal/personal/private/
+    /// confidential) — limit z dużym zapasem, ale bez przyjmowania kilobajtów.
+    /// </summary>
+    public const int MaxSensitivityLength = 256;
 
     [Required]
     [MaxLength(MaxTextLength, ErrorMessage = "Identyfikator wydarzenia jest za długi.")]
@@ -90,6 +97,7 @@ public class CalendarEventDto
 
     public bool IsAllDay { get; set; }
 
+    [MaxLength(MaxSensitivityLength, ErrorMessage = "Pole sensitivity jest za długie.")]
     public string? Sensitivity { get; set; }
 
     /// <summary>Anulowane spotkania nie są czasem przepracowanym — backend je odrzuca.</summary>

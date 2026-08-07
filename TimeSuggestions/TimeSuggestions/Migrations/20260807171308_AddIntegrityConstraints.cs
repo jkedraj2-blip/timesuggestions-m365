@@ -5,6 +5,14 @@
 namespace TimeSuggestions.Migrations
 {
     /// <inheritdoc />
+    /// <remarks>
+    /// UWAGA dla PRZYSZŁYCH migracji przebudowujących tabele (rebuild-table):
+    /// na SQLite EF generuje je z PRAGMA foreign_keys=0, które nie działa
+    /// w transakcji — przerwanie procesu w trakcie może zostawić bazę w stanie
+    /// częściowym. Takie migracje wymagają ręcznego sekwencjonowania (osobne kroki,
+    /// świadome uruchomienie), a automatyczny start robi wcześniej kopię pliku bazy
+    /// (DatabaseMigrator.MigrateWithBackup). Tej już wykonanej migracji nie zmieniamy.
+    /// </remarks>
     public partial class AddIntegrityConstraints : Migration
     {
         /// <inheritdoc />

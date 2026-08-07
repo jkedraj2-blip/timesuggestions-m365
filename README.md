@@ -109,6 +109,12 @@ cd TimeSuggestions/TimeSuggestions
 dotnet run --launch-profile http
 ```
 
+Migracje bazy wykonują się automatycznie przy starcie. Jeśli są oczekujące migracje,
+backend najpierw tworzy obok bazy kopię `timesuggestions.db.bak-<migracja>`. Gdyby
+migracja została przerwana (SQLite nie wykonuje przebudowy tabel atomowo), zatrzymaj
+backend, zastąp `timesuggestions.db` plikiem kopii (usuń też pliki `-wal`/`-shm`,
+jeśli istnieją) i uruchom ponownie.
+
 **Frontend** (port 4200):
 
 ```bash

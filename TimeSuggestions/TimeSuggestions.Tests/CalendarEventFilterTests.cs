@@ -229,16 +229,31 @@ public class CalendarEventFilterTests
     }
 
     [Fact]
-    public void GetDurationMinutes_CzasNieistniejacy_OffsetPoZmianieBezWyjatku()
+    public void GetDurationMinutes_CzasNieistniejacy_JakbyZegarJuzPrzeskoczylBezWyjatku()
     {
         // 02:30 w noc wiosennej zmiany nie istnieje — konwencja BusinessTime:
-        // offset po zmianie (jakby zegar już przeskoczył), więc 02:30–03:30 to 60 minut.
+        // jakby zegar już przeskoczył, czyli 02:30 ≡ 03:30. Spotkanie 02:30–03:30
+        // to więc 0 realnych minut (odpadnie jako zbyt krótkie), nie wyjątek.
         var meeting = CreateEvent(
             "event-invalid-time",
             new DateTime(2026, 3, 29, 2, 30, 0),
             new DateTime(2026, 3, 29, 3, 30, 0));
 
-        Assert.Equal(60, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
+        Assert.Equal(0, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
+    }
+
+    [Fact]
+    public void GetDurationMinutes_KoniecWLuce_NieDajeUjemnegoTrwania()
+    {
+        // Regresja: start przed luką (01:45), koniec w luce (02:30). Mapowanie czasu
+        // z luki jest monotoniczne (02:30 → 01:30 UTC), więc trwanie to 45 minut —
+        // wcześniejsza konwencja (offset po zmianie) dawała tu −15 minut.
+        var meeting = CreateEvent(
+            "event-end-in-gap",
+            new DateTime(2026, 3, 29, 1, 45, 0),
+            new DateTime(2026, 3, 29, 2, 30, 0));
+
+        Assert.Equal(45, CalendarEventFilter.GetDurationMinutes(meeting, Warsaw));
     }
 
     [Fact]

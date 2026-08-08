@@ -27,7 +27,9 @@ public static class BusinessTime
     /// Konwencje nocy zmiany czasu — jawne, bo TimeZoneInfo domyślnie wybiera inaczej
     /// (czas standardowy) albo rzuca (czas nieistniejący):
     /// - czas NIEJEDNOZNACZNY (jesienne 02:30) = PIERWSZE wystąpienie, czyli większy offset;
-    /// - czas NIEISTNIEJĄCY (wiosenne 02:30) = offset PO zmianie, jakby zegar już przeskoczył.
+    /// - czas NIEISTNIEJĄCY (wiosenne 02:30) = jakby zegar już przeskoczył (02:30 ≡ 03:30),
+    ///   czyli offset SPRZED luki. Mapowanie jest monotoniczne względem poprawnych czasów
+    ///   wokół luki — koniec 02:30 po starcie 01:45 nie może dać ujemnego trwania.
     /// </summary>
     public static DateTime ToUtcInstant(DateTime value, TimeZoneInfo timeZone)
     {
@@ -49,10 +51,12 @@ public static class BusinessTime
 
         if (timeZone.IsInvalidTime(value))
         {
-            // Offset odczytany godzinę po czasie z luki — standardowa luka trwa godzinę,
-            // więc value+1h leży już po zmianie.
-            var offsetAfterGap = timeZone.GetUtcOffset(value.AddHours(1));
-            return DateTime.SpecifyKind(value - offsetAfterGap, DateTimeKind.Utc);
+            // Offset odczytany godzinę przed czasem z luki — standardowa luka trwa
+            // godzinę, więc value-1h leży jeszcze przed zmianą. Odjęcie offsetu SPRZED
+            // luki daje instant zgodny z konwencją "zegar już przeskoczył":
+            // wiosenne 02:30 → 01:30 UTC, dokładnie ten sam instant co lokalne 03:30.
+            var offsetBeforeGap = timeZone.GetUtcOffset(value.AddHours(-1));
+            return DateTime.SpecifyKind(value - offsetBeforeGap, DateTimeKind.Utc);
         }
 
         return TimeZoneInfo.ConvertTimeToUtc(value, timeZone);

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using TimeSuggestions.Contracts;
 
 namespace TimeSuggestions.Tests;
@@ -29,6 +30,9 @@ public sealed class ApiValidationTests : IDisposable
     {
         client.Dispose();
         factory.Dispose();
+        // Pula połączeń SQLite trzyma uchwyty do pliku — bez wyczyszczenia
+        // usuwanie na Windows potrafi się nie powieść i pliki zostają w temp.
+        SqliteConnection.ClearAllPools();
         foreach (var suffix in new[] { "", "-wal", "-shm" })
         {
             try
@@ -37,7 +41,7 @@ public sealed class ApiValidationTests : IDisposable
             }
             catch (IOException)
             {
-                // Plik bywa jeszcze trzymany przez pulę połączeń SQLite — zostanie w temp.
+                // Ostatnia linia obrony: plik nadal trzymany — zostanie w temp.
             }
         }
     }

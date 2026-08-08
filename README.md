@@ -66,13 +66,13 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 |---|---|
 | **Delta query zamiast `/me/drive/recent`** | Endpoint „recent" jest oznaczony przez Microsoft jako wycofywany. `GET /me/drive/root/delta` jest wspierany i zwraca elementy dysku ze zmianami — w tym tombstone'y usuniętych plików (facet `deleted`), którymi backend czyści oczekujące sugestie. Filtrowanie (okno 7 dni, rozszerzenia Word/Excel, autor modyfikacji) odbywa się po stronie klienta, bo delta nie wspiera `$filter` — a odrzucenia klienckie są raportowane licznikami, żeby raport syncu pokazywał prawdę. Rozważone alternatywy: wyszukiwanie z sortowaniem po dacie (niestabilne wsparcie `$orderby`), endpointy aktywności (niedostępne dla kont osobistych). Szczegóły: `graph-files.service.ts`. |
 | **Cache `deltaLink` w localStorage** | Pierwszy przebieg delta przechodzi cały dysk (na dużym OneDrive to dziesiątki sekund). Zapamiętany `deltaLink` sprawia, że kolejne synchronizacje pobierają wyłącznie zmiany. Link zapisywany dopiero po udanym zapisie w backendzie (obejmującym też tombstone'y); wygaśnięcie (HTTP 410) czyści cache i wymusza pełny przebieg. Zapisany adres jest walidowany przed użyciem — podmieniony wskaźnik nie wyśle tokenu pod obcy host. |
-| **Strefa czasowa: `Prefer` + strefa biznesowa** | Kalendarz przychodzi w czasie lokalnym (nagłówek `Prefer: outlook.timezone`), dokumenty w UTC. Backend sprowadza oba źródła do wspólnej strefy biznesowej (`Suggestions:BusinessTimeZoneId`, ID IANA, domyślnie `Europe/Warsaw`): okno dokumentów walidowane na oryginalnym UTC, a `StartedAt`/`EntryDate` i agregacja per dzień liczone lokalnie; okno kalendarza liczone bezpośrednio w strefie biznesowej; „dzisiaj" w podsumowaniu również. |
+| **Strefa czasowa: `Prefer` + strefa biznesowa** | Kalendarz przychodzi w czasie lokalnym (nagłówek `Prefer: outlook.timezone`), dokumenty w UTC. Backend sprowadza oba źródła do wspólnej strefy biznesowej (`Suggestions:BusinessTimeZoneId`, ID IANA, domyślnie `Europe/Warsaw`): okno dokumentów walidowane na oryginalnym UTC, a `StartedAt`/`EntryDate` i agregacja per dzień liczone lokalnie; okno kalendarza liczone bezpośrednio w strefie biznesowej; „dzisiaj" w podsumowaniu również. Czas trwania spotkań liczony z różnicy instantów UTC, nie lokalnych `DateTime` — w noc zmiany czasu różnica lokalna kłamie o godzinę. Konwencje nocy zmiany czasu są jawne (`BusinessTime`): czas niejednoznaczny = pierwsze wystąpienie, czas nieistniejący = jakby zegar już przeskoczył (mapowanie monotoniczne — bez ujemnych trwań). |
 | **Odporność na błędy Graph** | Wspólny helper obu serwisów Graph: ponowienia dla 429/502/503/504 z odczytem `Retry-After`, token pobierany per stronę, limit czasu żądania. Kalendarz i delta podążają za `@odata.nextLink` przez wszystkie strony. |
 | **Filtr prywatności w przeglądarce** | Tytuły wydarzeń `private`/`confidential`/`personal` oraz anulowanych w ogóle nie opuszczają przeglądarki. Backend i tak powtarza swoje filtry (klientowi nie ufa), a liczniki filtrów klienckich są doliczane do raportu. |
 | **Domyślny czas dokumentu jako parametr** | Graph mówi tylko *kiedy* plik zmieniono, nie *jak długo* trwała praca. Domyślne 30 min to parametr `Suggestions:DefaultDocumentDurationMinutes` w `appsettings.json`; użytkownik może poprawić wartość przed zatwierdzeniem. |
 | **Dedup po `(źródło, id z Graph, dzień)`** | Indeks unikalny w bazie + scalanie z istniejącymi przy synchronizacji (duplikaty w obrębie jednego żądania też są scalane). Powtórny sync nie tworzy duplikatów, a **odrzucona sugestia nie wraca** (status zmieniany, rekord nieusuwany). |
 | **Odświeżanie oczekujących przy syncu** | Zmiana nazwy pliku/tytułu spotkania nie zmienia ID w Graph, więc sam dedup zostawiałby stary tytuł. Sugestie **oczekujące** są nadpisywane wartościami ze źródła (z ponownym dopasowaniem); zatwierdzonych i odrzuconych sync nie dotyka. |
-| **Rekonsyliacja kalendarza** | Kalendarz to pełny snapshot okna, więc backend rekonsyliuje go per spotkanie: przeniesione spotkanie aktualizuje istniejącą oczekującą sugestię w miejscu (bez „ducha" pod starą datą), odrzucenie jest „lepkie" per spotkanie (zmiana terminu nie przywraca sugestii), a oczekujące sugestie spotkań usuniętych lub już nierozliczalnych (anulowane/prywatne/całodniowe) znikają — raport pokazuje je w liczniku „usunięte". Dokumentów to nie dotyczy: delta jest przyrostowa i nieobecność pliku w feedzie niczego nie dowodzi — czyszczą je wyłącznie jawne tombstone'y. |
+| **Rekonsyliacja kalendarza** | Backend rekonsyliuje kalendarz per spotkanie: przeniesione spotkanie aktualizuje istniejącą oczekującą sugestię w miejscu (bez „ducha" pod starą datą), odrzucenie jest „lepkie" per spotkanie (zmiana terminu nie przywraca sugestii), a oczekujące sugestie spotkań usuniętych lub już nierozliczalnych (anulowane/prywatne/całodniowe) znikają — raport pokazuje je w liczniku „usunięte". Część destrukcyjna działa wyłącznie, gdy frontend zadeklaruje kompletny snapshot (`calendarSnapshotComplete` — wszystkie strony pobrane bez błędu) wraz z zakresem dni (`calendarSnapshotDaysBack`), i tylko w przecięciu tego zakresu z oknem backendu — częściowe pobranie ani rozjazd konfiguracji okien nie skasują prawidłowych sugestii. Dokumentów to nie dotyczy: delta jest przyrostowa i nieobecność pliku w feedzie niczego nie dowodzi — czyszczą je wyłącznie jawne tombstone'y. |
 | **Współbieżność rozstrzygana w bazie** | Indeksy unikalne (`TimeEntries.SuggestionId`, `Cases.CaseNumber`) domykają wyścigi: równoległe zatwierdzenie/duplikat numeru sprawy kończy się jawnym 409, a synchronizacja po konflikcie ponawia scalanie na czystym stanie kontekstu. Na 409 mapowane jest wyłącznie naruszenie unikalności (SQLite 2067), nie ogólne błędy constraintów. |
 | **Dezaktywacja zamiast usuwania spraw** | Wpisy czasu wskazują na sprawy kluczem obcym — twarde usunięcie niszczyłoby dane rozliczeniowe. `IsActive=false` wyłącza sprawę z dopasowania i list wyboru, zachowując historię. |
 | **Edycja = zatwierdzenie z poprawionymi wartościami** | Jeden endpoint `approve` przyjmuje wartości finalne — mniej ścieżek, ta sama walidacja. |
@@ -194,3 +194,35 @@ timesuggestions-web/
   pochodzenia i referencją do sugestii (dokładnie jeden wpis na sugestię — gwarantowane
   indeksem). Każda decyzja jest odwracalna (Cofnij / Przywróć / Usuń), a „Cofnij" działa
   także po przejściu na inną zakładkę.
+
+## Co zrobiłbym inaczej, mając więcej czasu
+
+Projekt jest świadomie przygotowany jako lokalna aplikacja portfolio (patrz
+„Ograniczenia prototypu"). Przed udostępnieniem go jako publicznej usługi
+rozbudowałbym go w następującej kolejności:
+
+- **Uwierzytelnienie API i izolacja danych użytkowników** — frontend pobierałby osobny
+  token dla backendu, niezależny od tokenu Microsoft Graph. Backend weryfikowałby podpis,
+  `issuer`, `audience` i wymagany scope, a dane byłyby przypisywane i filtrowane według
+  `TenantId` oraz `UserObjectId`. Token Graph nadal nigdy nie trafiałby do backendu.
+- **Produkcyjna baza danych** — SQLite pozostałby do pracy lokalnej, natomiast wdrożenie
+  korzystałoby z PostgreSQL lub SQL Server, z kontrolowanymi migracjami, kopiami
+  zapasowymi, retencją i procedurą odtwarzania danych.
+- **Bezpieczne wdrożenie** — osobne konfiguracje Development/Test/Production, HTTPS,
+  ograniczony CORS, bezpieczne przechowywanie connection stringów i sekretów oraz
+  poprawne adresy API i redirect URI. Publiczny `clientId` Entra nadal mógłby pozostać
+  w repozytorium, ponieważ nie jest sekretem.
+- **Paginacja i ochrona API** — paginacja sugestii oraz wpisów czasu, a także rate
+  limiting skonfigurowany per użytkownik, szczególnie dla kosztownych operacji
+  synchronizacji.
+- **Monitoring i obsługa błędów** — centralne `ProblemDetails`, strukturalne logowanie,
+  identyfikatory żądań, metryki, health checks i alerty. Logi nie mogłyby zawierać
+  tokenów, nagłówków autoryzacji, tytułów spotkań ani nazw poufnych dokumentów.
+- **Automatyczna weryfikacja zmian** — CI/CD uruchamiające build backendu i frontendu,
+  testy jednostkowe i integracyjne, test migracji na tymczasowej bazie oraz audyt
+  zależności.
+- **Dokładniejsza historia dokumentów** — obecna synchronizacja delta pokazuje ostatni
+  zaobserwowany stan pliku, a nie wszystkie jego wcześniejsze modyfikacje. Pełniejsze
+  odtwarzanie dni pracy wymagałoby użycia historii wersji `DriveItem`, dodatkowej
+  deduplikacji, obsługi stronicowania, limitów Graph i zapamiętywania przetworzonych
+  wersji.

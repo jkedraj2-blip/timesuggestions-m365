@@ -139,15 +139,66 @@ public class CaseMatcherTests
     [Fact]
     public void Match_KeywordZeSlowemWersji_DopasowujeNazwePliku()
     {
-        // Przy nazwach plików obie strony przechodzą tryb dokumentowy —
-        // "raport final" i "raport-final.docx" spotykają się jako "raport".
-        // Keyword "final" sprawy #11 normalizuje się w trybie dokumentowym do pustego
-        // terminu (samo oznaczenie wersji) i celowo nie bierze udziału w dopasowaniu.
+        // Wymaganie: keyword "raport final" trafia w "raport-final.docx" — obie strony
+        // spotykają się jako "raport final" (nic nie jest obcinane). Bez sprawy #11
+        // ("final"), która do tego pliku pasuje również.
         var result = CaseMatcher.Match(
-            "raport-final.docx", CreateVersionWordCases(), MatchTextSource.DocumentName);
+            "raport-final.docx",
+            CreateVersionWordCases().Where(candidate => candidate.Id != 11).ToList(),
+            MatchTextSource.DocumentName);
 
         Assert.Equal(MatchKind.Single, result.Kind);
         Assert.Equal(10, result.MatchedCase?.Id);
+    }
+
+    [Fact]
+    public void Match_JednowyrazowyKeywordFinal_DopasowujeNazwePliku()
+    {
+        // Wymaganie: keyword "final" NIE degraduje się do pustego terminu — pasuje
+        // do pliku, którego nazwa zawiera token "final".
+        var result = CaseMatcher.Match(
+            "raport-final.docx", [CreateVersionWordCases()[1]], MatchTextSource.DocumentName);
+
+        Assert.Equal(MatchKind.Single, result.Kind);
+        Assert.Equal(11, result.MatchedCase?.Id);
+    }
+
+    [Fact]
+    public void Match_KeywordZeSlowemWersji_NieDopasowujeNazwyPlikuBezTegoSlowa()
+    {
+        // Sedno defektu (wariant plikowy): "raport final" nie może zdegradować się
+        // do "raport" i automatycznie przypiąć "Raport roboczy.docx" do złej sprawy.
+        var result = CaseMatcher.Match(
+            "Raport roboczy.docx", CreateVersionWordCases(), MatchTextSource.DocumentName);
+
+        Assert.Equal(MatchKind.None, result.Kind);
+    }
+
+    [Fact]
+    public void Match_NazwaKlientaZeSlowemKopia_NieLapiePlikuZSamymPierwszymSlowem()
+    {
+        // Klient "Biuro Kopia" nie może zostać ucięty do "biuro" i łapać
+        // dowolnego pliku ze słowem "biuro".
+        var result = CaseMatcher.Match(
+            "Biuro-podrozne-x.docx", CreateVersionWordCases(), MatchTextSource.DocumentName);
+
+        Assert.Equal(MatchKind.None, result.Kind);
+    }
+
+    [Fact]
+    public void Match_TerminBezSlowaWersji_DopasowujeMimoKoncowegoFinalWNazwiePliku()
+    {
+        // Końcowe "final" w nazwie pliku nie przeszkadza dopasowaniu ciągu tokenów —
+        // usuwanie słów wersji nie jest do tego potrzebne.
+        var cases = new List<Case>
+        {
+            new() { Id = 13, Name = "Umowa KlientX", CaseNumber = "UK-2026-004", ClientName = "KlientX", Keywords = "umowa klientx" },
+        };
+
+        var result = CaseMatcher.Match("Umowa_KlientX_final.docx", cases, MatchTextSource.DocumentName);
+
+        Assert.Equal(MatchKind.Single, result.Kind);
+        Assert.Equal(13, result.MatchedCase?.Id);
     }
 
     [Fact]

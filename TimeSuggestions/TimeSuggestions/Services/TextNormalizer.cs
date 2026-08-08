@@ -9,20 +9,18 @@ namespace TimeSuggestions.Services;
 /// Dzięki normalizacji "Umowa_KlientX_v2.docx" i "umowa klientx" porównują się tak samo.
 ///
 /// Dwa jawne tryby:
-/// - <see cref="NormalizeDocumentName"/> — pełny pipeline dla NAZW PLIKÓW: rozszerzenie,
-///   diakrytyki, separatory, tokeny vN/(N) i końcowe słowa wersji ("final", "kopia").
+/// - <see cref="NormalizeDocumentName"/> — pipeline dla NAZW PLIKÓW: rozszerzenie,
+///   diakrytyki, separatory i tokeny vN/(N). Słowa takie jak "final"/"kopia"
+///   ZOSTAJĄ — dopasowanie po ciągu pełnych tokenów nie potrzebuje ich usuwać
+///   ("umowa klientx" i tak trafia w "Umowa_KlientX_final.docx"), a ich obcinanie
+///   po cichu poszerzało terminy spraw i produkowało fałszywe przypisania.
 /// - <see cref="NormalizeText"/> — tryb leksykalny dla terminów spraw i tytułów spotkań:
-///   tylko wielkość liter, diakrytyki i separatory. Rozszerzenia plików i oznaczenia
-///   wersji to zjawiska nazw plików — w prozie "final" czy "v2" są zwykłymi słowami
-///   ("Final review", "Sprint v2"), a klient może nazywać się "Biuro Kopia".
+///   tylko wielkość liter, diakrytyki i separatory. Rozszerzenia plików i tokeny
+///   wersji to zjawiska nazw plików — w prozie "v2" jest zwykłym słowem ("Sprint v2").
 /// </summary>
 public static partial class TextNormalizer
 {
     private static readonly string[] FileExtensions = [".docx", ".doc", ".xlsx", ".xls"];
-
-    // Słowa-sufiksy wersji spotykane w nazwach plików; usuwane wyłącznie jako końcowe
-    // tokeny (oznaczenie wersji pliku) — w środku tekstu to zwykłe słowa.
-    private static readonly string[] VersionWords = ["final", "kopia"];
 
     [GeneratedRegex(@"^v\d+$")]
     private static partial Regex VersionTokenPattern();
@@ -30,7 +28,7 @@ public static partial class TextNormalizer
     [GeneratedRegex(@"^\(\d+\)$")]
     private static partial Regex CopyNumberTokenPattern();
 
-    /// <summary>Normalizacja nazwy pliku — pełny pipeline łącznie z oznaczeniami wersji.</summary>
+    /// <summary>Normalizacja nazwy pliku — z rozszerzeniem i tokenami wersji vN/(N).</summary>
     public static string NormalizeDocumentName(string? text) => NormalizeCore(text, isDocumentName: true);
 
     /// <summary>Normalizacja leksykalna (terminy spraw, tytuły spotkań) — bez logiki plikowej.</summary>
@@ -58,17 +56,13 @@ public static partial class TextNormalizer
             return string.Join(' ', tokens);
         }
 
-        // Tokeny vN i (N) są w nazwach plików jednoznacznymi oznaczeniami wersji — usuwane wszędzie.
+        // Tokeny vN i (N) są w nazwach plików jednoznacznymi oznaczeniami wersji —
+        // usuwane wszędzie, żeby "Umowa_v2_KlientX" pasowało do terminu "umowa klientx".
+        // Słów "final"/"kopia" NIE ruszamy: to część widocznej nazwy, a ich obcinanie
+        // poszerzało terminy spraw (keyword "raport final" degradował się do "raport").
         var meaningfulTokens = tokens
             .Where(token => !IsVersionToken(token))
             .ToList();
-
-        // Słowa wersji ("final", "kopia") tylko z końca — "Analiza final klienta"
-        // zachowuje "final" jako zwykłe słowo w środku tekstu.
-        while (meaningfulTokens.Count > 0 && VersionWords.Contains(meaningfulTokens[^1]))
-        {
-            meaningfulTokens.RemoveAt(meaningfulTokens.Count - 1);
-        }
 
         return string.Join(' ', meaningfulTokens);
     }

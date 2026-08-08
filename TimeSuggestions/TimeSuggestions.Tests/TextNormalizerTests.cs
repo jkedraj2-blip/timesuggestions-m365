@@ -35,22 +35,23 @@ public class TextNormalizerTests
     [Theory]
     [InlineData("Umowa_KlientX_v2", "umowa klientx")]
     [InlineData("Umowa KlientX (1)", "umowa klientx")]
-    [InlineData("Umowa KlientX final", "umowa klientx")]
-    [InlineData("Umowa KlientX kopia", "umowa klientx")]
-    [InlineData("Umowa KlientX final kopia", "umowa klientx")]
-    [InlineData("analiza-kopia.docx", "analiza")]
-    public void NormalizeDocumentName_PomijaSufiksyWersji(string input, string expected)
+    [InlineData("Umowa_v2_KlientX", "umowa klientx")]
+    public void NormalizeDocumentName_PomijaTokenyWersji(string input, string expected)
     {
         Assert.Equal(expected, TextNormalizer.NormalizeDocumentName(input));
     }
 
     [Theory]
+    [InlineData("Umowa KlientX final", "umowa klientx final")]
+    [InlineData("Umowa KlientX kopia", "umowa klientx kopia")]
+    [InlineData("analiza-kopia.docx", "analiza kopia")]
     [InlineData("Analiza final klienta", "analiza final klienta")]
     [InlineData("Kopia umowy KlientX", "kopia umowy klientx")]
-    public void NormalizeDocumentName_ZachowujeSlowaWersjiWSrodkuTekstu(string input, string expected)
+    public void NormalizeDocumentName_ZachowujeSlowaFinalIKopia(string input, string expected)
     {
-        // "final"/"kopia" to oznaczenia wersji tylko na końcu nazwy pliku —
-        // w środku tekstu są zwykłymi słowami i zostają.
+        // "final"/"kopia" są częścią widocznej nazwy i zostają — dopasowanie po ciągu
+        // pełnych tokenów nie potrzebuje ich usuwać, a obcinanie ich z terminów spraw
+        // poszerzało kryteria użytkownika ("raport final" degradowało się do "raport").
         Assert.Equal(expected, TextNormalizer.NormalizeDocumentName(input));
     }
 

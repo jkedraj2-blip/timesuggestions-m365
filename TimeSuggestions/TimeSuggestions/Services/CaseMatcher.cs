@@ -44,12 +44,12 @@ public static class CaseMatcher
 {
     public static MatchResult Match(string? rawText, IEnumerable<Case> activeCases, MatchTextSource source)
     {
-        // Obie strony porównania przechodzą przez TEN SAM tryb normalizacji — porównanie
-        // odbywa się w jednej przestrzeni kanonicznej. Dla nazw plików obie strony tracą
-        // oznaczenia wersji (keyword "raport final" pasuje do "raport-final.docx"); dla
-        // tytułów spotkań "final"/"kopia" pozostają zwykłymi słowami, więc keyword
-        // "raport final" NIE pasuje już do "Raport roboczy", a keyword "final" pasuje
-        // do "Final review".
+        // Tekst normalizowany trybem właściwym dla ŹRÓDŁA (nazwa pliku traci
+        // rozszerzenie i tokeny vN/(N)); terminy sprawy ZAWSZE leksykalnie — termin
+        // jest kryterium zapisanym przez użytkownika, nie nazwą pliku, i nie wolno go
+        // po cichu skracać. Keyword "raport final" pasuje więc do "raport-final.docx"
+        // (obie strony spotykają się jako "raport final"), ale NIE do "Raport
+        // roboczy.docx"; jednowyrazowy keyword "final" nie staje się pustym terminem.
         var normalize = source == MatchTextSource.DocumentName
             ? TextNormalizer.NormalizeDocumentName
             : (Func<string?, string>)TextNormalizer.NormalizeText;
@@ -62,7 +62,7 @@ public static class CaseMatcher
 
         var textTokens = normalizedText.Split(' ');
         var matchedCases = activeCases
-            .Where(candidate => MatchesAnyTerm(textTokens, candidate, normalize))
+            .Where(candidate => MatchesAnyTerm(textTokens, candidate))
             .ToList();
 
         return matchedCases.Count switch
@@ -73,9 +73,9 @@ public static class CaseMatcher
         };
     }
 
-    private static bool MatchesAnyTerm(string[] textTokens, Case candidate, Func<string?, string> normalize)
+    private static bool MatchesAnyTerm(string[] textTokens, Case candidate)
         => GetSearchTerms(candidate)
-            .Select(normalize)
+            .Select(TextNormalizer.NormalizeText)
             .Where(term => term.Length > 0)
             .Any(term => ContainsTokenSequence(textTokens, term.Split(' ')));
 

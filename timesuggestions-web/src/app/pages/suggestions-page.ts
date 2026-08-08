@@ -4,7 +4,14 @@ import { DataRefreshService } from '../services/data-refresh.service';
 import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
 import { toUserMessage } from '../services/user-message';
-import { CaseInfo, Suggestion, SuggestionSource, SuggestionStatus, SyncReport } from '../models/api.models';
+import {
+  CaseInfo,
+  Suggestion,
+  SuggestionSource,
+  SuggestionStatus,
+  SyncFilteredOutCounts,
+  SyncReport,
+} from '../models/api.models';
 import { FormsModule } from '@angular/forms';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
 import { formatDuration } from '../pipes/duration.pipe';
@@ -81,14 +88,7 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
           @if (report.filteredOut.total > 0) {
             <li>
               Odfiltrowano {{ report.filteredOut.total }} (łącznie z filtrami w przeglądarce):
-              @if (report.filteredOut.private > 0) { <span>{{ report.filteredOut.private }} prywatne/poufne/osobiste · </span> }
-              @if (report.filteredOut.cancelled > 0) { <span>{{ report.filteredOut.cancelled }} anulowane · </span> }
-              @if (report.filteredOut.tooShort > 0) { <span>{{ report.filteredOut.tooShort }} zbyt krótkie · </span> }
-              @if (report.filteredOut.allDay > 0) { <span>{{ report.filteredOut.allDay }} całodniowe · </span> }
-              @if (report.filteredOut.invalidDates > 0) { <span>{{ report.filteredOut.invalidDates }} z nieprawidłowymi datami · </span> }
-              @if (report.filteredOut.notOfficeDocument > 0) { <span>{{ report.filteredOut.notOfficeDocument }} pliki inne niż Word/Excel · </span> }
-              @if (report.filteredOut.outsideWindow > 0) { <span>{{ report.filteredOut.outsideWindow }} poza oknem synchronizacji · </span> }
-              @if (report.filteredOut.notModifiedByUser > 0) { <span>{{ report.filteredOut.notModifiedByUser }} zmodyfikowane przez inną osobę</span> }
+              {{ filteredOutBreakdown(report.filteredOut) }}
             </li>
           }
           @if (report.aggregated > 0) {
@@ -199,6 +199,24 @@ export class SuggestionsPage implements OnInit {
         return 'Rozpoczynam synchronizację…';
     }
   });
+
+  /**
+   * Rozbicie odrzuceń na niezerowe pozycje sklejone separatorem — join() zamiast
+   * spanów z doklejonym "· " w szablonie, bo tam separator wisiał także po
+   * ostatniej wyrenderowanej pozycji.
+   */
+  protected filteredOutBreakdown(filtered: SyncFilteredOutCounts): string {
+    const parts: string[] = [];
+    if (filtered.private > 0) parts.push(`${filtered.private} prywatne/poufne/osobiste`);
+    if (filtered.cancelled > 0) parts.push(`${filtered.cancelled} anulowane`);
+    if (filtered.tooShort > 0) parts.push(`${filtered.tooShort} zbyt krótkie`);
+    if (filtered.allDay > 0) parts.push(`${filtered.allDay} całodniowe`);
+    if (filtered.invalidDates > 0) parts.push(`${filtered.invalidDates} z nieprawidłowymi datami`);
+    if (filtered.notOfficeDocument > 0) parts.push(`${filtered.notOfficeDocument} pliki inne niż Word/Excel`);
+    if (filtered.outsideWindow > 0) parts.push(`${filtered.outsideWindow} poza oknem synchronizacji`);
+    if (filtered.notModifiedByUser > 0) parts.push(`${filtered.notModifiedByUser} zmodyfikowane przez inną osobę`);
+    return parts.join(' · ');
+  }
 
   protected visibleSuggestions = computed(() => {
     const activeFilter = this.sourceFilter();

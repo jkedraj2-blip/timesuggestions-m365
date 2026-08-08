@@ -37,6 +37,18 @@ public class SyncRequest : IValidatableObject
     public bool CalendarSnapshotComplete { get; set; }
 
     /// <summary>
+    /// Ile ostatnich pełnych dni lokalnych pokrywa zadeklarowany kompletny snapshot
+    /// kalendarza. Backend ogranicza destrukcyjną rekonsyliację do PRZECIĘCIA tego
+    /// zakresu ze swoim oknem (Suggestions:SyncDaysBack) — rozjazd konfiguracji
+    /// okien frontend/backend zawęża kasowanie, zamiast kasować oczekujące sugestie
+    /// spotkań, których klient w ogóle nie pobrał. Brak wartości przy zadeklarowanej
+    /// kompletności (starszy klient) = zakres nieznany — część destrukcyjna się
+    /// nie uruchamia.
+    /// </summary>
+    [Range(1, 365, ErrorMessage = "Zakres snapshotu kalendarza musi mieścić się w zakresie 1–365 dni.")]
+    public int? CalendarSnapshotDaysBack { get; set; }
+
+    /// <summary>
     /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
     /// Brak wartości = obowiązuje konfiguracja backendu (appsettings.json).
     /// </summary>

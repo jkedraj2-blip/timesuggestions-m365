@@ -32,6 +32,8 @@ export interface SyncRequest {
   calendarEvents: CalendarEventPayload[];
   /** Czy calendarEvents to kompletny snapshot okna (wszystkie strony pobrane bez błędu) — warunek destrukcyjnej rekonsyliacji. */
   calendarSnapshotComplete: boolean;
+  /** Ile ostatnich pełnych dni lokalnych pokrywa snapshot — backend kasuje tylko w przecięciu tego zakresu ze swoim oknem. */
+  calendarSnapshotDaysBack?: number;
   driveFiles: DriveFilePayload[];
   /** Tombstone'y z delta OneDrive — backend usuwa oczekujące sugestie usuniętych plików. */
   deletedDriveFileIds?: string[];

@@ -8,7 +8,12 @@ export const GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
  */
 export const OUTLOOK_TIMEZONE = 'Central European Standard Time';
 
-/** Okno synchronizacji w dniach — odpowiednik Suggestions:SyncDaysBack w backendzie. */
+/**
+ * Okno synchronizacji w dniach — odpowiednik Suggestions:SyncDaysBack w backendzie.
+ * Wartość jest wysyłana do backendu jako calendarSnapshotDaysBack: destrukcyjna
+ * rekonsyliacja kalendarza działa tylko w przecięciu obu okien, więc rozjazd
+ * konfiguracji ogranicza kasowanie zamiast usuwać sugestie spoza pobranego zakresu.
+ */
 export const SYNC_DAYS_BACK = 7;
 
 /**

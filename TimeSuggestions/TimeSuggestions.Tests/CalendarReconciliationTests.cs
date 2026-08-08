@@ -58,9 +58,12 @@ public sealed class CalendarReconciliationTests : IDisposable
         IsCancelled = isCancelled,
     };
 
-    /// <summary>Domyślnie kompletny snapshot — dotychczasowe zachowanie rekonsyliacji.</summary>
+    /// <summary>
+    /// Domyślnie kompletny snapshot z zadeklarowanym zakresem pokrywającym okno
+    /// backendu — dotychczasowe zachowanie rekonsyliacji.
+    /// </summary>
     private static SyncRequest CalendarRequest(params CalendarEventDto[] events)
-        => new() { CalendarEvents = [.. events], CalendarSnapshotComplete = true };
+        => new() { CalendarEvents = [.. events], CalendarSnapshotComplete = true, CalendarSnapshotDaysBack = 7 };
 
     private static SyncRequest DocumentRequest(params DriveFileDto[] files)
         => new() { DriveFiles = [.. files] };
@@ -207,6 +210,43 @@ public sealed class CalendarReconciliationTests : IDisposable
 
         Assert.Equal(0, report.Removed);
         Assert.Equal(1, await db.Suggestions.CountAsync());
+    }
+
+    [Fact]
+    public async Task SyncAsync_KompletnySnapshotBezZakresuNieUsuwaSugestii()
+    {
+        await syncService.SyncAsync(CalendarRequest(CreateEvent()), Now, CancellationToken.None);
+
+        // Starszy klient: deklaruje kompletność, ale nie mówi, ile dni pobrał —
+        // nie wiadomo, czego nieobecność dowodzi, więc nic nie znika.
+        var withoutRange = new SyncRequest { CalendarSnapshotComplete = true };
+        var report = await syncService.SyncAsync(withoutRange, Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Removed);
+        Assert.Equal(1, await db.Suggestions.CountAsync());
+    }
+
+    [Fact]
+    public async Task SyncAsync_KasowanieOgraniczoneDoZakresuZadeklarowanegoPrzezKlienta()
+    {
+        // Rozjazd konfiguracji: backend ma okno 14 dni, klient pobrał i zadeklarował 7.
+        // Sugestia sprzed 10 dni leży poza zakresem klienta — jego snapshot niczego
+        // o niej nie dowodzi i nie może jej skasować; sugestia sprzed 3 dni leży
+        // w przecięciu i znika normalnie.
+        var wideWindowService = new SyncService(
+            db, Options.Create(new SuggestionOptions { SyncDaysBack = 14 }));
+        await wideWindowService.SyncAsync(
+            CalendarRequest(CreateEvent("event-old", daysAgo: 10), CreateEvent("event-recent", daysAgo: 3)),
+            Now, CancellationToken.None);
+        Assert.Equal(2, await db.Suggestions.CountAsync());
+
+        var report = await wideWindowService.SyncAsync(
+            new SyncRequest { CalendarSnapshotComplete = true, CalendarSnapshotDaysBack = 7 },
+            Now, CancellationToken.None);
+
+        Assert.Equal(1, report.Removed);
+        var survivor = await db.Suggestions.SingleAsync();
+        Assert.Equal("event-old", survivor.ExternalId);
     }
 
     [Fact]

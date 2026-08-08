@@ -81,6 +81,10 @@ export class ApiService {
       // Destrukcyjna rekonsyliacja kalendarza w backendzie tylko przy KOMPLETNYM
       // snapshocie okna — częściowe pobranie nie może kasować prawidłowych sugestii.
       calendarSnapshotComplete: calendarSnapshot.snapshotComplete,
+      // Deklaracja zakresu snapshotu: backend kasuje oczekujące sugestie wyłącznie
+      // w przecięciu tego zakresu ze swoim oknem, więc rozjazd SYNC_DAYS_BACK
+      // z Suggestions:SyncDaysBack zawęża kasowanie zamiast niszczyć dane.
+      calendarSnapshotDaysBack: SYNC_DAYS_BACK,
       driveFiles: driveResult.files,
       deletedDriveFileIds: driveResult.deletedDriveFileIds,
       clientFilteredCounts: {

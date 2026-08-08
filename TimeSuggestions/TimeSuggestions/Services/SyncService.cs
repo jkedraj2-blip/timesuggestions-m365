@@ -54,8 +54,10 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // Okno "N dni" = dziś plus N-1 poprzednich pełnych dób lokalnych: początek dnia
         // lokalnego w strefie biznesowej, nie "N×24h wstecz" — odejmowanie godzin
         // rozjeżdża się z dobami lokalnymi o godzinę przy zmianie czasu. Frontend
-        // pobiera z Graph z dobą zapasu, a jedynym źródłem prawdy filtru jest backend,
-        // więc rozjazd okien między stronami nie jest możliwy.
+        // pobiera z Graph z dobą zapasu, a jedynym źródłem prawdy FILTRU jest backend.
+        // Rozjazd konfiguracji okien (frontend vs Suggestions:SyncDaysBack) nie jest
+        // przez to groźny dla filtrowania; kasowanie ma dodatkowo własną granicę —
+        // przecięcie z zakresem zadeklarowanym przez klienta (niżej).
         var windowStartLocal = nowLocal.Date.AddDays(-(options.SyncDaysBack - 1));
 
         var eventFilterResult = CalendarEventFilter.FilterBillable(
@@ -83,6 +85,16 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .Select(group => group.Last())
             .ToList();
 
+        // Destrukcyjna rekonsyliacja kalendarza działa wyłącznie w PRZECIĘCIU okna
+        // backendu z zakresem zadeklarowanym przez klienta: kompletność snapshotu
+        // dowodzi nieobecności spotkania tylko w dniach, które klient faktycznie
+        // pobrał. Starszy klient (kompletność bez zakresu) nie kasuje niczego.
+        DateOnly? destructiveWindowStart =
+            request.CalendarSnapshotComplete && request.CalendarSnapshotDaysBack is int clientDaysBack
+                ? DateOnly.FromDateTime(
+                    nowLocal.Date.AddDays(-(Math.Min(clientDaysBack, options.SyncDaysBack) - 1)))
+                : null;
+
         // Konflikt unikalności = równoległa synchronizacja zdążyła zapisać te same klucze.
         // Po nieudanym SaveChanges kontekst nadal śledzi encje z tej próby, więc proste
         // ponowienie dodałoby je drugi raz — dlatego ChangeTracker.Clear() i CAŁY merge
@@ -96,7 +108,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 DateOnly.FromDateTime(windowStartLocal),
                 DateOnly.FromDateTime(nowLocal),
                 request.DeletedDriveFileIds,
-                request.CalendarSnapshotComplete,
+                destructiveWindowStart,
                 cancellationToken);
 
             db.Suggestions.AddRange(merge.NewSuggestions);
@@ -162,7 +174,9 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     /// (źródło, id, dzień) — delta jest przyrostowa, więc nieobecność pliku w feedzie
     /// niczego nie dowodzi i dokumentów NIE czyścimy na tej podstawie (usuwają je
     /// wyłącznie jawne tombstone'y). Kalendarz: rekonsyliacja per spotkanie (ExternalId);
-    /// część destrukcyjna wymaga zadeklarowanego kompletnego snapshotu okna.
+    /// część destrukcyjna działa tylko od <paramref name="destructiveWindowStart"/>
+    /// (przecięcie okna backendu z zadeklarowanym zakresem snapshotu; null = brak
+    /// kompletnego snapshotu albo nieznany zakres — nic nie kasujemy).
     /// Rozstrzygniętych (zatwierdzone/odrzucone) nie ruszamy.
     /// </summary>
     private async Task<MergeOutcome> MergeWithExistingAsync(
@@ -170,7 +184,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         DateOnly windowStartDate,
         DateOnly windowEndDate,
         IReadOnlyCollection<string> deletedDriveFileIds,
-        bool calendarSnapshotComplete,
+        DateOnly? destructiveWindowStart,
         CancellationToken cancellationToken)
     {
         var newSuggestions = new List<Suggestion>();
@@ -267,17 +281,17 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             retained.Add(pending);
         }
 
-        // Usuwanie: Pending w oknie syncu, których spotkanie zniknęło ze snapshotu albo
-        // przestało być rozliczalne — oraz osierocone duplikaty tego samego spotkania.
-        // Okno odnosi się do EntryDate sugestii. Approved/Rejected nie ruszamy.
-        // WYŁĄCZNIE przy zadeklarowanym kompletnym snapshocie: nieobecność spotkania
-        // w niepełnym payloadzie (przerwane stronicowanie, starszy klient) niczego
-        // nie dowodzi i nie może kasować prawidłowych sugestii.
-        if (calendarSnapshotComplete)
+        // Usuwanie: Pending, których spotkanie zniknęło ze snapshotu albo przestało
+        // być rozliczalne — oraz osierocone duplikaty tego samego spotkania.
+        // Okno odnosi się do EntryDate sugestii i zaczyna się od destructiveWindowStart
+        // (przecięcie okna backendu z zakresem klienta): nieobecność spotkania
+        // w dniach, których klient nie pobrał — jak i w niepełnym payloadzie —
+        // niczego nie dowodzi i nie może kasować prawidłowych sugestii.
+        if (destructiveWindowStart is DateOnly deletionStartDate)
         {
             var stalePending = existingCalendar
                 .Where(suggestion => suggestion.Status == SuggestionStatus.Pending
-                    && suggestion.EntryDate >= windowStartDate
+                    && suggestion.EntryDate >= deletionStartDate
                     && suggestion.EntryDate <= windowEndDate
                     && !retained.Contains(suggestion))
                 .ToList();

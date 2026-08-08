@@ -18,7 +18,13 @@ public class SuggestionOptions
     /// <summary>Domyślny czas trwania sugestii z dokumentu — Graph nie mówi, jak długo trwała edycja, tylko kiedy była.</summary>
     public int DefaultDocumentDurationMinutes { get; set; } = 30;
 
-    /// <summary>Okno synchronizacji wstecz w dniach.</summary>
+    /// <summary>
+    /// Okno synchronizacji wstecz w dniach. Frontend ma własny odpowiednik
+    /// (SYNC_DAYS_BACK w graph-config.ts) i deklaruje go w każdym żądaniu
+    /// (calendarSnapshotDaysBack) — destrukcyjna rekonsyliacja kalendarza działa
+    /// tylko w przecięciu obu okien, więc zmiana tej wartości bez zmiany frontendu
+    /// jest bezpieczna (zawęża kasowanie, nie kasuje niepobranych dni).
+    /// </summary>
     public int SyncDaysBack { get; set; } = 7;
 
     /// <summary>

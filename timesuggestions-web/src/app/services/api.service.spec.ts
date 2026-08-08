@@ -112,8 +112,10 @@ describe('ApiService.syncNow', () => {
       documentsNotOfficeDocument: 0,
     });
     expect(request.deletedDriveFileIds).toEqual(['file-deleted']);
-    // Kalendarz pobrany w całości → jawna deklaracja kompletności snapshotu.
+    // Kalendarz pobrany w całości → jawna deklaracja kompletności snapshotu
+    // wraz z zakresem dni, którego kompletność dotyczy.
     expect(request.calendarSnapshotComplete).toBe(true);
+    expect(request.calendarSnapshotDaysBack).toBe(7);
     expect(report.created).toBe(1);
   });
 

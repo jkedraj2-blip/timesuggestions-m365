@@ -162,6 +162,18 @@ public sealed class SyncDeduplicationTests : IDisposable
     }
 
     [Fact]
+    public void SyncRequest_OdrzucaZakresSnapshotuPozaZakresem()
+    {
+        var request = new SyncRequest { CalendarSnapshotDaysBack = 0 };
+
+        var validationResults = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+        var isValid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
+            request, new System.ComponentModel.DataAnnotations.ValidationContext(request), validationResults, validateAllProperties: true);
+
+        Assert.False(isValid);
+    }
+
+    [Fact]
     public async Task SyncAsync_ZdezaktywowanaSprawaNieBierzeUdzialuWDopasowaniu()
     {
         var kowalskiCase = await db.Cases.SingleAsync(legalCase => legalCase.CaseNumber == "K-2026-001");

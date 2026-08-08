@@ -76,14 +76,21 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             nowUtc,
             nowUtc);
 
-        var candidates = builder
+        var rawCandidates = builder
             .BuildFromCalendar(eventFilterResult.Accepted, activeCases, nowUtc)
             .Concat(documentResult.Suggestions)
-            // Duplikaty w obrębie jednego żądania nie mogą kończyć się naruszeniem
-            // indeksu unikalnego — wygrywa ostatnie wystąpienie klucza.
+            .ToList();
+
+        // Duplikaty w obrębie jednego żądania nie mogą kończyć się naruszeniem
+        // indeksu unikalnego — wygrywa ostatnie wystąpienie klucza. Liczba scalonych
+        // duplikatów trafia do raportu (Deduplicated) — bez niej "Pobrano" przestaje
+        // się sumować z resztą liczników (Graph potrafi zduplikować wydarzenie
+        // między stronami przy zmieniającej się kolekcji).
+        var candidates = rawCandidates
             .GroupBy(candidate => (candidate.Source, candidate.ExternalId, candidate.EntryDate))
             .Select(group => group.Last())
             .ToList();
+        var deduplicatedCount = rawCandidates.Count - candidates.Count;
 
         // Destrukcyjna rekonsyliacja kalendarza działa wyłącznie w PRZECIĘCIU okna
         // backendu z zakresem zadeklarowanym przez klienta: kompletność snapshotu
@@ -162,6 +169,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                     + clientCounts.DocumentsOutsideWindow,
                 NotModifiedByUser: documentResult.NotModifiedByUserCount),
             Aggregated: documentResult.AggregatedCount,
+            Deduplicated: deduplicatedCount,
             Created: merge.NewSuggestions.Count,
             Updated: merge.UpdatedCount,
             SkippedExisting: candidates.Count - merge.NewSuggestions.Count - merge.UpdatedCount,

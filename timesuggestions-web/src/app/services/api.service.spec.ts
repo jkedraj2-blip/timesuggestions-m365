@@ -33,6 +33,7 @@ const EMPTY_REPORT = {
     notOfficeDocument: 0, outsideWindow: 0, notModifiedByUser: 0, total: 3,
   },
   aggregated: 0,
+  deduplicated: 0,
   created: 1,
   updated: 0,
   skippedExisting: 0,

@@ -94,6 +94,9 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
           @if (report.aggregated > 0) {
             <li>Zwinięto {{ report.aggregated }} {{ report.aggregated === 1 ? 'dodatkową edycję' : 'dodatkowych edycji' }} tego samego pliku w jedną sugestię dziennie.</li>
           }
+          @if (report.deduplicated > 0) {
+            <li>Scalono {{ report.deduplicated }} {{ report.deduplicated === 1 ? 'zduplikowaną pozycję' : 'zduplikowanych pozycji' }} z Graph (ten sam element pobrany wielokrotnie).</li>
+          }
           @if (report.updated > 0) {
             <li>Zaktualizowano {{ report.updated }} {{ report.updated === 1 ? 'istniejącą sugestię' : 'istniejących sugestii' }} (np. po zmianie nazwy pliku, tytułu lub terminu spotkania).</li>
           }

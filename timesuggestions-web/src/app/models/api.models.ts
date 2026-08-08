@@ -146,6 +146,8 @@ export interface SyncReport {
   fetched: SyncFetchedCounts;
   filteredOut: SyncFilteredOutCounts;
   aggregated: number;
+  /** Duplikaty tego samego klucza scalone w obrębie jednego żądania (np. wydarzenie zduplikowane między stronami calendarView). */
+  deduplicated: number;
   created: number;
   /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku lub dacie spotkania). */
   updated: number;

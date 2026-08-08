@@ -185,6 +185,12 @@ public record SyncReport(
     SyncFetchedCounts Fetched,
     SyncFilteredOutCounts FilteredOut,
     int Aggregated,
+    // Duplikaty tego samego klucza (źródło, id, dzień) scalone w obrębie jednego
+    // żądania — odpowiednik Aggregated dla powtórzeń z Graph (np. wydarzenie
+    // zduplikowane między stronami calendarView). Utrzymuje niezmiennik:
+    // pobrano = utworzone + zaktualizowane + pominięte + odfiltrowane
+    //         + zagregowane + zdeduplikowane.
+    int Deduplicated,
     int Created,
     int Updated,
     int SkippedExisting,

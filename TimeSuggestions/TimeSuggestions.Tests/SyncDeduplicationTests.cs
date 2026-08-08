@@ -227,14 +227,15 @@ public sealed class SyncDeduplicationTests : IDisposable
 
     /// <summary>
     /// Niezmiennik "uczciwego" raportu: pobrano = zaakceptowane (utworzone,
-    /// zaktualizowane, pominięte) + odfiltrowane + zagregowane. Zakłada brak
-    /// duplikatów klucza wewnątrz jednego żądania (te znikają w dedupie bez licznika).
+    /// zaktualizowane, pominięte) + odfiltrowane + zagregowane + zdeduplikowane.
+    /// Duplikaty klucza wewnątrz jednego żądania mają własny licznik (Deduplicated),
+    /// więc niezmiennik zachodzi także dla payloadów z powtórzeniami.
     /// </summary>
     private static void AssertReportSumInvariant(SyncReport report)
         => Assert.Equal(
             report.Fetched.CalendarEvents + report.Fetched.DriveFiles,
             report.Created + report.Updated + report.SkippedExisting
-                + report.FilteredOut.Total + report.Aggregated);
+                + report.FilteredOut.Total + report.Aggregated + report.Deduplicated);
 
     [Fact]
     public async Task SyncAsync_DoliczaLicznikiFiltrowKlienckichDoRaportu()
@@ -371,6 +372,11 @@ public sealed class SyncDeduplicationTests : IDisposable
         var suggestion = await db.Suggestions.SingleAsync();
         // Wygrywa ostatnie wystąpienie klucza w payloadzie.
         Assert.Equal("Spotkanie z Kowalski", suggestion.Title);
+        // Scalony duplikat ma własny licznik — raport dalej się sumuje
+        // ("Pobrano 2, utworzono 1" bez śladu byłoby przekłamaniem).
+        Assert.Equal(2, report.Fetched.CalendarEvents);
+        Assert.Equal(1, report.Deduplicated);
+        AssertReportSumInvariant(report);
     }
 
     [Fact]

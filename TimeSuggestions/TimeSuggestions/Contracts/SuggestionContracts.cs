@@ -131,7 +131,17 @@ public class CaseWriteRequest : IValidatableObject
     }
 
     private static string TruncateForMessage(string value)
-        => value.Length <= 32 ? value : $"{value[..32]}…";
+    {
+        if (value.Length <= 32)
+        {
+            return value;
+        }
+
+        // Cięcie nie może rozdzielić pary zastępczej UTF-16 — samotny surogat
+        // zostałby zserializowany jako U+FFFD i zniekształcił podgląd.
+        var length = char.IsHighSurrogate(value[31]) ? 31 : 32;
+        return $"{value[..length]}…";
+    }
 
     /// <summary>
     /// Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej

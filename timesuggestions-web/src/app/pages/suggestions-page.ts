@@ -9,12 +9,15 @@ import {
   Suggestion,
   SuggestionSource,
   SuggestionStatus,
+  SyncFetchedCounts,
   SyncFilteredOutCounts,
   SyncReport,
 } from '../models/api.models';
 import { FormsModule } from '@angular/forms';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
 import { formatDuration } from '../pipes/duration.pipe';
+import { polishPlural } from '../pipes/polish-plural';
+import { SYNC_DAYS_BACK } from '../services/graph-config';
 
 /** Klucz localStorage z preferencją użytkownika dla czasu dokumentów. */
 const DOCUMENT_MINUTES_STORAGE_KEY = 'timesuggestions.defaultDocumentMinutes';
@@ -34,6 +37,102 @@ export function normalizedDocumentMinutes(raw: unknown): number | undefined {
 
 type SourceFilter = 'all' | SuggestionSource;
 type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
+
+/**
+ * Nagłówek raportu mówi o EFEKCIE syncu (nowe/zaktualizowane/usunięte),
+ * nie o licznikach technicznych — "pominięto" i "pobrano" to szczegóły.
+ */
+export function syncReportHeadline(report: Pick<SyncReport, 'created' | 'updated' | 'removed'>): string {
+  const parts: string[] = [];
+  if (report.created > 0) {
+    parts.push(`${report.created} ${polishPlural(report.created, 'nowa sugestia', 'nowe sugestie', 'nowych sugestii')}`);
+  }
+  if (report.updated > 0) {
+    parts.push(`${report.updated} zaktualizowano`);
+  }
+  if (report.removed > 0) {
+    parts.push(`${report.removed} usunięto`);
+  }
+  if (parts.length === 0) {
+    return 'Synchronizacja zakończona — bez zmian. Wszystkie sugestie są aktualne.';
+  }
+  return `Synchronizacja zakończona: ${parts.join(', ')}.`;
+}
+
+/**
+ * "Sprawdzono" zamiast "pobrano" — każdy sync celowo pobiera pełny snapshot
+ * okna (wykrywanie usuniętych/przeniesionych spotkań), więc liczba powtarza
+ * się co sync i ma brzmieć jak kontrola, nie jak nowe dane. Zera pomijamy.
+ */
+export function syncCheckedLine(fetched: SyncFetchedCounts): string {
+  const meetings = fetched.calendarEvents;
+  const files = fetched.driveFiles;
+  if (meetings === 0 && files === 0) {
+    return `Brak spotkań i plików do sprawdzenia w ostatnich ${SYNC_DAYS_BACK} dniach.`;
+  }
+  const meetingsText = `${meetings} ${polishPlural(meetings, 'spotkanie', 'spotkania', 'spotkań')}`;
+  const filesText = `${files} ${polishPlural(files, 'plik', 'pliki', 'plików')}`;
+  if (files === 0) {
+    return `Sprawdzono ${meetingsText} z ostatnich ${SYNC_DAYS_BACK} dni.`;
+  }
+  if (meetings === 0) {
+    return `Sprawdzono ${filesText} z ostatnich ${SYNC_DAYS_BACK} dni.`;
+  }
+  return `Sprawdzono ${meetingsText} z ostatnich ${SYNC_DAYS_BACK} dni i ${filesText}.`;
+}
+
+/** "Pominięto (już istniały)" po ludzku — powtórny sync niczego nie duplikuje. */
+export function syncSkippedLine(count: number): string {
+  const subject = polishPlural(count, 'pozycja była', 'pozycje były', 'pozycji było');
+  return `${count} ${subject} już wcześniej na liście sugestii — nic nie duplikujemy.`;
+}
+
+/**
+ * Rozbicie odrzuceń na niezerowe pozycje sklejone separatorem — join() zamiast
+ * spanów z doklejonym "· " w szablonie, bo tam separator wisiał także po
+ * ostatniej wyrenderowanej pozycji. Etykiety opisują powód z perspektywy
+ * użytkownika, nie nazwy licznika.
+ */
+export function filteredOutBreakdown(filtered: SyncFilteredOutCounts): string {
+  const parts: string[] = [];
+  if (filtered.private > 0) {
+    parts.push(`${filtered.private} prywatne lub poufne (ich tytuły nie opuszczają przeglądarki)`);
+  }
+  if (filtered.cancelled > 0) {
+    parts.push(`${filtered.cancelled} odwołane`);
+  }
+  if (filtered.tooShort > 0) {
+    parts.push(`${filtered.tooShort} krótsze niż 5 minut`);
+  }
+  if (filtered.allDay > 0) {
+    parts.push(`${filtered.allDay} całodniowe`);
+  }
+  if (filtered.invalidDates > 0) {
+    parts.push(`${filtered.invalidDates} z błędnymi datami`);
+  }
+  if (filtered.notOfficeDocument > 0) {
+    parts.push(`${filtered.notOfficeDocument} ${polishPlural(
+      filtered.notOfficeDocument, 'plik inny niż Word/Excel', 'pliki inne niż Word/Excel', 'plików innych niż Word/Excel')}`);
+  }
+  if (filtered.outsideWindow > 0) {
+    parts.push(`${filtered.outsideWindow} poza zakresem ostatnich ${SYNC_DAYS_BACK} dni (np. spotkanie, które jeszcze się nie odbyło)`);
+  }
+  if (filtered.notModifiedByUser > 0) {
+    parts.push(`${filtered.notModifiedByUser} zmodyfikowane przez kogoś innego`);
+  }
+  return parts.join(' · ');
+}
+
+/** Pełna linia odrzuceń: wstęp z odmianą + rozbicie na powody. */
+export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
+  const subject = polishPlural(
+    filtered.total,
+    'pozycję, która nie jest czasem pracy',
+    'pozycje, które nie są czasem pracy',
+    'pozycji, które nie są czasem pracy',
+  );
+  return `Pominięto ${filtered.total} ${subject}: ${filteredOutBreakdown(filtered)}.`;
+}
 
 @Component({
   selector: 'app-suggestions-page',
@@ -79,29 +178,27 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
     @if (syncReport(); as report) {
       <details class="info-box report" open>
         <summary>
-          <strong>Synchronizacja zakończona:</strong>
-          utworzono {{ report.created }} {{ report.created === 1 ? 'nową sugestię' : 'nowych sugestii' }},
-          pominięto {{ report.skippedExisting }} (już istniały).
+          <strong>{{ headline(report) }}</strong>
         </summary>
         <ul>
-          <li>Pobrano {{ report.fetched.calendarEvents }} spotkań i {{ report.fetched.driveFiles }} plików.</li>
+          <li>{{ checkedLine(report.fetched) }}</li>
+          @if (report.skippedExisting > 0) {
+            <li>{{ skippedLine(report.skippedExisting) }}</li>
+          }
           @if (report.filteredOut.total > 0) {
-            <li>
-              Odfiltrowano {{ report.filteredOut.total }} (łącznie z filtrami w przeglądarce):
-              {{ filteredOutBreakdown(report.filteredOut) }}
-            </li>
+            <li>{{ filteredLine(report.filteredOut) }}</li>
           }
           @if (report.aggregated > 0) {
-            <li>Zwinięto {{ report.aggregated }} {{ report.aggregated === 1 ? 'dodatkową edycję' : 'dodatkowych edycji' }} tego samego pliku w jedną sugestię dziennie.</li>
+            <li>Zwinięto {{ report.aggregated }} {{ plural(report.aggregated, 'dodatkową edycję', 'dodatkowe edycje', 'dodatkowych edycji') }} tego samego pliku w jedną sugestię dziennie.</li>
           }
           @if (report.deduplicated > 0) {
-            <li>Scalono {{ report.deduplicated }} {{ report.deduplicated === 1 ? 'zduplikowaną pozycję' : 'zduplikowanych pozycji' }} z Graph (ten sam element pobrany wielokrotnie).</li>
+            <li>Scalono {{ report.deduplicated }} {{ plural(report.deduplicated, 'zduplikowaną pozycję', 'zduplikowane pozycje', 'zduplikowanych pozycji') }} z Graph (ten sam element pobrany wielokrotnie).</li>
           }
           @if (report.updated > 0) {
-            <li>Zaktualizowano {{ report.updated }} {{ report.updated === 1 ? 'istniejącą sugestię' : 'istniejących sugestii' }} (np. po zmianie nazwy pliku, tytułu lub terminu spotkania).</li>
+            <li>Zaktualizowano {{ report.updated }} {{ plural(report.updated, 'istniejącą sugestię', 'istniejące sugestie', 'istniejących sugestii') }} (np. po zmianie nazwy pliku, tytułu lub terminu spotkania).</li>
           }
           @if (report.removed > 0) {
-            <li>Usunięto {{ report.removed }} {{ report.removed === 1 ? 'nieaktualną sugestię' : 'nieaktualnych sugestii' }} (spotkania usunięte lub nierozliczalne, skasowane pliki).</li>
+            <li>Usunięto {{ report.removed }} {{ plural(report.removed, 'nieaktualną sugestię', 'nieaktualne sugestie', 'nieaktualnych sugestii') }} (spotkania usunięte lub nierozliczalne, skasowane pliki).</li>
           }
           @if (report.created > 0) {
             <li>
@@ -138,7 +235,7 @@ type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
             <p><strong>Brak oczekujących sugestii.</strong></p>
             <p>
               Kliknij „Synchronizuj", aby pobrać spotkania z kalendarza Outlook i dokumenty
-              z OneDrive z ostatnich 7 dni. Aplikacja zamieni je na propozycje wpisów czasu pracy.
+              z OneDrive z ostatnich {{ syncDaysBack }} dni. Aplikacja zamieni je na propozycje wpisów czasu pracy.
             </p>
           </div>
         }
@@ -203,23 +300,13 @@ export class SuggestionsPage implements OnInit {
     }
   });
 
-  /**
-   * Rozbicie odrzuceń na niezerowe pozycje sklejone separatorem — join() zamiast
-   * spanów z doklejonym "· " w szablonie, bo tam separator wisiał także po
-   * ostatniej wyrenderowanej pozycji.
-   */
-  protected filteredOutBreakdown(filtered: SyncFilteredOutCounts): string {
-    const parts: string[] = [];
-    if (filtered.private > 0) parts.push(`${filtered.private} prywatne/poufne/osobiste`);
-    if (filtered.cancelled > 0) parts.push(`${filtered.cancelled} anulowane`);
-    if (filtered.tooShort > 0) parts.push(`${filtered.tooShort} zbyt krótkie`);
-    if (filtered.allDay > 0) parts.push(`${filtered.allDay} całodniowe`);
-    if (filtered.invalidDates > 0) parts.push(`${filtered.invalidDates} z nieprawidłowymi datami`);
-    if (filtered.notOfficeDocument > 0) parts.push(`${filtered.notOfficeDocument} pliki inne niż Word/Excel`);
-    if (filtered.outsideWindow > 0) parts.push(`${filtered.outsideWindow} poza oknem synchronizacji`);
-    if (filtered.notModifiedByUser > 0) parts.push(`${filtered.notModifiedByUser} zmodyfikowane przez inną osobę`);
-    return parts.join(' · ');
-  }
+  // Teksty raportu budują czyste, testowalne funkcje modułu — tu tylko aliasy dla szablonu.
+  protected readonly headline = syncReportHeadline;
+  protected readonly checkedLine = syncCheckedLine;
+  protected readonly skippedLine = syncSkippedLine;
+  protected readonly filteredLine = filteredOutLine;
+  protected readonly plural = polishPlural;
+  protected readonly syncDaysBack = SYNC_DAYS_BACK;
 
   protected visibleSuggestions = computed(() => {
     const activeFilter = this.sourceFilter();
@@ -339,7 +426,7 @@ export class SuggestionsPage implements OnInit {
       const failedCount = results.length - approvedCount;
       this.toasts.show(
         failedCount === 0
-          ? `Zapisano ${approvedCount} ${approvedCount === 1 ? 'wpis' : 'wpisów'} czasu pracy.`
+          ? `Zapisano ${approvedCount} ${polishPlural(approvedCount, 'wpis', 'wpisy', 'wpisów')} czasu pracy.`
           : `Zapisano ${approvedCount}, nie udało się ${failedCount} — spróbuj pojedynczo.`,
         { kind: failedCount === 0 ? 'success' : 'error' },
       );

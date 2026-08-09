@@ -94,7 +94,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | `DELETE /api/time-entries/{id}` | Usuwa wpis i przywraca sugestię |
 | `GET /api/summary` | Liczniki do kafelków podsumowania |
 
-Przykładowe wywołania: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
+Przykładowe wywołania wszystkich endpointów: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
 
 ## Uruchomienie
 

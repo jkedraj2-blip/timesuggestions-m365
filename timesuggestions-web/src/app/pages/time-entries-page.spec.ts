@@ -3,6 +3,7 @@ import {
   allVisibleRange,
   confirmSettleLabel,
   currentMonthRange,
+  formatRangeLabel,
   lastWeekRange,
   settledToastMessage,
   toIsoDate,
@@ -61,9 +62,35 @@ describe('settledToastMessage', () => {
   });
 });
 
+describe('formatRangeLabel', () => {
+  it('w obrębie jednego roku pomija rok', () => {
+    expect(formatRangeLabel({ from: '2026-08-03', to: '2026-08-09' })).toBe('03.08–09.08');
+    expect(formatRangeLabel({ from: '2026-01-01', to: '2026-08-09' })).toBe('01.01–09.08');
+  });
+
+  it('przy przełomie roku dopisuje lata, żeby zakres nie wyglądał na kilka tygodni', () => {
+    expect(formatRangeLabel({ from: '2025-01-01', to: '2026-08-09' }))
+      .toBe('01.01.2025–09.08.2026');
+  });
+});
+
 describe('confirmSettleLabel', () => {
   it('pyta o potwierdzenie z liczbą wpisów i sumą czasu', () => {
     expect(confirmSettleLabel(3, 130)).toBe('Na pewno? Rozliczysz 3 wpisy (2 godz. 10 min)');
     expect(confirmSettleLabel(1, 60)).toBe('Na pewno? Rozliczysz 1 wpis (1 godz.)');
+  });
+
+  it('dla akcji hurtowej dopisuje zakres dat', () => {
+    expect(confirmSettleLabel(3, 130, { from: '2026-08-03', to: '2026-08-09' }))
+      .toBe('Na pewno? Rozliczysz 3 wpisy (2 godz. 10 min) z 03.08–09.08');
+  });
+
+  it('wieloletnie „wszystko" ujawnia skalę zakresu', () => {
+    expect(confirmSettleLabel(143, 12600, { from: '2025-01-01', to: '2026-08-09' }))
+      .toBe('Na pewno? Rozliczysz 143 wpisy (210 godz.) z 01.01.2025–09.08.2026');
+  });
+
+  it('przy „Rozlicz dzień" zakres jest pomijany, bo wynika z nagłówka dnia', () => {
+    expect(confirmSettleLabel(2, 90, null)).toBe('Na pewno? Rozliczysz 2 wpisy (1 godz. 30 min)');
   });
 });

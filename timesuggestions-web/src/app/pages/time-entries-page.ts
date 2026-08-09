@@ -62,10 +62,34 @@ export function settledToastMessage(count: number, totalMinutes: number): string
   return `Rozliczono ${count} ${noun} (${formatDuration(totalMinutes)}).`;
 }
 
-/** Etykieta uzbrojonego przycisku: „Na pewno? Rozliczysz 3 wpisy (2 godz.)". */
-export function confirmSettleLabel(count: number, totalMinutes: number): string {
+/**
+ * Zakres dat do etykiety potwierdzenia: „01.01–09.08", a przy przełomie roku
+ * „01.01.2025–09.08.2026". Rok pada wyłącznie wtedy, gdy granice leżą w różnych
+ * latach: to jedyny przypadek, w którym sam dzień z miesiącem sugerowałyby kilka
+ * tygodni zamiast kilkunastu miesięcy.
+ */
+export function formatRangeLabel(range: DateRange): string {
+  const [fromYear, fromMonth, fromDay] = range.from.split('-');
+  const [toYear, toMonth, toDay] = range.to.split('-');
+  return fromYear === toYear
+    ? `${fromDay}.${fromMonth}–${toDay}.${toMonth}`
+    : `${fromDay}.${fromMonth}.${fromYear}–${toDay}.${toMonth}.${toYear}`;
+}
+
+/**
+ * Etykieta uzbrojonego przycisku: „Na pewno? Rozliczysz 3 wpisy (2 godz.) z 03.08–09.08".
+ * Zakres jest opcjonalny, bo przy „Rozlicz dzień" wynika z nagłówka dnia. Przy akcjach
+ * hurtowych jest kluczowy: sama liczba wpisów nie mówi, czy „wszystko" to bieżący
+ * miesiąc, czy osiem miesięcy wstecz.
+ */
+export function confirmSettleLabel(
+  count: number,
+  totalMinutes: number,
+  range?: DateRange | null,
+): string {
   const noun = polishPlural(count, 'wpis', 'wpisy', 'wpisów');
-  return `Na pewno? Rozliczysz ${count} ${noun} (${formatDuration(totalMinutes)})`;
+  const scope = range ? ` z ${formatRangeLabel(range)}` : '';
+  return `Na pewno? Rozliczysz ${count} ${noun} (${formatDuration(totalMinutes)})${scope}`;
 }
 
 /**
@@ -315,11 +339,12 @@ export class TimeEntriesPage implements OnInit {
     if (!this.confirm.isArmed(key)) {
       return idleLabel;
     }
-    const range = key.startsWith('day:')
+    const isDay = key.startsWith('day:');
+    const range = isDay
       ? { from: key.slice(4), to: key.slice(4) }
       : this.ranges()[key as 'week' | 'month' | 'all'];
     const { count, minutes } = this.countInRange(range);
-    return confirmSettleLabel(count, minutes);
+    return confirmSettleLabel(count, minutes, isDay ? null : range);
   }
 
   protected settleDay(date: string, event: Event): void {
@@ -358,7 +383,6 @@ export class TimeEntriesPage implements OnInit {
       this.toasts.show(settledToastMessage(result.archivedCount, result.totalMinutes));
       await this.loadData();
       await this.summaryStore.refresh();
-      this.dataRefresh.notify();
     } catch (error) {
       this.error.set(toUserMessage(error, 'Nie udało się rozliczyć wpisów.'));
     } finally {

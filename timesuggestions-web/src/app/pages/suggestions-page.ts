@@ -443,7 +443,6 @@ export class SuggestionsPage implements OnInit {
       this.toasts.show(archivedSuggestionsToast(result.archivedCount));
       await this.loadData();
       await this.summaryStore.refresh();
-      this.dataRefresh.notify();
     } catch (error) {
       this.error.set(toUserMessage(error, 'Nie udało się zarchiwizować sugestii.'));
     } finally {

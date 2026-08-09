@@ -8,12 +8,20 @@ namespace TimeSuggestions.Controllers;
 
 [ApiController]
 [Route("api/time-entries")]
-public class TimeEntriesController(AppDbContext db, ApprovalService approvalService) : ControllerBase
+public class TimeEntriesController(
+    AppDbContext db,
+    ApprovalService approvalService,
+    ArchiveService archiveService) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<TimeEntriesResponse>> GetTimeEntries(CancellationToken cancellationToken)
+    public async Task<ActionResult<TimeEntriesResponse>> GetTimeEntries(
+        [FromQuery] bool archived = false,
+        CancellationToken cancellationToken = default)
     {
+        // Domyślnie widok aktywnych — istniejący klient bez parametru dostaje
+        // dotychczasowe zachowanie. TotalMinutes dotyczy zwróconego widoku.
         var entries = await db.TimeEntries
+            .Where(entry => archived ? entry.ArchivedAt != null : entry.ArchivedAt == null)
             .Include(entry => entry.Case)
             .Include(entry => entry.Suggestion)
             .OrderByDescending(entry => entry.EntryDate)
@@ -32,6 +40,18 @@ public class TimeEntriesController(AppDbContext db, ApprovalService approvalServ
         return Ok(new TimeEntriesResponse(entries.Sum(entry => entry.DurationMinutes), days));
     }
 
+    [HttpPost("archive")]
+    public async Task<ActionResult<ArchiveTimeEntriesResult>> Archive(
+        ArchiveTimeEntriesRequest request,
+        CancellationToken cancellationToken)
+    {
+        // [Required] gwarantuje wartości — walidacja modelu odrzuciła braki przed wejściem tutaj.
+        var result = await archiveService.ArchiveTimeEntriesAsync(
+            request.From!.Value, request.To!.Value, DateTime.UtcNow, cancellationToken);
+
+        return Ok(result);
+    }
+
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
     {
@@ -41,6 +61,7 @@ public class TimeEntriesController(AppDbContext db, ApprovalService approvalServ
         {
             ApprovalOutcome.Success => NoContent(),
             ApprovalOutcome.TimeEntryNotFound => NotFound(new { message = "Wpis czasu nie istnieje." }),
+            ApprovalOutcome.TimeEntryArchived => Conflict(new { message = "Wpis jest rozliczony — nie można cofnąć zatwierdzenia." }),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
     }

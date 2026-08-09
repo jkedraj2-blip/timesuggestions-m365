@@ -140,4 +140,31 @@ public sealed class ApiValidationTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
+
+    // --- Zakres rozliczenia hurtowego wpisów czasu ---
+
+    [Theory]
+    [InlineData("""{"from":"2026-08-09","to":"2026-08-01"}""")] // koniec przed początkiem
+    [InlineData("""{"from":"2025-08-01","to":"2026-08-05"}""")] // 370 dni > limit 366
+    [InlineData("""{"to":"2026-08-09"}""")] // brak from
+    [InlineData("""{"from":"2026-08-01"}""")] // brak to
+    [InlineData("{}")] // brak obu granic
+    public async Task TimeEntriesArchive_NieprawidlowyZakres_Daje400(string json)
+    {
+        var response = await PostJsonAsync("/api/time-entries/archive", json);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TimeEntriesArchive_PoprawnyZakres_Przechodzi()
+    {
+        // Kontrola: pusty zakres to normalny sukces (0 wpisów), nie błąd.
+        var response = await PostJsonAsync(
+            "/api/time-entries/archive", """{"from":"2026-08-01","to":"2026-08-09"}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("\"archivedCount\":0", body);
+    }
 }

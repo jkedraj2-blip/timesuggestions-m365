@@ -25,4 +25,11 @@ public class TimeEntry
     public Suggestion? Suggestion { get; set; }
 
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Moment rozliczenia (archiwizacji) w UTC; null = wpis aktywny. Wpis zarchiwizowany
+    /// jest tylko do odczytu: nie można go usunąć ani cofnąć zatwierdzenia — rozliczonego
+    /// czasu nie wolno po cichu zmieniać (korekta to świadomie osobna, przyszła funkcja).
+    /// </summary>
+    public DateTime? ArchivedAt { get; set; }
 }

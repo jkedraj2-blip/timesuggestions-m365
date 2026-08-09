@@ -99,4 +99,21 @@ public sealed class ApprovalFlowTests : IDisposable
 
         Assert.Equal(ApprovalOutcome.TimeEntryNotFound, result.Outcome);
     }
+
+    [Fact]
+    public async Task DeleteTimeEntryAsync_OdmawiaDlaZarchiwizowanegoWpisuINiczegoNieZmienia()
+    {
+        var suggestion = await SeedPendingSuggestionAsync();
+        var request = new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 60, Description = "Praca" };
+        var approval = await approvalService.ApproveAsync(suggestion.Id, request, Now, CancellationToken.None);
+        approval.CreatedEntry!.ArchivedAt = Now;
+        await db.SaveChangesAsync();
+
+        var result = await approvalService.DeleteTimeEntryAsync(approval.CreatedEntry.Id, CancellationToken.None);
+
+        // Rozliczonego czasu nie cofamy: wpis zostaje, sugestia dalej zatwierdzona.
+        Assert.Equal(ApprovalOutcome.TimeEntryArchived, result.Outcome);
+        Assert.Equal(1, await db.TimeEntries.CountAsync());
+        Assert.Equal(SuggestionStatus.Approved, (await db.Suggestions.SingleAsync()).Status);
+    }
 }

@@ -23,6 +23,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<SyncService>();
 builder.Services.AddScoped<ApprovalService>();
+builder.Services.AddScoped<ArchiveService>();
 builder.Services.AddScoped<SummaryService>();
 
 // CORS zawężony do originów z konfiguracji (frontend deweloperski) — celowo nie AllowAnyOrigin.

@@ -7,7 +7,7 @@ namespace TimeSuggestions.Services;
 
 /// <summary>
 /// Zbiorcze liczniki dla kafelków w nagłówku UI — użytkownik od razu widzi,
-/// że system żyje: ile czeka, ile zapisano, ile czasu uzbierano.
+/// że system żyje: ile czeka, ile zapisano, ile czasu pozostaje nierozliczone.
 /// </summary>
 public class SummaryService(AppDbContext db)
 {
@@ -30,12 +30,16 @@ public class SummaryService(AppDbContext db)
         var rejectedCount = await db.Suggestions
             .CountAsync(suggestion => suggestion.Status == SuggestionStatus.Rejected, cancellationToken);
 
+        // Kafelek pokazuje czas NIEROZLICZONY (tylko aktywne wpisy) — archiwizacja jest
+        // jedynym „resetem" tej liczby. Suma życiowa (z archiwum) jest celowo niedostępna
+        // z kafelka; widać ją w widoku Archiwum na stronie wpisów.
         // Sum() na pustej tabeli rzuca — stąd wariant z Select i domyślnym zerem.
-        var totalLoggedMinutes = await db.TimeEntries
+        var unsettledMinutes = await db.TimeEntries
+            .Where(entry => entry.ArchivedAt == null)
             .Select(entry => (int?)entry.DurationMinutes)
             .SumAsync(cancellationToken) ?? 0;
         var todayLoggedMinutes = await db.TimeEntries
-            .Where(entry => entry.EntryDate == today)
+            .Where(entry => entry.ArchivedAt == null && entry.EntryDate == today)
             .Select(entry => (int?)entry.DurationMinutes)
             .SumAsync(cancellationToken) ?? 0;
 
@@ -48,7 +52,7 @@ public class SummaryService(AppDbContext db)
             pendingCount,
             approvedCount,
             rejectedCount,
-            totalLoggedMinutes,
+            unsettledMinutes,
             todayLoggedMinutes,
             lastSyncAt);
     }

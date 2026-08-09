@@ -29,6 +29,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasIndex(entry => entry.SuggestionId)
             .IsUnique();
 
+        // Filtrowanie aktywne/archiwum (ArchivedAt == null / != null) to główna oś
+        // odczytu listy wpisów — zwykły indeks wystarcza dla SQLite w prototypie.
+        modelBuilder.Entity<TimeEntry>()
+            .HasIndex(entry => entry.ArchivedAt);
+
         // Unikalność numeru sprawy na poziomie bazy — kontroler sprawdza duplikat przed
         // zapisem, ale wyścig check-then-insert domyka dopiero indeks.
         modelBuilder.Entity<Case>()

@@ -251,4 +251,98 @@ public class CaseMatcherTests
         Assert.Equal(MatchKind.Single, result.Kind);
         Assert.Equal(21, result.MatchedCase?.Id);
     }
+
+    // --- Interpunkcja przyklejona do nazwy nie może psuć dopasowania ---
+
+    [Theory]
+    [InlineData("Kowalski, przegląd umowy")]
+    [InlineData("Spotkanie z Kowalski: umowa")]
+    [InlineData("(Kowalski) przegląd dokumentów")]
+    [InlineData("Spotkanie „Kowalski” w biurze")]
+    [InlineData("Pilne! Kowalski?")]
+    public void Match_InterpunkcjaPrzyNazwieKlientaNieBlokujeDopasowania(string meetingTitle)
+    {
+        // Naturalne tytuły spotkań zawierają przecinki, dwukropki, nawiasy
+        // i cudzysłowy tuż przy nazwie klienta — po przejściu na pełne tokeny
+        // "kowalski," ≠ "kowalski" gubiło dopasowanie, stąd każdy znak
+        // niebędący literą ani cyfrą jest separatorem.
+        var result = CaseMatcher.Match(meetingTitle, TestHelpers.CreateTestCases(), MatchTextSource.MeetingTitle);
+
+        Assert.Equal(MatchKind.Single, result.Kind);
+        Assert.Equal(1, result.MatchedCase?.Id);
+    }
+
+    // --- Remisy rozstrzyga najdłuższe dopasowanie ---
+
+    [Fact]
+    public void Match_DluzszeDopasowanieWygrywaZJednowyrazowymKeywordem()
+    {
+        // "Beta Logistics" (2 tokeny nazwy klienta sprawy #5) niesie więcej informacji
+        // niż keyword "Beta" (1 token, sprawy #4 i #5) — użytkownik widzący ten tytuł
+        // nie ma wątpliwości i aplikacja też nie powinna zgłaszać niejednoznaczności.
+        var result = CaseMatcher.Match(
+            "Audyt Beta Logistics — przygotowanie", TestHelpers.CreateTestCases(), MatchTextSource.MeetingTitle);
+
+        Assert.Equal(MatchKind.Single, result.Kind);
+        Assert.Equal(5, result.MatchedCase?.Id);
+    }
+
+    [Fact]
+    public void Match_RemisDlugosciDopasowaniaPozostajeNiejednoznaczny()
+    {
+        // Samo "Beta" trafia sprawy #4 i #5 identycznym jednowyrazowym keywordem —
+        // żadna nie jest lepsza, więc decyzję musi podjąć użytkownik.
+        var result = CaseMatcher.Match(
+            "Analiza Beta, pilna", TestHelpers.CreateTestCases(), MatchTextSource.MeetingTitle);
+
+        Assert.Equal(MatchKind.Multiple, result.Kind);
+        Assert.Null(result.MatchedCase);
+        Assert.Equal(2, result.Candidates.Count);
+    }
+
+    [Fact]
+    public void Match_RankingDzialaTezDlaNazwPlikow()
+    {
+        var result = CaseMatcher.Match(
+            "Audyt_Beta-Logistics_v3.docx", TestHelpers.CreateTestCases(), MatchTextSource.DocumentName);
+
+        Assert.Equal(MatchKind.Single, result.Kind);
+        Assert.Equal(5, result.MatchedCase?.Id);
+    }
+
+    [Fact]
+    public void Match_TrafieniaZahaczajaceOSiebieBezZawieraniaPozostajaNiejednoznaczne()
+    {
+        // Nazwy klientów dzielą słowo "Logistics": trafienia "grupa beta logistics"
+        // i "logistics polska" zahaczają o siebie na jednym tokenie, ale żadne nie
+        // zawiera się w drugim — "Polska" to dowód, którego dłuższe trafienie nie
+        // tłumaczy. Dłuższe wygrywa wyłącznie z trafieniem będącym w całości jego
+        // fragmentem; tu decyzję musi podjąć użytkownik.
+        List<Case> cases =
+        [
+            new Case { Id = 30, Name = "Grupa Beta Logistics — obsługa", CaseNumber = "GBL-2026-001", ClientName = "Grupa Beta Logistics" },
+            new Case { Id = 31, Name = "Logistics Polska — spór", CaseNumber = "LP-2026-002", ClientName = "Logistics Polska" },
+        ];
+
+        var result = CaseMatcher.Match("Audyt Grupa Beta Logistics Polska", cases, MatchTextSource.MeetingTitle);
+
+        Assert.Equal(MatchKind.Multiple, result.Kind);
+        Assert.Null(result.MatchedCase);
+        Assert.Equal(2, result.Candidates.Count);
+    }
+
+    [Fact]
+    public void Match_RozlaczneTrafieniaDwochSprawPozostajaNiejednoznaczne()
+    {
+        // Spotkanie międzysprawowe: numer jednej sprawy (3 tokeny) i klient drugiej
+        // (1 token) w RÓŻNYCH miejscach tytułu. Dłuższe trafienie wygrywa wyłącznie
+        // z trafieniem przykrytym w tym samym miejscu tekstu — rozłączne wzmianki
+        // to niezależne dowody i aplikacja nie może zgadywać, której sprawy dotyczy czas.
+        var result = CaseMatcher.Match(
+            "Omówienie NT-2026-113 z Kowalski", TestHelpers.CreateTestCases(), MatchTextSource.MeetingTitle);
+
+        Assert.Equal(MatchKind.Multiple, result.Kind);
+        Assert.Null(result.MatchedCase);
+        Assert.Equal(2, result.Candidates.Count);
+    }
 }

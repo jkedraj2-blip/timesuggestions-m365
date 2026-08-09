@@ -87,11 +87,12 @@ public class TextNormalizerTests
 
     [Theory]
     [InlineData("Sprint v2", "sprint v2")]
-    [InlineData("Przegląd (2)", "przeglad (2)")]
+    [InlineData("Przegląd (2)", "przeglad 2")]
     public void NormalizeText_ZachowujeTokenyWersji(string input, string expected)
     {
         // vN i (N) są jednoznacznymi oznaczeniami wersji tylko w nazwach plików —
-        // w tytule spotkania "Sprint v2" to pełnoprawne słowo.
+        // w tytule spotkania "Sprint v2" to pełnoprawne słowo, a z "(2)" zostaje
+        // token "2" (nawiasy są separatorami jak każda interpunkcja).
         Assert.Equal(expected, TextNormalizer.NormalizeText(input));
     }
 
@@ -116,5 +117,19 @@ public class TextNormalizerTests
     public void NormalizeText_ZwracaPustyTekstDlaPustegoWejscia(string? input)
     {
         Assert.Equal(string.Empty, TextNormalizer.NormalizeText(input));
+    }
+
+    [Theory]
+    [InlineData("Kowalski, przegląd umowy", "kowalski przeglad umowy")]
+    [InlineData("Spotkanie „Kowalski”: umowa!", "spotkanie kowalski umowa")]
+    [InlineData("Spotkanie\u00A0z\u00A0Kowalski", "spotkanie z kowalski")] // twarde spacje (NBSP)
+    [InlineData("Notatka 🚀 — l'affaire", "notatka l affaire")]
+    public void NormalizeText_KazdyZnakNieliterowyJestSeparatorem(string input, string expected)
+    {
+        // Wąska lista separatorów (_ . - /) przyklejała interpunkcję do tokenów
+        // i "kowalski," nie równało się "kowalski". Separator to każdy znak
+        // niebędący literą ani cyfrą — także cudzysłowy drukarskie, twarda
+        // spacja (NBSP z Worda/Outlooka), emoji i apostrofy.
+        Assert.Equal(expected, TextNormalizer.NormalizeText(input));
     }
 }

@@ -37,7 +37,16 @@ public record MatchResult(MatchKind Kind, Case? MatchedCase, IReadOnlyList<Case>
 /// pełnych tokenów znormalizowanego tekstu, bez uczenia maszynowego (świadoma decyzja zakresu).
 /// Termin jednowyrazowy pasuje tylko do identycznego tokenu, wielowyrazowy — do ciągu
 /// kolejnych pełnych tokenów; dzięki temu "Alfa" nie pasuje do "Alfabet".
-/// Świadomy kompromis: odmiany fleksyjne ("Kowalskiego") nie są już dopasowywane —
+/// Gdy trafienie jednej sprawy zawiera się W CAŁOŚCI w dłuższym trafieniu innej,
+/// wygrywa dłuższe: "Audyt Beta Logistics" idzie do klienta "Beta Logistics"
+/// (2 tokeny), a nie do sprawy ze słowem kluczowym "Beta" (1 token) — słowo "beta"
+/// jest tu częścią dłuższej nazwy. Trafienia ROZŁĄCZNE lub tylko ZAHACZAJĄCE o siebie
+/// to osobne dowody i długość niczego nie rozstrzyga: "Omówienie NT-2026-113
+/// z Kowalski" wymienia dwie sprawy i pozostaje niejednoznaczne, choć numer sprawy
+/// ma więcej tokenów niż nazwisko.
+/// Remis długości też pozostaje niejednoznaczny ("Analiza Beta" przy dwóch
+/// sprawach z keywordem "Beta").
+/// Świadomy kompromis: odmiany fleksyjne ("Kowalskiego") nie są dopasowywane —
 /// można je dodać jako słowa kluczowe sprawy.
 /// </summary>
 public static class CaseMatcher
@@ -62,49 +71,83 @@ public static class CaseMatcher
 
         var textTokens = normalizedText.Split(' ');
         var matchedCases = activeCases
-            .Where(candidate => MatchesAnyTerm(textTokens, candidate))
+            .Select(candidate => (Case: candidate, Occurrences: FindTermOccurrences(textTokens, candidate)))
+            .Where(matched => matched.Occurrences.Count > 0)
             .ToList();
 
-        return matchedCases.Count switch
+        if (matchedCases.Count == 0)
         {
-            0 => MatchResult.None,
-            1 => MatchResult.Single(matchedCases[0]),
-            _ => MatchResult.Multiple(matchedCases),
-        };
+            return MatchResult.None;
+        }
+
+        // Sprawa odpada tylko wtedy, gdy KAŻDE jej trafienie zawiera się W CAŁOŚCI
+        // w ściśle dłuższym trafieniu innej sprawy — wtedy jej słowa są jedynie
+        // fragmentem cudzej, pełniejszej nazwy. Samo zahaczenie o wspólne słowo nie
+        // wystarcza: trafienie wystające poza cudze choćby jednym tokenem (np.
+        // "logistics polska" obok "grupa beta logistics") niesie dowód, którego
+        // dłuższe trafienie nie tłumaczy. Trafienie w innym miejscu tekstu to również
+        // niezależny dowód i sprawa zostaje kandydatem; przy spotkaniu
+        // międzysprawowym decyzję musi podjąć użytkownik.
+        var candidates = matchedCases
+            .Where(matched => matched.Occurrences.Any(occurrence =>
+                !matchedCases.Any(other => other.Case != matched.Case
+                    && other.Occurrences.Any(otherOccurrence =>
+                        otherOccurrence.Length > occurrence.Length
+                        && Contains(otherOccurrence, occurrence)))))
+            .Select(matched => matched.Case)
+            .ToList();
+
+        return candidates.Count == 1
+            ? MatchResult.Single(candidates[0])
+            : MatchResult.Multiple(candidates);
     }
 
-    private static bool MatchesAnyTerm(string[] textTokens, Case candidate)
-        => GetSearchTerms(candidate)
-            .Select(TextNormalizer.NormalizeText)
-            .Where(term => term.Length > 0)
-            .Any(term => ContainsTokenSequence(textTokens, term.Split(' ')));
+    /// <summary>Wystąpienie terminu w tekście: indeks pierwszego tokenu i długość w tokenach.</summary>
+    private readonly record struct TermOccurrence(int Start, int Length);
+
+    private static bool Contains(TermOccurrence outer, TermOccurrence inner)
+        => outer.Start <= inner.Start && inner.Start + inner.Length <= outer.Start + outer.Length;
 
     /// <summary>
-    /// Sprawdza, czy tokeny terminu występują w tekście jako ciąg kolejnych pełnych tokenów.
-    /// Numery spraw działają bez zmian: normalizacja zamienia separatory na spacje,
-    /// więc "NT-2026-113" i tekst "Analiza NT-2026-113" dają te same tokeny.
+    /// Wszystkie wystąpienia wszystkich terminów sprawy jako ciągów kolejnych pełnych
+    /// tokenów tekstu. Numery spraw działają bez zmian: normalizacja zamienia separatory
+    /// na spacje, więc "NT-2026-113" i tekst "Analiza NT-2026-113" dają te same tokeny.
     /// </summary>
-    private static bool ContainsTokenSequence(string[] textTokens, string[] termTokens)
+    private static List<TermOccurrence> FindTermOccurrences(string[] textTokens, Case candidate)
     {
-        for (var start = 0; start <= textTokens.Length - termTokens.Length; start++)
+        var occurrences = new List<TermOccurrence>();
+        foreach (var term in GetSearchTerms(candidate))
         {
-            var allMatch = true;
-            for (var offset = 0; offset < termTokens.Length; offset++)
+            var normalizedTerm = TextNormalizer.NormalizeText(term);
+            if (normalizedTerm.Length == 0)
             {
-                if (!string.Equals(textTokens[start + offset], termTokens[offset], StringComparison.Ordinal))
-                {
-                    allMatch = false;
-                    break;
-                }
+                continue;
             }
 
-            if (allMatch)
+            var termTokens = normalizedTerm.Split(' ');
+            for (var start = 0; start <= textTokens.Length - termTokens.Length; start++)
             {
-                return true;
+                if (MatchesAt(textTokens, termTokens, start))
+                {
+                    occurrences.Add(new TermOccurrence(start, termTokens.Length));
+                }
             }
         }
 
-        return false;
+        return occurrences;
+    }
+
+    private static bool MatchesAt(string[] textTokens, string[] termTokens, int start)
+    {
+        for (var offset = 0; offset < termTokens.Length; offset++)
+        {
+            if (!string.Equals(textTokens[start + offset], termTokens[offset], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static IEnumerable<string> GetSearchTerms(Case candidate)

@@ -25,8 +25,10 @@ public static partial class TextNormalizer
     [GeneratedRegex(@"^v\d+$")]
     private static partial Regex VersionTokenPattern();
 
-    [GeneratedRegex(@"^\(\d+\)$")]
-    private static partial Regex CopyNumberTokenPattern();
+    // Zdejmowany ze stringa PRZED zamianą separatorów — po niej nawiasy stają się
+    // spacjami i z "(2)" zostałby goły token "2", nieodróżnialny od znaczącej liczby.
+    [GeneratedRegex(@"\(\d+\)")]
+    private static partial Regex CopyNumberPattern();
 
     /// <summary>Normalizacja nazwy pliku — z rozszerzeniem i tokenami wersji vN/(N).</summary>
     public static string NormalizeDocumentName(string? text) => NormalizeCore(text, isDocumentName: true);
@@ -45,6 +47,7 @@ public static partial class TextNormalizer
         if (isDocumentName)
         {
             lowered = RemoveFileExtension(lowered);
+            lowered = CopyNumberPattern().Replace(lowered, " ");
         }
 
         lowered = RemoveDiacritics(lowered);
@@ -56,12 +59,13 @@ public static partial class TextNormalizer
             return string.Join(' ', tokens);
         }
 
-        // Tokeny vN i (N) są w nazwach plików jednoznacznymi oznaczeniami wersji —
-        // usuwane wszędzie, żeby "Umowa_v2_KlientX" pasowało do terminu "umowa klientx".
+        // Tokeny vN są w nazwach plików jednoznacznymi oznaczeniami wersji —
+        // usuwane wszędzie, żeby "Umowa_v2_KlientX" pasowało do terminu "umowa klientx"
+        // (kopie "(N)" zdjęte wyżej, jeszcze na całym stringu).
         // Słów "final"/"kopia" NIE ruszamy: to część widocznej nazwy, a ich obcinanie
         // poszerzało terminy spraw (keyword "raport final" degradował się do "raport").
         var meaningfulTokens = tokens
-            .Where(token => !IsVersionToken(token))
+            .Where(token => !VersionTokenPattern().IsMatch(token))
             .ToList();
 
         return string.Join(' ', meaningfulTokens);
@@ -98,10 +102,20 @@ public static partial class TextNormalizer
         return builder.ToString().Normalize(NormalizationForm.FormC);
     }
 
+    /// <summary>
+    /// Separatorem jest KAŻDY znak niebędący literą ani cyfrą — nie tylko _ . - /.
+    /// Wąska lista przyklejała interpunkcję do tokenów ("kowalski," ≠ "kowalski")
+    /// i naturalne tytuły w rodzaju "Kowalski, przegląd umowy", "Spotkanie „Kowalski""
+    /// czy tekst z twardą spacją traciły dopasowanie po przejściu na pełne tokeny.
+    /// </summary>
     private static string ReplaceSeparatorsWithSpaces(string text)
-        => text.Replace('_', ' ').Replace('.', ' ').Replace('-', ' ').Replace('/', ' ');
+    {
+        var builder = new StringBuilder(text.Length);
+        foreach (var character in text)
+        {
+            builder.Append(char.IsLetterOrDigit(character) ? character : ' ');
+        }
 
-    private static bool IsVersionToken(string token)
-        => VersionTokenPattern().IsMatch(token)
-           || CopyNumberTokenPattern().IsMatch(token);
+        return builder.ToString();
+    }
 }

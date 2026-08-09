@@ -138,4 +138,85 @@ public sealed class ArchiveServiceTests : IDisposable
         Assert.Equal(0, result.ArchivedCount);
         Assert.Equal(0, result.TotalMinutes);
     }
+
+    // --- Archiwizacja odrzuconych sugestii ---
+
+    private Suggestion SeedSuggestion(SuggestionStatus status)
+    {
+        var suggestion = new Suggestion
+        {
+            Source = SuggestionSource.Calendar,
+            ExternalId = $"event-{Guid.NewGuid()}",
+            Title = "Spotkanie",
+            StartedAt = Now.AddDays(-1),
+            EntryDate = new DateOnly(2026, 8, 8),
+            DurationMinutes = 60,
+            ProposedDescription = "Spotkanie",
+            Status = status,
+            CreatedAt = Now,
+        };
+        db.Suggestions.Add(suggestion);
+        db.SaveChanges();
+        return suggestion;
+    }
+
+    [Fact]
+    public async Task ArchiveRejectedSuggestionsAsync_ArchiwizujeWszystkieOdrzuconeNieDotykaPozostalych()
+    {
+        SeedSuggestion(SuggestionStatus.Rejected);
+        SeedSuggestion(SuggestionStatus.Rejected);
+        var pending = SeedSuggestion(SuggestionStatus.Pending);
+        var approved = SeedSuggestion(SuggestionStatus.Approved);
+
+        var result = await archiveService.ArchiveRejectedSuggestionsAsync(CancellationToken.None);
+
+        Assert.Equal(2, result.ArchivedCount);
+        Assert.Equal(2, await db.Suggestions.CountAsync(s => s.Status == SuggestionStatus.Archived));
+        Assert.Equal(SuggestionStatus.Pending, (await db.Suggestions.SingleAsync(s => s.Id == pending.Id)).Status);
+        Assert.Equal(SuggestionStatus.Approved, (await db.Suggestions.SingleAsync(s => s.Id == approved.Id)).Status);
+    }
+
+    [Fact]
+    public async Task ArchiveRejectedSuggestionsAsync_PonowneWywolanieZwracaZero()
+    {
+        SeedSuggestion(SuggestionStatus.Rejected);
+        await archiveService.ArchiveRejectedSuggestionsAsync(CancellationToken.None);
+
+        var second = await archiveService.ArchiveRejectedSuggestionsAsync(CancellationToken.None);
+
+        Assert.Equal(0, second.ArchivedCount);
+    }
+
+    [Fact]
+    public async Task ArchiveSuggestionAsync_ArchiwizujeOdrzucona()
+    {
+        var rejected = SeedSuggestion(SuggestionStatus.Rejected);
+
+        var result = await archiveService.ArchiveSuggestionAsync(rejected.Id, CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.Success, result.Outcome);
+        Assert.Equal(SuggestionStatus.Archived, (await db.Suggestions.SingleAsync()).Status);
+    }
+
+    [Theory]
+    [InlineData(SuggestionStatus.Pending)]
+    [InlineData(SuggestionStatus.Approved)]
+    [InlineData(SuggestionStatus.Archived)]
+    public async Task ArchiveSuggestionAsync_OdmawiaGdyStatusInnyNizOdrzucona(SuggestionStatus status)
+    {
+        var suggestion = SeedSuggestion(status);
+
+        var result = await archiveService.ArchiveSuggestionAsync(suggestion.Id, CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.SuggestionNotRejected, result.Outcome);
+        Assert.Equal(status, (await db.Suggestions.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task ArchiveSuggestionAsync_ZwracaBrakDlaNieistniejacejSugestii()
+    {
+        var result = await archiveService.ArchiveSuggestionAsync(999, CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.SuggestionNotFound, result.Outcome);
+    }
 }

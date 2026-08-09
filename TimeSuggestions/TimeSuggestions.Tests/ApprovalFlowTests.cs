@@ -79,6 +79,21 @@ public sealed class ApprovalFlowTests : IDisposable
     }
 
     [Fact]
+    public async Task RestoreAsync_OdmawiaDlaZarchiwizowanejSugestii()
+    {
+        // Archiwum jest terminalne: istniejący outcome SuggestionNotRejected pokrywa
+        // też Archived — bez unarchive i bez nowego kodu błędu.
+        var suggestion = await SeedPendingSuggestionAsync();
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync();
+
+        var result = await approvalService.RestoreAsync(suggestion.Id, CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.SuggestionNotRejected, result.Outcome);
+        Assert.Equal(SuggestionStatus.Archived, (await db.Suggestions.SingleAsync()).Status);
+    }
+
+    [Fact]
     public async Task DeleteTimeEntryAsync_UsuwaWpisIPrzywracaSugestieDoOczekujacych()
     {
         var suggestion = await SeedPendingSuggestionAsync();

@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using TimeSuggestions.Data;
+using TimeSuggestions.Models;
 
 namespace TimeSuggestions.Services;
 
 /// <summary>Wynik archiwizacji hurtowej — liczby do komunikatu w UI.</summary>
 public record ArchiveTimeEntriesResult(int ArchivedCount, int TotalMinutes);
+
+public record ArchiveSuggestionsResult(int ArchivedCount);
 
 /// <summary>
 /// Rozliczanie (archiwizacja) wpisów czasu. Celowo osobny serwis od ApprovalService:
@@ -40,5 +43,47 @@ public class ArchiveService(AppDbContext db)
         return new ArchiveTimeEntriesResult(
             activeEntries.Count,
             activeEntries.Sum(entry => entry.DurationMinutes));
+    }
+
+    /// <summary>
+    /// Wszystkie odrzucone → zarchiwizowane. Zero odrzuconych to sukces z zerem.
+    /// Rejected → Archived to jedyna droga do archiwum sugestii: Pending czeka na
+    /// decyzję, a „archiwizacją" Approved jest archiwizacja powiązanego wpisu czasu.
+    /// </summary>
+    public async Task<ArchiveSuggestionsResult> ArchiveRejectedSuggestionsAsync(CancellationToken cancellationToken)
+    {
+        var rejected = await db.Suggestions
+            .Where(suggestion => suggestion.Status == SuggestionStatus.Rejected)
+            .ToListAsync(cancellationToken);
+
+        foreach (var suggestion in rejected)
+        {
+            suggestion.Status = SuggestionStatus.Archived;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ArchiveSuggestionsResult(rejected.Count);
+    }
+
+    /// <summary>Wariant pojedynczy — symetria z reject/restore, ten sam kształt wyniku.</summary>
+    public async Task<ApprovalResult> ArchiveSuggestionAsync(int suggestionId, CancellationToken cancellationToken)
+    {
+        var suggestion = await db.Suggestions
+            .FirstOrDefaultAsync(candidate => candidate.Id == suggestionId, cancellationToken);
+        if (suggestion is null)
+        {
+            return new ApprovalResult(ApprovalOutcome.SuggestionNotFound);
+        }
+
+        if (suggestion.Status != SuggestionStatus.Rejected)
+        {
+            return new ApprovalResult(ApprovalOutcome.SuggestionNotRejected);
+        }
+
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ApprovalResult(ApprovalOutcome.Success);
     }
 }

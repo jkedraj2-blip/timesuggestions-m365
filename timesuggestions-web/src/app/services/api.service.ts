@@ -5,6 +5,8 @@ import { GraphFilesService } from './graph-files.service';
 import { SYNC_DAYS_BACK } from './graph-config';
 import {
   ApprovePayload,
+  ArchiveSuggestionsResult,
+  ArchiveTimeEntriesResult,
   CalendarEventPayload,
   CaseInfo,
   CaseWritePayload,
@@ -134,6 +136,16 @@ export class ApiService {
     await this.request('POST', `/api/suggestions/${suggestionId}/restore`);
   }
 
+  /** Archiwizuje pojedynczą odrzuconą sugestię — operacja jednokierunkowa (bez unarchive). */
+  async archiveSuggestion(suggestionId: number): Promise<void> {
+    await this.request('POST', `/api/suggestions/${suggestionId}/archive`);
+  }
+
+  /** Hurtowa archiwizacja wszystkich odrzuconych — zwraca licznik do komunikatu. */
+  archiveRejectedSuggestions(): Promise<ArchiveSuggestionsResult> {
+    return this.requestJson<ArchiveSuggestionsResult>('POST', '/api/suggestions/archive-rejected');
+  }
+
   getCases(includeInactive = false): Promise<CaseInfo[]> {
     const query = includeInactive ? '?includeInactive=true' : '';
     return this.requestJson<CaseInfo[]>('GET', `/api/cases${query}`);
@@ -151,8 +163,14 @@ export class ApiService {
     await this.request('POST', `/api/cases/${caseId}/${isActive ? 'activate' : 'deactivate'}`);
   }
 
-  getTimeEntries(): Promise<TimeEntriesResponse> {
-    return this.requestJson<TimeEntriesResponse>('GET', '/api/time-entries');
+  getTimeEntries(archived = false): Promise<TimeEntriesResponse> {
+    const query = archived ? '?archived=true' : '';
+    return this.requestJson<TimeEntriesResponse>('GET', `/api/time-entries${query}`);
+  }
+
+  /** Rozliczenie hurtowe: domknięty zakres dat dziennych w formacie ISO (yyyy-MM-dd). */
+  archiveTimeEntries(from: string, to: string): Promise<ArchiveTimeEntriesResult> {
+    return this.requestJson<ArchiveTimeEntriesResult>('POST', '/api/time-entries/archive', { from, to });
   }
 
   async deleteTimeEntry(timeEntryId: number): Promise<void> {

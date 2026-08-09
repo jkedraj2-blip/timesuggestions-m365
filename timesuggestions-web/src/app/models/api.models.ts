@@ -1,7 +1,7 @@
 /** Kontrakty backendu TimeSuggestions — 1:1 z DTO w C# (enumy serializowane jako camelCase). */
 
 export type SuggestionSource = 'calendar' | 'document';
-export type SuggestionStatus = 'pending' | 'approved' | 'rejected';
+export type SuggestionStatus = 'pending' | 'approved' | 'rejected' | 'archived';
 
 export interface CalendarEventPayload {
   id: string;
@@ -96,6 +96,8 @@ export interface TimeEntry {
   /** Tytuł spotkania / nazwa pliku, z którego powstał wpis — kotwica w realnym zdarzeniu. */
   sourceTitle: string | null;
   sourceStartedAt: string | null;
+  /** Moment rozliczenia (UTC); null = wpis aktywny. Zarchiwizowany wpis jest tylko do odczytu. */
+  archivedAt: string | null;
 }
 
 /** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */
@@ -115,9 +117,21 @@ export interface Summary {
   pendingCount: number;
   approvedCount: number;
   rejectedCount: number;
-  totalLoggedMinutes: number;
+  /** Suma minut wpisów AKTYWNYCH — archiwizacja jest jedynym „resetem" tej liczby. */
+  unsettledMinutes: number;
   todayLoggedMinutes: number;
   lastSyncAt: string | null;
+}
+
+/** Wynik rozliczenia hurtowego wpisów — liczby do komunikatu w UI. */
+export interface ArchiveTimeEntriesResult {
+  archivedCount: number;
+  totalMinutes: number;
+}
+
+/** Wynik hurtowej archiwizacji odrzuconych sugestii. */
+export interface ArchiveSuggestionsResult {
+  archivedCount: number;
 }
 
 export interface SyncFetchedCounts {

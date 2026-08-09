@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  archivedSuggestionsToast,
   filteredOutLine,
   normalizedDocumentMinutes,
   normalizedSyncDays,
@@ -38,6 +39,14 @@ describe('syncReportHeadline', () => {
     expect(syncReportHeadline({ created: 5, updated: 0, removed: 0 })).toBe(
       'Synchronizacja zakończona: 5 nowych sugestii.',
     );
+  });
+});
+
+describe('archivedSuggestionsToast', () => {
+  it('odmienia sugestie przez polishPlural', () => {
+    expect(archivedSuggestionsToast(1)).toBe('Zarchiwizowano 1 sugestię.');
+    expect(archivedSuggestionsToast(3)).toBe('Zarchiwizowano 3 sugestie.');
+    expect(archivedSuggestionsToast(5)).toBe('Zarchiwizowano 5 sugestii.');
   });
 });
 

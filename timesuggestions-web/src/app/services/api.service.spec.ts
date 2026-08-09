@@ -156,3 +156,79 @@ describe('ApiService.syncNow', () => {
     expect(request.calendarSnapshotComplete).toBe(false);
   });
 });
+
+describe('ApiService — endpointy archiwizacji', () => {
+  let service: ApiService;
+
+  beforeEach(() => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: AuthService,
+          useValue: {
+            getToken: () => Promise.resolve('token'),
+            account: { homeAccountId: 'account-1', username: 'user@example.com', name: 'User' },
+          },
+        },
+      ],
+    });
+    service = TestBed.inject(ApiService);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function stubFetch(body: unknown, status = 200) {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      status === 204 ? new Response(null, { status }) : jsonResponse(body),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('getTimeEntries bez parametru pobiera aktywne, z archived=true — archiwum', async () => {
+    const fetchMock = stubFetch({ totalMinutes: 0, days: [] });
+
+    await service.getTimeEntries();
+    await service.getTimeEntries(true);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/time-entries');
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('archived');
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/api/time-entries?archived=true');
+  });
+
+  it('archiveTimeEntries wysyła POST z domkniętym zakresem dat ISO', async () => {
+    const fetchMock = stubFetch({ archivedCount: 2, totalMinutes: 90 });
+
+    const result = await service.archiveTimeEntries('2026-08-01', '2026-08-09');
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/api/time-entries/archive');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ from: '2026-08-01', to: '2026-08-09' });
+    expect(result).toEqual({ archivedCount: 2, totalMinutes: 90 });
+  });
+
+  it('archiveRejectedSuggestions wysyła POST i zwraca licznik', async () => {
+    const fetchMock = stubFetch({ archivedCount: 3 });
+
+    const result = await service.archiveRejectedSuggestions();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/api/suggestions/archive-rejected');
+    expect(init?.method).toBe('POST');
+    expect(result).toEqual({ archivedCount: 3 });
+  });
+
+  it('archiveSuggestion wysyła POST pod adres pojedynczej sugestii', async () => {
+    const fetchMock = stubFetch(null, 204);
+
+    await service.archiveSuggestion(7);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/api/suggestions/7/archive');
+    expect(init?.method).toBe('POST');
+  });
+});

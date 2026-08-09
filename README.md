@@ -52,11 +52,12 @@ są walidowane przed dołączeniem nagłówka `Authorization`.
 
 | Widok | Rola |
 |---|---|
-| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, filtr źródła i statusu, przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego, co zaktualizowano), wskaźnik postępu, przywracanie odrzuconych, regulowany domyślny czas dokumentu i zakres synchronizacji (7/14/30 dni; szerszy przydaje się np. po urlopie) |
-| **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami i pochodzeniem (z jakiego spotkania/pliku powstały); usunięcie wpisu przywraca sugestię |
+| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, filtr źródła i statusu (oczekujące / odrzucone / zarchiwizowane), przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego, co zaktualizowano), wskaźnik postępu, przywracanie odrzuconych, archiwizacja odrzuconych (hurtowo i pojedynczo), regulowany domyślny czas dokumentu i zakres synchronizacji (7/14/30 dni; szerszy przydaje się np. po urlopie) |
+| **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami i pochodzeniem (z jakiego spotkania/pliku powstały); przełącznik widoków Aktywne / Archiwum; "Cofnij zatwierdzenie" usuwa aktywny wpis i przywraca sugestię; rozliczanie okresowe (dzień, ostatni tydzień, bieżący miesiąc, wszystko) z dwustopniowym potwierdzeniem przenosi wpisy do archiwum |
 | **Sprawy** | Zarządzanie sprawami: dodawanie, edycja (w tym słów kluczowych sterujących dopasowaniem), dezaktywacja (celowo bez twardego usuwania); wyjaśnienie zasady dopasowania |
 
-Nad zakładkami znajdują się kafelki podsumowania: oczekujące sugestie, zapisane wpisy, łączny czas,
+Nad zakładkami znajdują się kafelki podsumowania: oczekujące sugestie, zapisane wpisy,
+nierozliczony czas (tylko aktywne wpisy; archiwizacja zdejmuje godziny z kafelka),
 ostatnia synchronizacja. W nagłówku przełącznik trzech motywów (jasny / niebieski / ciemny),
 realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 
@@ -75,6 +76,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | **Rekonsyliacja kalendarza** | Backend rekonsyliuje kalendarz per spotkanie: przeniesione spotkanie aktualizuje istniejącą oczekującą sugestię w miejscu (bez „ducha" pod starą datą), odrzucenie jest „lepkie" per spotkanie (zmiana terminu nie przywraca sugestii), a oczekujące sugestie spotkań usuniętych lub już nierozliczalnych (anulowane/prywatne/całodniowe) znikają, a raport pokazuje je w liczniku „usunięte". Część destrukcyjna działa wyłącznie, gdy frontend zadeklaruje kompletny snapshot (`calendarSnapshotComplete`, czyli wszystkie strony pobrane bez błędu) wraz z zakresem dni (`calendarSnapshotDaysBack`), i tylko w przecięciu tego zakresu z oknem backendu; częściowe pobranie ani rozjazd konfiguracji okien nie skasują prawidłowych sugestii. Dokumentów to nie dotyczy: delta jest przyrostowa i nieobecność pliku w feedzie niczego nie dowodzi, więc czyszczą je wyłącznie jawne tombstone'y. |
 | **Współbieżność rozstrzygana w bazie** | Indeksy unikalne (`TimeEntries.SuggestionId`, `Cases.CaseNumber`) domykają wyścigi: równoległe zatwierdzenie/duplikat numeru sprawy kończy się jawnym 409, a synchronizacja po konflikcie ponawia scalanie na czystym stanie kontekstu. Na 409 mapowane jest wyłącznie naruszenie unikalności (SQLite 2067), nie ogólne błędy constraintów. |
 | **Dezaktywacja zamiast usuwania spraw** | Wpisy czasu wskazują na sprawy kluczem obcym, więc twarde usunięcie niszczyłoby dane rozliczeniowe. `IsActive=false` wyłącza sprawę z dopasowania i list wyboru, zachowując historię. |
+| **Archiwum zamiast usuwania** | Rozliczone wpisy (`TimeEntry.ArchivedAt`, znacznik czasu zamiast flagi: darmowy ślad audytowy "kiedy rozliczono") i schowane odrzucone sugestie (status `Archived`) trafiają do jednokierunkowego archiwum. Archiwum blokuje edycję: DELETE rozliczonego wpisu i restore zarchiwizowanej sugestii zwracają 409; rozliczony czas jest niezmienny, a korekta (storno) to świadomie odłożona przyszła funkcja. Zarchiwizowana sugestia zostaje w bazie i przy synchronizacji dalej blokuje ponowne utworzenie tej samej pozycji (anty-nawrót jak przy odrzuceniu). Kafelek w nagłówku liczy wyłącznie nierozliczone wpisy; archiwizacja jest jedynym "resetem" tej liczby. |
 | **Edycja = zatwierdzenie z poprawionymi wartościami** | Jeden endpoint `approve` przyjmuje wartości finalne: mniej ścieżek, ta sama walidacja. |
 | **Raport z synchronizacji** | Backend zwraca liczniki: ile pobrano, ile odfiltrowano per reguła, ile zagregowano, jak dopasowano. Bez tego odfiltrowanie spotkań wygląda dla użytkownika jak zgubione dane. |
 
@@ -86,12 +88,15 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące) |
 | `POST /api/suggestions/{id}/approve` | Tworzy wpis czasu, zamyka sugestię |
 | `POST /api/suggestions/{id}/reject` | Odrzuca (status, bez usuwania) |
-| `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą do oczekujących |
+| `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą do oczekujących (409 dla zarchiwizowanej: archiwum jest terminalne) |
+| `POST /api/suggestions/{id}/archive` | Archiwizuje pojedynczą odrzuconą sugestię (409, gdy status inny niż odrzucona) |
+| `POST /api/suggestions/archive-rejected` | Hurtowo archiwizuje wszystkie odrzucone sugestie, zwraca licznik |
 | `GET /api/cases?includeInactive=` | Sprawy ze słowami kluczowymi (domyślnie tylko aktywne) |
 | `POST /api/cases`, `PUT /api/cases/{id}` | Dodawanie i edycja spraw (unikalny numer sprawy) |
 | `POST /api/cases/{id}/activate` / `deactivate` | Przełączanie aktywności (zamiast usuwania) |
-| `GET /api/time-entries` | Wpisy pogrupowane po dniach z sumami |
-| `DELETE /api/time-entries/{id}` | Usuwa wpis i przywraca sugestię |
+| `GET /api/time-entries?archived=` | Wpisy pogrupowane po dniach z sumami (domyślnie aktywne; `archived=true` zwraca archiwum, suma dotyczy zwróconego widoku) |
+| `POST /api/time-entries/archive` | Rozlicza (archiwizuje) aktywne wpisy z domkniętego zakresu dat (maks. 366 dni); idempotentne, zwraca liczbę wpisów i sumę minut |
+| `DELETE /api/time-entries/{id}` | Cofa zatwierdzenie: usuwa aktywny wpis i przywraca sugestię; 409 dla wpisu rozliczonego |
 | `GET /api/summary` | Liczniki do kafelków podsumowania |
 
 Przykładowe wywołania wszystkich endpointów: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
@@ -134,7 +139,7 @@ i nie możesz jej uzyskać, utwórz własną rejestrację (platforma **SPA**, re
 `http://localhost:4200`, te same uprawnienia) i podmień `entraClientId`
 w `environment.ts`.
 
-**Testy** (175 testów backendu xUnit + 83 testy frontendu Vitest; bez sieci i logowania):
+**Testy** (207 testów backendu xUnit + 102 testy frontendu Vitest; bez sieci i logowania):
 
 ```bash
 cd TimeSuggestions
@@ -154,22 +159,26 @@ TimeSuggestions/
     Configuration/          opcje (progi czasowe, okno syncu)
     Contracts/              DTO wejścia/wyjścia + walidacja + raport syncu
     Controllers/            cienkie kontrolery REST
-    Data/                   DbContext + seed spraw testowych
+    Data/                   DbContext + seed spraw, migrator z kopią bazy,
+                            mapowanie błędów unikalności SQLite (2067 → 409)
     Migrations/             migracje EF Core (SQLite)
-    Models/                 encje: Case, Suggestion, TimeEntry, SyncRun
+    Models/                 encje (Case, Suggestion, TimeEntry, SyncRun)
+                            + enumy źródła i statusu sugestii
     Services/               logika czysta (normalizacja, filtr z licznikami,
-                            dopasowanie, budowa sugestii) + serwisy aplikacyjne
-                            (sync, approval, summary)
+                            dopasowanie, budowa sugestii, strefy i zmiana czasu)
+                            + serwisy aplikacyjne (sync, approval, summary)
   TimeSuggestions.Tests/    xUnit + fixtures JSON (TestData/)
 timesuggestions-web/
   src/app/
     components/             suggestion-card
     pages/                  suggestions-page, time-entries-page, cases-page
     models/                 typy 1:1 z DTO backendu i Graph
-    pipes/                  duration (minuty → "1 godz. 30 min")
+    pipes/                  duration (minuty → "1 godz. 30 min"),
+                            polish-plural (odmiana liczebników)
     services/               auth (MSAL), graph-http (walidacja URL, retry, timeout),
                             graph-calendar, graph-files (delta+cache+tombstone'y),
-                            api, summary-store, toast, data-refresh, user-message
+                            graph-config (stałe Graph), api, summary-store,
+                            theme (motywy), toast, data-refresh, user-message
   src/styles.css            system wizualny: tokeny, komponenty, ciemny motyw
 ```
 
@@ -200,8 +209,15 @@ timesuggestions-web/
   UI wymienia pasujące sprawy).
 - Zatwierdzenie wymaga wybranej sprawy i czasu 1–1440 min; tworzy `TimeEntry` ze źródłem
   pochodzenia i referencją do sugestii (dokładnie jeden wpis na sugestię, co gwarantuje
-  indeks unikalny). Każda decyzja jest odwracalna (Cofnij / Przywróć / Usuń), a „Cofnij" działa
-  także po przejściu na inną zakładkę.
+  indeks unikalny). Decyzje są odwracalne (Cofnij / Przywróć / Cofnij zatwierdzenie),
+  a „Cofnij" działa także po przejściu na inną zakładkę; jedynym świadomym wyjątkiem
+  jest rozliczenie (archiwizacja), które jest nieodwracalne.
+- Cykl życia wpisu czasu: aktywny, potem rozliczony (zarchiwizowany). Rozliczenie jest
+  hurtowe (dzień albo zakres dat, maks. 366 dni), jednokierunkowe i blokuje edycję;
+  „Cofnij zatwierdzenie" działa wyłącznie dla wpisów aktywnych. Odrzuconą sugestię
+  można zarchiwizować (Rejected → Archived, stan terminalny bez unarchive);
+  zarchiwizowana nadal chroni przed ponownym utworzeniem tej samej pozycji
+  przy synchronizacji.
 
 ### Przykłady dopasowania
 
@@ -327,6 +343,10 @@ rozbudowałbym go w następującej kolejności:
 - **Paginacja i ochrona API**: paginacja sugestii oraz wpisów czasu, a także rate
   limiting skonfigurowany per użytkownik, szczególnie dla kosztownych operacji
   synchronizacji.
+- **Korekty rozliczonych wpisów (storno)**: archiwum celowo blokuje edycję i cofanie
+  rozliczonego czasu, więc pomyłka wykryta po rozliczeniu wymaga dziś poprawki poza
+  aplikacją. Docelowo dodałbym jawną operację korygującą (wpis storno z referencją
+  do oryginału) zamiast cichej edycji historii, a do archiwum retencję i eksport.
 - **Monitoring i obsługa błędów**: centralne `ProblemDetails`, strukturalne logowanie,
   identyfikatory żądań, metryki, health checks i alerty. Logi nie mogłyby zawierać
   tokenów, nagłówków autoryzacji, tytułów spotkań ani nazw poufnych dokumentów.

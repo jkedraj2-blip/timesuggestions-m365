@@ -53,12 +53,31 @@ POST {{TimeSuggestions_HostAddress}}/api/suggestions/2/restore
 GET {{TimeSuggestions_HostAddress}}/api/suggestions?status=rejected
 Accept: application/json
 
-### Podsumowanie do kafelków (liczniki, łączny czas, ostatnia synchronizacja)
+### Archiwizacja pojedynczej odrzuconej sugestii (id=2) — 409, gdy status inny niż odrzucona
+POST {{TimeSuggestions_HostAddress}}/api/suggestions/2/archive
+
+### Hurtowa archiwizacja wszystkich odrzuconych sugestii — zwraca licznik
+POST {{TimeSuggestions_HostAddress}}/api/suggestions/archive-rejected
+
+### Lista zarchiwizowanych sugestii — nadal blokują nawroty przy synchronizacji
+GET {{TimeSuggestions_HostAddress}}/api/suggestions?status=archived
+Accept: application/json
+
+### Podsumowanie do kafelków (liczniki, nierozliczony czas, ostatnia synchronizacja)
 GET {{TimeSuggestions_HostAddress}}/api/summary
 Accept: application/json
 
-### Usunięcie wpisu czasu (id=1) — przywraca sugestię źródłową do oczekujących
+### Cofnięcie zatwierdzenia (id=1) — usuwa aktywny wpis i przywraca sugestię; 409 dla rozliczonego
 DELETE {{TimeSuggestions_HostAddress}}/api/time-entries/1
+
+### Rozliczenie (archiwizacja) wpisów z zakresu dat — idempotentne, zwraca liczbę wpisów i sumę minut
+POST {{TimeSuggestions_HostAddress}}/api/time-entries/archive
+Content-Type: application/json
+
+{
+  "from": "2026-08-01",
+  "to": "2026-08-09"
+}
 
 ### Aktywne sprawy (do dropdownu edycji)
 GET {{TimeSuggestions_HostAddress}}/api/cases
@@ -96,6 +115,10 @@ POST {{TimeSuggestions_HostAddress}}/api/cases/1/deactivate
 ### Ponowna aktywacja sprawy (id=1)
 POST {{TimeSuggestions_HostAddress}}/api/cases/1/activate
 
-### Wpisy czasu pracy (weryfikacja na demo)
+### Wpisy czasu pracy (weryfikacja na demo; domyślnie tylko aktywne)
 GET {{TimeSuggestions_HostAddress}}/api/time-entries
+Accept: application/json
+
+### Archiwum wpisów czasu — rozliczone, tylko do odczytu
+GET {{TimeSuggestions_HostAddress}}/api/time-entries?archived=true
 Accept: application/json

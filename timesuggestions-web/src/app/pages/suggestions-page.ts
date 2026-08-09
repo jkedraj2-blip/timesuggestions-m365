@@ -26,6 +26,11 @@ const DOCUMENT_MINUTES_MAX = 480;
 /** Wartość startowa pola — odpowiednik Suggestions:DefaultDocumentDurationMinutes w backendzie. */
 const DOCUMENT_MINUTES_DEFAULT = 30;
 
+/** Klucz localStorage z preferencją zakresu synchronizacji. */
+const SYNC_DAYS_STORAGE_KEY = 'timesuggestions.syncDaysBack';
+/** Zakresy do wyboru w UI — szerzej niż 30 dni rośnie tylko czas pobierania kalendarza. */
+export const SYNC_DAYS_OPTIONS = [7, 14, 30] as const;
+
 /** Wartość spoza zakresu traktujemy jak brak preferencji — backend użyje swojej konfiguracji. */
 export function normalizedDocumentMinutes(raw: unknown): number | undefined {
   const value = Number(raw);
@@ -33,6 +38,12 @@ export function normalizedDocumentMinutes(raw: unknown): number | undefined {
     && value >= DOCUMENT_MINUTES_MIN
     && value <= DOCUMENT_MINUTES_MAX;
   return isValid ? value : undefined;
+}
+
+/** Zakres spoza listy (ręcznie zmieniony localStorage) wraca do domyślnego okna. */
+export function normalizedSyncDays(raw: unknown): number {
+  const value = Number(raw);
+  return (SYNC_DAYS_OPTIONS as readonly number[]).includes(value) ? value : SYNC_DAYS_BACK;
 }
 
 type SourceFilter = 'all' | SuggestionSource;
@@ -63,75 +74,106 @@ export function syncReportHeadline(report: Pick<SyncReport, 'created' | 'updated
  * "Sprawdzono" zamiast "pobrano" — każdy sync celowo pobiera pełny snapshot
  * okna (wykrywanie usuniętych/przeniesionych spotkań), więc liczba powtarza
  * się co sync i ma brzmieć jak kontrola, nie jak nowe dane. Zera pomijamy.
+ * Liczba dni pochodzi z raportu (windowDays) — faktycznie użyte okno backendu.
  */
-export function syncCheckedLine(fetched: SyncFetchedCounts): string {
+export function syncCheckedLine(fetched: SyncFetchedCounts, windowDays: number): string {
   const meetings = fetched.calendarEvents;
   const files = fetched.driveFiles;
   if (meetings === 0 && files === 0) {
-    return `Brak spotkań i plików do sprawdzenia w ostatnich ${SYNC_DAYS_BACK} dniach.`;
+    return `Brak spotkań i plików do sprawdzenia w ostatnich ${windowDays} dniach.`;
   }
   const meetingsText = `${meetings} ${polishPlural(meetings, 'spotkanie', 'spotkania', 'spotkań')}`;
   const filesText = `${files} ${polishPlural(files, 'plik', 'pliki', 'plików')}`;
   if (files === 0) {
-    return `Sprawdzono ${meetingsText} z ostatnich ${SYNC_DAYS_BACK} dni.`;
+    return `Sprawdzono ${meetingsText} z ostatnich ${windowDays} dni.`;
   }
   if (meetings === 0) {
-    return `Sprawdzono ${filesText} z ostatnich ${SYNC_DAYS_BACK} dni.`;
+    return `Sprawdzono ${filesText} z ostatnich ${windowDays} dni.`;
   }
-  return `Sprawdzono ${meetingsText} z ostatnich ${SYNC_DAYS_BACK} dni i ${filesText}.`;
+  return `Sprawdzono ${meetingsText} z ostatnich ${windowDays} dni i ${filesText}.`;
 }
 
 /** "Pominięto (już istniały)" po ludzku — powtórny sync niczego nie duplikuje. */
 export function syncSkippedLine(count: number): string {
   const subject = polishPlural(count, 'pozycja była', 'pozycje były', 'pozycji było');
-  return `${count} ${subject} już wcześniej na liście sugestii — nic nie duplikujemy.`;
+  return `${count} ${subject} już wcześniej na liście sugestii, więc nic nie duplikujemy.`;
 }
 
 /**
- * Rozbicie odrzuceń na niezerowe pozycje sklejone separatorem — join() zamiast
- * spanów z doklejonym "· " w szablonie, bo tam separator wisiał także po
- * ostatniej wyrenderowanej pozycji. Etykiety opisują powód z perspektywy
- * użytkownika, nie nazwy licznika.
+ * Powody odrzuceń jako pary (liczba, etykieta) — etykiety opisują powód
+ * z perspektywy użytkownika, nie nazwy licznika. Odmieniane liczebnikiem,
+ * bo określają "pozycję/pozycje/pozycji" ze wstępu ("5 odwołanych", nie "5 odwołane").
  */
-export function filteredOutBreakdown(filtered: SyncFilteredOutCounts): string {
-  const parts: string[] = [];
+function filteredOutParts(
+  filtered: SyncFilteredOutCounts,
+  windowDays: number,
+): Array<{ count: number; label: string }> {
+  const parts: Array<{ count: number; label: string }> = [];
   if (filtered.private > 0) {
-    parts.push(`${filtered.private} prywatne lub poufne (ich tytuły nie opuszczają przeglądarki)`);
+    parts.push({
+      count: filtered.private,
+      label: `${polishPlural(filtered.private, 'prywatna lub poufna', 'prywatne lub poufne', 'prywatnych lub poufnych')}`
+        + ' (tytuły nie opuszczają przeglądarki)',
+    });
   }
   if (filtered.cancelled > 0) {
-    parts.push(`${filtered.cancelled} odwołane`);
+    parts.push({
+      count: filtered.cancelled,
+      label: polishPlural(filtered.cancelled, 'odwołana', 'odwołane', 'odwołanych'),
+    });
   }
   if (filtered.tooShort > 0) {
-    parts.push(`${filtered.tooShort} krótsze niż 5 minut`);
+    parts.push({
+      count: filtered.tooShort,
+      label: polishPlural(filtered.tooShort, 'krótsza', 'krótsze', 'krótszych') + ' niż 5 minut',
+    });
   }
   if (filtered.allDay > 0) {
-    parts.push(`${filtered.allDay} całodniowe`);
+    parts.push({
+      count: filtered.allDay,
+      label: polishPlural(filtered.allDay, 'całodniowa', 'całodniowe', 'całodniowych'),
+    });
   }
   if (filtered.invalidDates > 0) {
-    parts.push(`${filtered.invalidDates} z błędnymi datami`);
+    parts.push({ count: filtered.invalidDates, label: 'z błędnymi datami' });
   }
   if (filtered.notOfficeDocument > 0) {
-    parts.push(`${filtered.notOfficeDocument} ${polishPlural(
-      filtered.notOfficeDocument, 'plik inny niż Word/Excel', 'pliki inne niż Word/Excel', 'plików innych niż Word/Excel')}`);
+    parts.push({
+      count: filtered.notOfficeDocument,
+      label: polishPlural(
+        filtered.notOfficeDocument, 'plik inny niż Word/Excel', 'pliki inne niż Word/Excel', 'plików innych niż Word/Excel'),
+    });
   }
   if (filtered.outsideWindow > 0) {
-    parts.push(`${filtered.outsideWindow} poza zakresem ostatnich ${SYNC_DAYS_BACK} dni (np. spotkanie, które jeszcze się nie odbyło)`);
+    parts.push({
+      count: filtered.outsideWindow,
+      label: `sprzed rozliczanego zakresu ostatnich ${windowDays} dni`,
+    });
   }
   if (filtered.notModifiedByUser > 0) {
-    parts.push(`${filtered.notModifiedByUser} zmodyfikowane przez kogoś innego`);
+    parts.push({
+      count: filtered.notModifiedByUser,
+      label: polishPlural(
+        filtered.notModifiedByUser, 'zmodyfikowana', 'zmodyfikowane', 'zmodyfikowanych') + ' przez kogoś innego',
+    });
   }
-  return parts.join(' · ');
+  return parts;
 }
 
-/** Pełna linia odrzuceń: wstęp z odmianą + rozbicie na powody. */
-export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
-  const subject = polishPlural(
-    filtered.total,
-    'pozycję, która nie jest czasem pracy',
-    'pozycje, które nie są czasem pracy',
-    'pozycji, które nie są czasem pracy',
-  );
-  return `Pominięto ${filtered.total} ${subject}: ${filteredOutBreakdown(filtered)}.`;
+/**
+ * Pełna linia odrzuceń: niezerowe powody sklejone separatorem — join() zamiast
+ * spanów z doklejonym "· " w szablonie, bo tam separator wisiał także po
+ * ostatniej wyrenderowanej pozycji. Przy JEDNYM powodzie liczba pada tylko raz —
+ * "Pominięto 1 pozycję: sprzed rozliczanego zakresu…" zamiast dublowania
+ * "1 … 1 …", po którym nie wiadomo, ile pozycji naprawdę pominięto.
+ */
+export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: number): string {
+  const subject = polishPlural(filtered.total, 'pozycję', 'pozycje', 'pozycji');
+  const parts = filteredOutParts(filtered, windowDays);
+  const breakdown = parts.length === 1
+    ? parts[0].label
+    : parts.map((part) => `${part.count} ${part.label}`).join(' · ');
+  return `Pominięto ${filtered.total} ${subject}: ${breakdown}.`;
 }
 
 @Component({
@@ -146,6 +188,15 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
       <label class="field doc-minutes" title="Ile minut przyjąć dla sugestii z dokumentu — Graph nie mierzy czasu edycji. Możesz to potem poprawić na każdej karcie.">
         Domyślny czas dokumentu (min)
         <input type="number" min="1" max="480" [(ngModel)]="documentMinutesDraft" (change)="saveDocumentMinutes()" />
+      </label>
+
+      <label class="field sync-days" title="Z ilu ostatnich dni pobierać spotkania i dokumenty. Szerszy zakres przydaje się np. po urlopie — synchronizacja potrwa wtedy dłużej.">
+        Zakres (dni)
+        <select [(ngModel)]="syncDaysDraft" (change)="saveSyncDays()">
+          @for (option of syncDaysOptions; track option) {
+            <option [ngValue]="option">{{ option }}</option>
+          }
+        </select>
       </label>
 
       <div class="filter-group">
@@ -181,12 +232,12 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
           <strong>{{ headline(report) }}</strong>
         </summary>
         <ul>
-          <li>{{ checkedLine(report.fetched) }}</li>
+          <li>{{ checkedLine(report.fetched, report.windowDays) }}</li>
           @if (report.skippedExisting > 0) {
             <li>{{ skippedLine(report.skippedExisting) }}</li>
           }
           @if (report.filteredOut.total > 0) {
-            <li>{{ filteredLine(report.filteredOut) }}</li>
+            <li>{{ filteredLine(report.filteredOut, report.windowDays) }}</li>
           }
           @if (report.aggregated > 0) {
             <li>Zwinięto {{ report.aggregated }} {{ plural(report.aggregated, 'dodatkową edycję', 'dodatkowe edycje', 'dodatkowych edycji') }} tego samego pliku w jedną sugestię dziennie.</li>
@@ -235,7 +286,7 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
             <p><strong>Brak oczekujących sugestii.</strong></p>
             <p>
               Kliknij „Synchronizuj", aby pobrać spotkania z kalendarza Outlook i dokumenty
-              z OneDrive z ostatnich {{ syncDaysBack }} dni. Aplikacja zamieni je na propozycje wpisów czasu pracy.
+              z OneDrive z ostatnich {{ syncDaysDraft }} dni. Aplikacja zamieni je na propozycje wpisów czasu pracy.
             </p>
           </div>
         }
@@ -306,7 +357,7 @@ export class SuggestionsPage implements OnInit {
   protected readonly skippedLine = syncSkippedLine;
   protected readonly filteredLine = filteredOutLine;
   protected readonly plural = polishPlural;
-  protected readonly syncDaysBack = SYNC_DAYS_BACK;
+  protected readonly syncDaysOptions = SYNC_DAYS_OPTIONS;
 
   protected visibleSuggestions = computed(() => {
     const activeFilter = this.sourceFilter();
@@ -318,6 +369,9 @@ export class SuggestionsPage implements OnInit {
 
   /** Preferencja czasu dokumentów — trzymana lokalnie, wysyłana z każdą synchronizacją. */
   protected documentMinutesDraft = this.loadDocumentMinutes();
+
+  /** Preferencja zakresu synchronizacji — trzymana lokalnie, wysyłana z każdą synchronizacją. */
+  protected syncDaysDraft = normalizedSyncDays(localStorage.getItem(SYNC_DAYS_STORAGE_KEY));
 
   /** Sugestie z jednoznacznie dopasowaną sprawą — te można zatwierdzić hurtem, bez zastanowienia. */
   protected autoMatchedCount = computed(() =>
@@ -344,6 +398,7 @@ export class SuggestionsPage implements OnInit {
       const report = await this.api.syncNow(
         (stage) => this.syncStage.set(stage),
         normalizedDocumentMinutes(this.documentMinutesDraft),
+        normalizedSyncDays(this.syncDaysDraft),
       );
       this.syncReport.set(report);
       await this.loadData();
@@ -460,6 +515,11 @@ export class SuggestionsPage implements OnInit {
     if (value !== undefined) {
       localStorage.setItem(DOCUMENT_MINUTES_STORAGE_KEY, String(value));
     }
+  }
+
+  protected saveSyncDays(): void {
+    this.syncDaysDraft = normalizedSyncDays(this.syncDaysDraft);
+    localStorage.setItem(SYNC_DAYS_STORAGE_KEY, String(this.syncDaysDraft));
   }
 
   private loadDocumentMinutes(): number {

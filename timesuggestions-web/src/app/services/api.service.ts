@@ -47,8 +47,11 @@ export class ApiService {
   async syncNow(
     onStage?: (stage: SyncStage) => void,
     defaultDocumentDurationMinutes?: number,
+    syncDaysBack?: number,
   ): Promise<SyncReport> {
-    const calendarSnapshot = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK, (page) =>
+    // Zakres wybrany w UI; brak wartości = domyślne okno (SYNC_DAYS_BACK).
+    const days = syncDaysBack ?? SYNC_DAYS_BACK;
+    const calendarSnapshot = await this.graphCalendar.getEventsLastDays(days, (page) =>
       onStage?.({ kind: 'calendar', page }),
     );
     const rawEvents = calendarSnapshot.events;
@@ -71,7 +74,7 @@ export class ApiService {
       return true;
     });
 
-    const driveResult = await this.graphFiles.getRecentDocuments(SYNC_DAYS_BACK, (page) =>
+    const driveResult = await this.graphFiles.getRecentDocuments(days, (page) =>
       onStage?.({ kind: 'files', page }),
     );
 
@@ -82,9 +85,12 @@ export class ApiService {
       // snapshocie okna — częściowe pobranie nie może kasować prawidłowych sugestii.
       calendarSnapshotComplete: calendarSnapshot.snapshotComplete,
       // Deklaracja zakresu snapshotu: backend kasuje oczekujące sugestie wyłącznie
-      // w przecięciu tego zakresu ze swoim oknem, więc rozjazd SYNC_DAYS_BACK
-      // z Suggestions:SyncDaysBack zawęża kasowanie zamiast niszczyć dane.
-      calendarSnapshotDaysBack: SYNC_DAYS_BACK,
+      // w przecięciu tego zakresu ze swoim oknem, więc rozjazd okien frontend/backend
+      // zawęża kasowanie zamiast niszczyć dane.
+      calendarSnapshotDaysBack: days,
+      // Nadpisanie okna backendu tą samą wartością — jedno źródło prawdy dla
+      // pobierania, filtrowania i tekstów raportu (raport odsyła windowDays).
+      syncDaysBack: days,
       driveFiles: driveResult.files,
       deletedDriveFileIds: driveResult.deletedDriveFileIds,
       clientFilteredCounts: {

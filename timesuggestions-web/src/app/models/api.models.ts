@@ -34,6 +34,8 @@ export interface SyncRequest {
   calendarSnapshotComplete: boolean;
   /** Ile ostatnich pełnych dni lokalnych pokrywa snapshot — backend kasuje tylko w przecięciu tego zakresu ze swoim oknem. */
   calendarSnapshotDaysBack?: number;
+  /** Nadpisanie okna synchronizacji (preferencja z UI); brak wartości = konfiguracja backendu. */
+  syncDaysBack?: number;
   driveFiles: DriveFilePayload[];
   /** Tombstone'y z delta OneDrive — backend usuwa oczekujące sugestie usuniętych plików. */
   deletedDriveFileIds?: string[];
@@ -155,4 +157,6 @@ export interface SyncReport {
   /** Oczekujące usunięte przez rekonsyliację (spotkania zniknięte/nierozliczalne, tombstone'y plików). */
   removed: number;
   matched: SyncMatchedCounts;
+  /** Faktycznie użyte okno w dniach — teksty raportu pokazują je zamiast zgadywać z własnej stałej. */
+  windowDays: number;
 }

@@ -34,6 +34,7 @@ const EMPTY_REPORT = {
   },
   aggregated: 0,
   deduplicated: 0,
+  windowDays: 7,
   created: 1,
   updated: 0,
   skippedExisting: 0,
@@ -117,6 +118,8 @@ describe('ApiService.syncNow', () => {
     // wraz z zakresem dni, którego kompletność dotyczy.
     expect(request.calendarSnapshotComplete).toBe(true);
     expect(request.calendarSnapshotDaysBack).toBe(7);
+    // Bez preferencji z UI żądanie niesie domyślne okno.
+    expect(request.syncDaysBack).toBe(7);
     expect(report.created).toBe(1);
   });
 

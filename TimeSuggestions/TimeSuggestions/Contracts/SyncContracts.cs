@@ -49,6 +49,15 @@ public class SyncRequest : IValidatableObject
     public int? CalendarSnapshotDaysBack { get; set; }
 
     /// <summary>
+    /// Opcjonalne nadpisanie okna synchronizacji (preferencja użytkownika z UI).
+    /// Brak wartości = obowiązuje konfiguracja backendu (Suggestions:SyncDaysBack).
+    /// Górny limit chroni przed żądaniem wieloletniej historii.
+    /// </summary>
+    [Range(1, Configuration.SuggestionOptions.MaxSyncDaysBack,
+        ErrorMessage = "Okno synchronizacji musi mieścić się w zakresie 1–90 dni.")]
+    public int? SyncDaysBack { get; set; }
+
+    /// <summary>
     /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
     /// Brak wartości = obowiązuje konfiguracja backendu (appsettings.json).
     /// </summary>
@@ -195,4 +204,7 @@ public record SyncReport(
     int Updated,
     int SkippedExisting,
     int Removed,
-    SyncMatchedCounts Matched);
+    SyncMatchedCounts Matched,
+    // Faktycznie użyte okno w dniach (konfiguracja albo nadpisanie z żądania) —
+    // UI pokazuje je w tekstach raportu zamiast zgadywać z własnej stałej.
+    int WindowDays);

@@ -33,13 +33,13 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .Where(legalCase => legalCase.IsActive)
             .ToListAsync(cancellationToken);
 
-        // Preferencja użytkownika z żądania (zwalidowana na granicy API) nadpisuje
-        // konfigurację; sama reguła "co robimy, gdy nie znamy czasu" zostaje w backendzie.
+        // Preferencje użytkownika z żądania (zwalidowane na granicy API) nadpisują
+        // konfigurację; same reguły biznesowe zostają w backendzie.
         var effectiveOptions = new SuggestionOptions
         {
             MinimumEventDurationMinutes = options.MinimumEventDurationMinutes,
             DefaultDocumentDurationMinutes = request.DefaultDocumentDurationMinutes ?? options.DefaultDocumentDurationMinutes,
-            SyncDaysBack = options.SyncDaysBack,
+            SyncDaysBack = request.SyncDaysBack ?? options.SyncDaysBack,
             BusinessTimeZoneId = options.BusinessTimeZoneId,
         };
         var builder = new SuggestionBuilder(effectiveOptions);
@@ -58,7 +58,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // Rozjazd konfiguracji okien (frontend vs Suggestions:SyncDaysBack) nie jest
         // przez to groźny dla filtrowania; kasowanie ma dodatkowo własną granicę —
         // przecięcie z zakresem zadeklarowanym przez klienta (niżej).
-        var windowStartLocal = nowLocal.Date.AddDays(-(options.SyncDaysBack - 1));
+        var windowStartLocal = nowLocal.Date.AddDays(-(effectiveOptions.SyncDaysBack - 1));
 
         var eventFilterResult = CalendarEventFilter.FilterBillable(
             request.CalendarEvents,
@@ -99,7 +99,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         DateOnly? destructiveWindowStart =
             request.CalendarSnapshotComplete && request.CalendarSnapshotDaysBack is int clientDaysBack
                 ? DateOnly.FromDateTime(
-                    nowLocal.Date.AddDays(-(Math.Min(clientDaysBack, options.SyncDaysBack) - 1)))
+                    nowLocal.Date.AddDays(-(Math.Min(clientDaysBack, effectiveOptions.SyncDaysBack) - 1)))
                 : null;
 
         // Konflikt unikalności = równoległa synchronizacja zdążyła zapisać te same klucze.
@@ -174,7 +174,8 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             Updated: merge.UpdatedCount,
             SkippedExisting: candidates.Count - merge.NewSuggestions.Count - merge.UpdatedCount,
             Removed: merge.RemovedCount,
-            Matched: CountMatches(merge.NewSuggestions));
+            Matched: CountMatches(merge.NewSuggestions),
+            WindowDays: effectiveOptions.SyncDaysBack);
     }
 
     /// <summary>

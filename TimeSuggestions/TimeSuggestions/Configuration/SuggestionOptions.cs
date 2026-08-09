@@ -12,6 +12,13 @@ public class SuggestionOptions
     /// <summary>Górna granica sensownego czasu edycji dokumentu (8 godzin) — walidacja wartości od użytkownika.</summary>
     public const int MaxDocumentDurationMinutes = 480;
 
+    /// <summary>
+    /// Górna granica okna synchronizacji nadpisywanego z żądania — kalendarz jest
+    /// pobierany przy każdym syncu jako pełny snapshot okna, więc bez limitu jedno
+    /// żądanie mogłoby wymusić przetwarzanie wieloletniej historii.
+    /// </summary>
+    public const int MaxSyncDaysBack = 90;
+
     /// <summary>Minimalny czas trwania spotkania w minutach; krótsze są odfiltrowywane (dokładnie ta wartość przechodzi).</summary>
     public int MinimumEventDurationMinutes { get; set; } = 5;
 

@@ -250,6 +250,27 @@ public sealed class CalendarReconciliationTests : IDisposable
     }
 
     [Fact]
+    public async Task SyncAsync_NadpisanieOknaZZadaniaPoszerzaZakres()
+    {
+        // Spotkanie sprzed 10 dni: poza domyślnym oknem 7 dni, w oknie 14 dni.
+        var oldEvent = CreateEvent("event-old", daysAgo: 10);
+
+        var defaultWindowReport = await syncService.SyncAsync(
+            CalendarRequest(oldEvent), Now, CancellationToken.None);
+        Assert.Equal(0, defaultWindowReport.Created);
+        Assert.Equal(1, defaultWindowReport.FilteredOut.OutsideWindow);
+        Assert.Equal(7, defaultWindowReport.WindowDays);
+
+        var request = CalendarRequest(oldEvent);
+        request.SyncDaysBack = 14;
+        request.CalendarSnapshotDaysBack = 14;
+        var wideWindowReport = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(1, wideWindowReport.Created);
+        Assert.Equal(14, wideWindowReport.WindowDays);
+    }
+
+    [Fact]
     public async Task SyncAsync_TombstoneDokumentuUsuwaTylkoPending()
     {
         await syncService.SyncAsync(

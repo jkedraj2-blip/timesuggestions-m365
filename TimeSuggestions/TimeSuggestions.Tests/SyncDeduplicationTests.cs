@@ -173,6 +173,20 @@ public sealed class SyncDeduplicationTests : IDisposable
         Assert.False(isValid);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(91)]
+    public void SyncRequest_OdrzucaNadpisanieOknaPozaZakresem(int daysBack)
+    {
+        var request = new SyncRequest { SyncDaysBack = daysBack };
+
+        var validationResults = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+        var isValid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
+            request, new System.ComponentModel.DataAnnotations.ValidationContext(request), validationResults, validateAllProperties: true);
+
+        Assert.False(isValid);
+    }
+
     [Fact]
     public async Task SyncAsync_ZdezaktywowanaSprawaNieBierzeUdzialuWDopasowaniu()
     {

@@ -93,18 +93,21 @@ export function confirmSettleLabel(count: number, totalMinutes: number): string 
 
       @if (view() === 'active' && data(); as response) {
         @if (response.days.length > 0) {
+          <!-- Etykieta grupy jak przy filtrach na stronie sugestii — przyciski nie muszą
+               powtarzać słowa „Rozlicz" i pasek robi się czytelniejszy. -->
           <div class="settle-actions">
+            <span class="text-muted">Rozlicz:</span>
             <button class="btn" [class.btn-danger]="confirm.isArmed('week')"
               (click)="settleRange('week', $event)" [disabled]="settling()">
-              {{ settleButtonLabel('week', 'Rozlicz ostatni tydzień') }}
+              {{ settleButtonLabel('week', 'ostatni tydzień') }}
             </button>
             <button class="btn" [class.btn-danger]="confirm.isArmed('month')"
               (click)="settleRange('month', $event)" [disabled]="settling()">
-              {{ settleButtonLabel('month', 'Rozlicz ostatni miesiąc') }}
+              {{ settleButtonLabel('month', 'bieżący miesiąc') }}
             </button>
             <button class="btn" [class.btn-danger]="confirm.isArmed('all')"
               (click)="settleRange('all', $event)" [disabled]="settling()">
-              {{ settleButtonLabel('all', 'Rozlicz wszystko') }}
+              {{ settleButtonLabel('all', 'wszystko') }}
             </button>
           </div>
         }
@@ -195,6 +198,8 @@ export function confirmSettleLabel(count: number, totalMinutes: number): string 
   `,
   styles: `
     .toolbar { display: flex; align-items: center; gap: var(--space-4); margin-bottom: var(--space-4); flex-wrap: wrap; }
+    /* Ta sama wysokość i typografia co .btn (padding space-2/space-4) — przełącznik
+       nie może wyglądać jak mniejszy, obcy element obok przycisków akcji. */
     .view-switch {
       display: inline-flex;
       border: 1px solid var(--border);
@@ -205,14 +210,26 @@ export function confirmSettleLabel(count: number, totalMinutes: number): string 
     .view-option {
       border: none;
       background: transparent;
-      padding: var(--space-1) var(--space-3);
+      color: var(--text-muted);
+      padding: var(--space-2) var(--space-4);
       cursor: pointer;
       font-size: var(--font-size-base);
-      line-height: 1.6;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s;
     }
-    .view-option:hover { background: var(--surface-alt); }
-    .view-option.active { background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); }
-    .settle-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+    .view-option + .view-option { border-left: 1px solid var(--border); }
+    .view-option:hover:not(.active) { background: var(--surface-alt); }
+    /* Pełny akcent zamiast bladego podkreślenia — aktywny widok widać od razu,
+       także w ciemnym motywie. */
+    .view-option.active {
+      background: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 600;
+      cursor: default;
+    }
+    /* Akcje odsunięte na prawy brzeg: filtr widoku i operacje rozliczenia to
+       osobne grupy, nie jeden ciąg przycisków. */
+    .settle-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-left: auto; }
     .total { margin: 0 0 var(--space-4); font-size: var(--font-size-lg); }
     .day { margin-bottom: var(--space-5); }
     .day-header { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }

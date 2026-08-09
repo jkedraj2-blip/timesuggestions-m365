@@ -9,7 +9,10 @@ namespace TimeSuggestions.Controllers;
 
 [ApiController]
 [Route("api/suggestions")]
-public class SuggestionsController(AppDbContext db, ApprovalService approvalService) : ControllerBase
+public class SuggestionsController(
+    AppDbContext db,
+    ApprovalService approvalService,
+    ArchiveService archiveService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<List<SuggestionDto>>> GetSuggestions(
@@ -103,6 +106,26 @@ public class SuggestionsController(AppDbContext db, ApprovalService approvalServ
             ApprovalOutcome.Success => NoContent(),
             ApprovalOutcome.SuggestionNotFound => NotFound(new { message = "Sugestia nie istnieje." }),
             ApprovalOutcome.SuggestionNotRejected => Conflict(new { message = "Przywrócić można tylko odrzuconą sugestię." }),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
+        };
+    }
+
+    [HttpPost("archive-rejected")]
+    public async Task<ActionResult<ArchiveSuggestionsResult>> ArchiveRejected(CancellationToken cancellationToken)
+    {
+        return Ok(await archiveService.ArchiveRejectedSuggestionsAsync(cancellationToken));
+    }
+
+    [HttpPost("{id:int}/archive")]
+    public async Task<IActionResult> Archive(int id, CancellationToken cancellationToken)
+    {
+        var result = await archiveService.ArchiveSuggestionAsync(id, cancellationToken);
+
+        return result.Outcome switch
+        {
+            ApprovalOutcome.Success => NoContent(),
+            ApprovalOutcome.SuggestionNotFound => NotFound(new { message = "Sugestia nie istnieje." }),
+            ApprovalOutcome.SuggestionNotRejected => Conflict(new { message = "Zarchiwizować można tylko odrzuconą sugestię." }),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
     }

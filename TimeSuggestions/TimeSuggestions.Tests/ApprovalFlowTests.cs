@@ -79,6 +79,21 @@ public sealed class ApprovalFlowTests : IDisposable
     }
 
     [Fact]
+    public async Task RestoreAsync_OdmawiaDlaZarchiwizowanejSugestii()
+    {
+        // Archiwum jest terminalne: istniejący outcome SuggestionNotRejected pokrywa
+        // też Archived — bez unarchive i bez nowego kodu błędu.
+        var suggestion = await SeedPendingSuggestionAsync();
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync();
+
+        var result = await approvalService.RestoreAsync(suggestion.Id, CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.SuggestionNotRejected, result.Outcome);
+        Assert.Equal(SuggestionStatus.Archived, (await db.Suggestions.SingleAsync()).Status);
+    }
+
+    [Fact]
     public async Task DeleteTimeEntryAsync_UsuwaWpisIPrzywracaSugestieDoOczekujacych()
     {
         var suggestion = await SeedPendingSuggestionAsync();
@@ -98,5 +113,22 @@ public sealed class ApprovalFlowTests : IDisposable
         var result = await approvalService.DeleteTimeEntryAsync(999, CancellationToken.None);
 
         Assert.Equal(ApprovalOutcome.TimeEntryNotFound, result.Outcome);
+    }
+
+    [Fact]
+    public async Task DeleteTimeEntryAsync_OdmawiaDlaZarchiwizowanegoWpisuINiczegoNieZmienia()
+    {
+        var suggestion = await SeedPendingSuggestionAsync();
+        var request = new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 60, Description = "Praca" };
+        var approval = await approvalService.ApproveAsync(suggestion.Id, request, Now, CancellationToken.None);
+        approval.CreatedEntry!.ArchivedAt = Now;
+        await db.SaveChangesAsync();
+
+        var result = await approvalService.DeleteTimeEntryAsync(approval.CreatedEntry.Id, CancellationToken.None);
+
+        // Rozliczonego czasu nie cofamy: wpis zostaje, sugestia dalej zatwierdzona.
+        Assert.Equal(ApprovalOutcome.TimeEntryArchived, result.Outcome);
+        Assert.Equal(1, await db.TimeEntries.CountAsync());
+        Assert.Equal(SuggestionStatus.Approved, (await db.Suggestions.SingleAsync()).Status);
     }
 }

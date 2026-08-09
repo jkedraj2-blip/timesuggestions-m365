@@ -64,9 +64,10 @@ import { DurationPipe } from './pipes/duration.pipe';
             <div class="tile-value">{{ summary.approvedCount }}</div>
             <div class="tile-label">zapisane wpisy</div>
           </div>
+          <!-- Nierozliczony czas maleje po rozliczeniu (archiwizacji) — celowo bez przycisku reset. -->
           <div class="tile">
-            <div class="tile-value">{{ summary.totalLoggedMinutes | duration }}</div>
-            <div class="tile-label">łączny zalogowany czas</div>
+            <div class="tile-value">{{ summary.unsettledMinutes | duration }}</div>
+            <div class="tile-label">nierozliczony czas</div>
           </div>
           <div class="tile">
             <div class="tile-value">

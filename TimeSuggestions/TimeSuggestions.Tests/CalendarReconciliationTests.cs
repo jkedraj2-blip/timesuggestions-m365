@@ -270,6 +270,78 @@ public sealed class CalendarReconciliationTests : IDisposable
         Assert.Equal(14, wideWindowReport.WindowDays);
     }
 
+    // --- Regresja archiwizacji: sync nie może dotykać zarchiwizowanych sugestii.
+    // MergeWithExistingAsync operuje wyłącznie na Pending, a każdy status != Pending
+    // liczy jako „rozstrzygnięty" — te testy przybijają to twierdzenie na stałe,
+    // żeby przyszła zmiana SyncService nie zepsuła anty-nawrotu archiwum.
+
+    [Fact]
+    public async Task SyncAsync_ZarchiwizowaneSpotkanieWSnapshotcieNieTworzyDuplikatuAniNieJestOdswiezane()
+    {
+        await syncService.SyncAsync(CalendarRequest(CreateEvent(daysAgo: 1)), Now, CancellationToken.None);
+        var suggestion = await db.Suggestions.SingleAsync();
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync();
+
+        // To samo spotkanie, przesunięte na inny dzień — archiwum jest „lepkie" jak odrzucenie.
+        var report = await syncService.SyncAsync(CalendarRequest(CreateEvent(daysAgo: 2)), Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Created);
+        Assert.Equal(0, report.Updated);
+        Assert.Equal(1, report.SkippedExisting);
+        var survivor = await db.Suggestions.SingleAsync();
+        Assert.Equal(SuggestionStatus.Archived, survivor.Status);
+        Assert.Equal(DateOnly.FromDateTime(Now.AddDays(-1)), survivor.EntryDate);
+    }
+
+    [Fact]
+    public async Task SyncAsync_ZarchiwizowaneSpotkanieNieobecneWKompletnymSnapshotcieNieJestKasowane()
+    {
+        await syncService.SyncAsync(CalendarRequest(CreateEvent(daysAgo: 1)), Now, CancellationToken.None);
+        var suggestion = await db.Suggestions.SingleAsync();
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync();
+
+        // Pusty kompletny snapshot: kasowane są wyłącznie Pending — archiwum zostaje.
+        var report = await syncService.SyncAsync(CalendarRequest(), Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Removed);
+        Assert.Equal(SuggestionStatus.Archived, (await db.Suggestions.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_ZarchiwizowanaDokumentowaNieDostajeDuplikatuAniOdswiezeniaTytulu()
+    {
+        await syncService.SyncAsync(DocumentRequest(CreateFile("file-1", "Umowa_NovaTech.docx")), Now, CancellationToken.None);
+        var suggestion = await db.Suggestions.SingleAsync();
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync();
+
+        // Ten sam plik pod nową nazwą w feedzie delta — odświeżane są tylko Pending.
+        var report = await syncService.SyncAsync(
+            DocumentRequest(CreateFile("file-1", "Umowa_NovaTech_v2.docx")), Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Created);
+        Assert.Equal(0, report.Updated);
+        Assert.Equal(1, report.SkippedExisting);
+        Assert.Equal("Umowa_NovaTech.docx", (await db.Suggestions.SingleAsync()).Title);
+    }
+
+    [Fact]
+    public async Task SyncAsync_TombstonePlikuNieKasujeZarchiwizowanejSugestii()
+    {
+        await syncService.SyncAsync(DocumentRequest(CreateFile("file-1")), Now, CancellationToken.None);
+        var suggestion = await db.Suggestions.SingleAsync();
+        suggestion.Status = SuggestionStatus.Archived;
+        await db.SaveChangesAsync();
+
+        var report = await syncService.SyncAsync(
+            new SyncRequest { DeletedDriveFileIds = ["file-1"] }, Now, CancellationToken.None);
+
+        Assert.Equal(0, report.Removed);
+        Assert.Equal(SuggestionStatus.Archived, (await db.Suggestions.SingleAsync()).Status);
+    }
+
     [Fact]
     public async Task SyncAsync_TombstoneDokumentuUsuwaTylkoPending()
     {

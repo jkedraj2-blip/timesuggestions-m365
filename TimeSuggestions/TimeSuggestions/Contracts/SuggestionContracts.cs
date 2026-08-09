@@ -160,9 +160,41 @@ public record SummaryDto(
     int PendingCount,
     int ApprovedCount,
     int RejectedCount,
-    int TotalLoggedMinutes,
+    int UnsettledMinutes,
     int TodayLoggedMinutes,
     DateTime? LastSyncAt);
+
+/// <summary>
+/// Zakres rozliczenia hurtowego. Przedział domknięty dat DZIENNYCH (EntryDate jest
+/// datą w strefie biznesowej, więc porównanie DateOnly nie ma problemów strefowych).
+/// </summary>
+public class ArchiveTimeEntriesRequest : IValidatableObject
+{
+    public const int MaxRangeDays = 366;
+
+    [Required(ErrorMessage = "Data początkowa zakresu jest wymagana.")]
+    public DateOnly? From { get; set; }
+
+    [Required(ErrorMessage = "Data końcowa zakresu jest wymagana.")]
+    public DateOnly? To { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (From is DateOnly from && To is DateOnly to)
+        {
+            if (to < from)
+            {
+                yield return new ValidationResult(
+                    "Data końcowa nie może być wcześniejsza niż początkowa.", [nameof(To)]);
+            }
+            else if (to.DayNumber - from.DayNumber + 1 > MaxRangeDays)
+            {
+                yield return new ValidationResult(
+                    "Zakres rozliczenia może obejmować najwyżej 366 dni.", [nameof(To)]);
+            }
+        }
+    }
+}
 
 /// <summary>Wpisy pogrupowane po dniach z sumami — widok "Wpisy czasu" pokazuje je od razu policzone.</summary>
 public record TimeEntriesResponse(int TotalMinutes, IReadOnlyList<TimeEntryDayDto> Days);
@@ -180,7 +212,8 @@ public record TimeEntryDto(
     SuggestionSource Source,
     int SuggestionId,
     string? SourceTitle,
-    DateTime? SourceStartedAt)
+    DateTime? SourceStartedAt,
+    DateTime? ArchivedAt)
 {
     /// <summary>
     /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
@@ -197,5 +230,6 @@ public record TimeEntryDto(
         entry.Source,
         entry.SuggestionId,
         entry.Suggestion?.Title,
-        entry.Suggestion?.StartedAt);
+        entry.Suggestion?.StartedAt,
+        entry.ArchivedAt);
 }

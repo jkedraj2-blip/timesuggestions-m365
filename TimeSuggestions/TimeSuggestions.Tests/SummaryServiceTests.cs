@@ -38,7 +38,7 @@ public sealed class SummaryServiceTests : IDisposable
         var summary = await summaryService.GetSummaryAsync(Today, CancellationToken.None);
 
         Assert.Equal(0, summary.PendingCount);
-        Assert.Equal(0, summary.TotalLoggedMinutes);
+        Assert.Equal(0, summary.UnsettledMinutes);
         Assert.Null(summary.LastSyncAt);
     }
 
@@ -53,8 +53,25 @@ public sealed class SummaryServiceTests : IDisposable
 
         var summary = await summaryService.GetSummaryAsync(Today, CancellationToken.None);
 
-        Assert.Equal(135, summary.TotalLoggedMinutes);
+        Assert.Equal(135, summary.UnsettledMinutes);
         Assert.Equal(90, summary.TodayLoggedMinutes);
+    }
+
+    [Fact]
+    public async Task GetSummaryAsync_PomijaZarchiwizowaneWpisyWObuLicznikach()
+    {
+        // Wpis aktywny i zarchiwizowany z tego samego dnia — kafelki liczą tylko aktywny:
+        // archiwizacja jest jedynym „resetem" nierozliczonego czasu.
+        db.TimeEntries.AddRange(
+            CreateEntry(entryDate: Today, minutes: 60),
+            CreateEntry(entryDate: Today, minutes: 30, archivedAt: DateTime.UtcNow),
+            CreateEntry(entryDate: Today.AddDays(-1), minutes: 45, archivedAt: DateTime.UtcNow));
+        await db.SaveChangesAsync();
+
+        var summary = await summaryService.GetSummaryAsync(Today, CancellationToken.None);
+
+        Assert.Equal(60, summary.UnsettledMinutes);
+        Assert.Equal(60, summary.TodayLoggedMinutes);
     }
 
     [Fact]
@@ -102,7 +119,7 @@ public sealed class SummaryServiceTests : IDisposable
         Assert.Equal(new DateOnly(2026, 12, 7), today);
     }
 
-    private static TimeEntry CreateEntry(DateOnly entryDate, int minutes)
+    private static TimeEntry CreateEntry(DateOnly entryDate, int minutes, DateTime? archivedAt = null)
     {
         // Wpis wymaga sugestii źródłowej (FK) — tworzymy minimalną parę.
         var suggestion = CreateSuggestion($"event-{Guid.NewGuid()}", SuggestionStatus.Approved);
@@ -116,6 +133,7 @@ public sealed class SummaryServiceTests : IDisposable
             Source = SuggestionSource.Calendar,
             Suggestion = suggestion,
             CreatedAt = DateTime.UtcNow,
+            ArchivedAt = archivedAt,
         };
     }
 

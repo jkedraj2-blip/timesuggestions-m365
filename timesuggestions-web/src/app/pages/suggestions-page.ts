@@ -3,6 +3,7 @@ import { ApiService, SyncStage } from '../services/api.service';
 import { DataRefreshService } from '../services/data-refresh.service';
 import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
+import { TwoStepConfirm } from '../services/confirm-state';
 import { toUserMessage } from '../services/user-message';
 import {
   CaseInfo,
@@ -47,7 +48,7 @@ export function normalizedSyncDays(raw: unknown): number {
 }
 
 type SourceFilter = 'all' | SuggestionSource;
-type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected'>;
+type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected' | 'archived'>;
 
 /**
  * Nagłówek raportu mówi o EFEKCIE syncu (nowe/zaktualizowane/usunięte),
@@ -91,6 +92,11 @@ export function syncCheckedLine(fetched: SyncFetchedCounts, windowDays: number):
     return `Sprawdzono ${filesText} z ostatnich ${windowDays} dni.`;
   }
   return `Sprawdzono ${meetingsText} z ostatnich ${windowDays} dni i ${filesText}.`;
+}
+
+/** Toast po hurtowej archiwizacji: „Zarchiwizowano 3 sugestie." — bez „Cofnij", bo bez unarchive. */
+export function archivedSuggestionsToast(count: number): string {
+  return `Zarchiwizowano ${count} ${polishPlural(count, 'sugestię', 'sugestie', 'sugestii')}.`;
 }
 
 /** "Pominięto (już istniały)" po ludzku — powtórny sync niczego nie duplikuje. */
@@ -179,6 +185,8 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
 @Component({
   selector: 'app-suggestions-page',
   imports: [SuggestionCard, FormsModule],
+  // Klik poza przyciskiem rozbraja potwierdzenie (klik w przycisk robi stopPropagation).
+  host: { '(document:click)': 'confirm.reset()' },
   template: `
     <div class="toolbar">
       <button class="btn btn-primary" (click)="sync()" [disabled]="syncing() || loading()">
@@ -210,6 +218,7 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
         <span class="text-muted">Status:</span>
         <button class="btn" [class.btn-ghost]="statusFilter() !== 'pending'" (click)="setStatusFilter('pending')">oczekujące</button>
         <button class="btn" [class.btn-ghost]="statusFilter() !== 'rejected'" (click)="setStatusFilter('rejected')">odrzucone</button>
+        <button class="btn" [class.btn-ghost]="statusFilter() !== 'archived'" (click)="setStatusFilter('archived')">zarchiwizowane</button>
       </div>
 
       @if (autoMatchedCount() > 0) {
@@ -217,7 +226,21 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
           {{ bulkApproving() ? 'Zatwierdzam…' : 'Zatwierdź wszystkie dopasowane (' + autoMatchedCount() + ')' }}
         </button>
       }
+
+      @if (statusFilter() === 'rejected' && suggestions().length > 0) {
+        <!-- Archiwizacja jest jednokierunkowa — stąd dwustopniowe potwierdzenie zamiast window.confirm. -->
+        <button class="btn" [class.btn-danger]="confirm.isArmed('archive-rejected')"
+          (click)="archiveAllRejected($event)" [disabled]="bulkArchiving()">
+          {{ archiveAllLabel() }}
+        </button>
+      }
     </div>
+
+    @if (statusFilter() === 'archived') {
+      <p class="info-box">
+        Zarchiwizowane sugestie nadal chronią przed ponownym utworzeniem tej samej pozycji przy synchronizacji.
+      </p>
+    }
 
     @if (syncing()) {
       <div class="info-box sync-progress">
@@ -281,6 +304,8 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
       } @empty {
         @if (statusFilter() === 'rejected') {
           <p class="empty-state">Brak odrzuconych sugestii.</p>
+        } @else if (statusFilter() === 'archived') {
+          <p class="empty-state">Archiwum jest puste — zarchiwizowane sugestie pojawią się tutaj.</p>
         } @else {
           <div class="empty-state">
             <p><strong>Brak oczekujących sugestii.</strong></p>
@@ -366,6 +391,10 @@ export class SuggestionsPage implements OnInit {
   });
 
   protected bulkApproving = signal(false);
+  protected bulkArchiving = signal(false);
+
+  /** Dwustopniowe potwierdzenie hurtowej archiwizacji — operacja jest jednokierunkowa. */
+  protected confirm = new TwoStepConfirm();
 
   /** Preferencja czasu dokumentów — trzymana lokalnie, wysyłana z każdą synchronizacją. */
   protected documentMinutesDraft = this.loadDocumentMinutes();
@@ -386,7 +415,39 @@ export class SuggestionsPage implements OnInit {
 
   protected setStatusFilter(status: StatusFilter): void {
     this.statusFilter.set(status);
+    this.confirm.reset();
     void this.loadData();
+  }
+
+  /** Etykieta przycisku hurtowej archiwizacji — uzbrojony pyta „Na pewno?" z liczbą. */
+  protected archiveAllLabel(): string {
+    const count = this.suggestions().length;
+    if (this.confirm.isArmed('archive-rejected')) {
+      return `Na pewno? Zarchiwizujesz ${count} ${polishPlural(count, 'sugestię', 'sugestie', 'sugestii')}`;
+    }
+    return `Archiwizuj wszystkie odrzucone (${count})`;
+  }
+
+  protected async archiveAllRejected(event: Event): Promise<void> {
+    // Klik nie może dolecieć do document — rozbroiłby potwierdzenie, które właśnie uzbrajamy.
+    event.stopPropagation();
+    if (!this.confirm.confirm('archive-rejected')) {
+      return;
+    }
+
+    this.bulkArchiving.set(true);
+    this.error.set(null);
+    try {
+      const result = await this.api.archiveRejectedSuggestions();
+      // Bez akcji „Cofnij" — archiwum nie ma unarchive.
+      this.toasts.show(archivedSuggestionsToast(result.archivedCount));
+      await this.loadData();
+      await this.summaryStore.refresh();
+    } catch (error) {
+      this.error.set(toUserMessage(error, 'Nie udało się zarchiwizować sugestii.'));
+    } finally {
+      this.bulkArchiving.set(false);
+    }
   }
 
   protected async sync(): Promise<void> {
@@ -453,6 +514,10 @@ export class SuggestionsPage implements OnInit {
         break;
       case 'restored':
         this.toasts.show('Sugestia wróciła na listę oczekujących.');
+        break;
+      case 'archived':
+        // Bez „Cofnij" — archiwum sugestii jest jednokierunkowe.
+        this.toasts.show(`Zarchiwizowano sugestię „${event.suggestion.title}".`);
         break;
     }
   }

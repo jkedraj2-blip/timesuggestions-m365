@@ -16,6 +16,9 @@ public enum ApprovalOutcome
 
     /// <summary>Równoległe żądanie zdążyło utworzyć wpis dla tej samej sugestii — konflikt, nie duplikat.</summary>
     AlreadyApproved,
+
+    /// <summary>Wpis rozliczony (zarchiwizowany) — cofnięcie zatwierdzenia jest zablokowane.</summary>
+    TimeEntryArchived,
 }
 
 /// <summary>Jawny wynik zamiast wyjątków — kontroler tłumaczy go na kody HTTP.</summary>
@@ -139,6 +142,12 @@ public class ApprovalService(AppDbContext db)
         if (timeEntry is null)
         {
             return new ApprovalResult(ApprovalOutcome.TimeEntryNotFound);
+        }
+
+        // Rozliczonego czasu nie wolno po cichu zmieniać — archiwum blokuje edycję.
+        if (timeEntry.ArchivedAt is not null)
+        {
+            return new ApprovalResult(ApprovalOutcome.TimeEntryArchived);
         }
 
         if (timeEntry.Suggestion is not null)

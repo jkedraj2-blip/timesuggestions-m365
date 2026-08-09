@@ -8,7 +8,7 @@ import { DurationPipe } from '../pipes/duration.pipe';
 /** Zdarzenie dla rodzica: sugestia rozstrzygnięta — do zdjęcia z listy i pokazania toastu. */
 export interface SuggestionResolved {
   suggestion: Suggestion;
-  action: 'approved' | 'rejected' | 'restored';
+  action: 'approved' | 'rejected' | 'restored' | 'archived';
   /** Wpis utworzony przy zatwierdzeniu — potrzebny do akcji "Cofnij". */
   createdEntry?: TimeEntry;
 }
@@ -58,9 +58,12 @@ export interface SuggestionResolved {
         </div>
       }
 
-      @if (isRejected()) {
+      @if (isArchived()) {
+        <!-- Archiwum jest tylko do odczytu: bez Przywróć i bez Archiwizuj (stan terminalny). -->
+      } @else if (isRejected()) {
         <div class="actions">
           <button class="btn" (click)="restore()" [disabled]="busy()">Przywróć</button>
+          <button class="btn" (click)="archive()" [disabled]="busy()">Archiwizuj</button>
         </div>
       } @else if (editing()) {
         <div class="edit-form">
@@ -149,6 +152,8 @@ export class SuggestionCard {
   );
 
   protected isRejected = computed(() => this.suggestion().status === 'rejected');
+
+  protected isArchived = computed(() => this.suggestion().status === 'archived');
 
   protected sourceIcon = computed(() => (this.suggestion().source === 'calendar' ? '📅' : '📄'));
 
@@ -257,6 +262,13 @@ export class SuggestionCard {
     await this.run(async () => {
       await this.api.restore(this.suggestion().id);
       this.resolved.emit({ suggestion: this.suggestion(), action: 'restored' });
+    });
+  }
+
+  protected async archive(): Promise<void> {
+    await this.run(async () => {
+      await this.api.archiveSuggestion(this.suggestion().id);
+      this.resolved.emit({ suggestion: this.suggestion(), action: 'archived' });
     });
   }
 

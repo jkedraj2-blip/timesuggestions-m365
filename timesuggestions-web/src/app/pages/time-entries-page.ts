@@ -148,7 +148,11 @@ export function confirmSettleLabel(count: number, totalMinutes: number): string 
               <h3>{{ day.date | date: 'EEEE, d MMMM y' }}</h3>
               <span class="badge badge-accent">{{ day.totalMinutes | duration }}</span>
               @if (view() === 'active') {
-                <button class="btn day-settle" [class.btn-danger]="confirm.isArmed('day:' + day.date)"
+                <!-- Wypełniony akcent (btn-primary): to główna akcja tego widoku i musi być
+                     widoczna w ciemnym motywie; uzbrojone potwierdzenie przełącza na danger. -->
+                <button class="btn day-settle"
+                  [class.btn-primary]="!confirm.isArmed('day:' + day.date)"
+                  [class.btn-danger]="confirm.isArmed('day:' + day.date)"
                   (click)="settleDay(day.date, $event)" [disabled]="settling()">
                   {{ settleButtonLabel('day:' + day.date, 'Rozlicz dzień') }}
                 </button>

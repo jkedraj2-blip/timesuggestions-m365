@@ -8,7 +8,7 @@ kliknięciem — powstaje wtedy rozliczalny wpis (`TimeEntry`) przypisany do spr
 ## Architektura i przepływ danych
 
 ```
-MSAL login → frontend pobiera Graph (7 dni: kalendarz + pliki, wszystkie strony)
+MSAL login → frontend pobiera Graph (kalendarz + pliki z okna synchronizacji, wszystkie strony)
            → filtr prywatności w przeglądarce (tytuły prywatnych nie opuszczają przeglądarki)
            → POST /api/sync (surowe dane + tombstone'y + liczniki filtrów klienckich)
            → backend: filtrowanie → dopasowanie do spraw → zapis sugestii (dedup)
@@ -52,11 +52,11 @@ są walidowane przed dołączeniem nagłówka `Authorization`.
 
 | Widok | Rola |
 |---|---|
-| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, filtr źródła i statusu, przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego, co zaktualizowano), wskaźnik postępu, przywracanie odrzuconych, regulowany domyślny czas dokumentu |
+| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, filtr źródła i statusu, przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego, co zaktualizowano), wskaźnik postępu, przywracanie odrzuconych, regulowany domyślny czas dokumentu i zakres synchronizacji (7/14/30 dni — szerszy przydaje się np. po urlopie) |
 | **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami i pochodzeniem (z jakiego spotkania/pliku powstały); usunięcie wpisu przywraca sugestię |
 | **Sprawy** | Zarządzanie sprawami: dodawanie, edycja (w tym słów kluczowych sterujących dopasowaniem), dezaktywacja — celowo bez twardego usuwania; wyjaśnienie zasady dopasowania |
 
-Nad zakładkami kafelki podsumowania: oczekujące sugestie, zapisane wpisy, łączny czas,
+Nad zakładkami znajdują się kafelki podsumowania: oczekujące sugestie, zapisane wpisy, łączny czas,
 ostatnia synchronizacja. W nagłówku przełącznik trzech motywów (jasny / niebieski / ciemny),
 realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 
@@ -64,7 +64,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 
 | Decyzja | Uzasadnienie |
 |---|---|
-| **Delta query zamiast `/me/drive/recent`** | Endpoint „recent" jest oznaczony przez Microsoft jako wycofywany. `GET /me/drive/root/delta` jest wspierany i zwraca elementy dysku ze zmianami — w tym tombstone'y usuniętych plików (facet `deleted`), którymi backend czyści oczekujące sugestie. Filtrowanie (okno 7 dni, rozszerzenia Word/Excel, autor modyfikacji) odbywa się po stronie klienta, bo delta nie wspiera `$filter` — a odrzucenia klienckie są raportowane licznikami, żeby raport syncu pokazywał prawdę. Rozważone alternatywy: wyszukiwanie z sortowaniem po dacie (niestabilne wsparcie `$orderby`), endpointy aktywności (niedostępne dla kont osobistych). Szczegóły: `graph-files.service.ts`. |
+| **Delta query zamiast `/me/drive/recent`** | Endpoint „recent" jest oznaczony przez Microsoft jako wycofywany. `GET /me/drive/root/delta` jest wspierany i zwraca elementy dysku ze zmianami — w tym tombstone'y usuniętych plików (facet `deleted`), którymi backend czyści oczekujące sugestie. Filtrowanie (okno synchronizacji, rozszerzenia Word/Excel, autor modyfikacji) odbywa się po stronie klienta, bo delta nie wspiera `$filter` — a odrzucenia klienckie są raportowane licznikami, żeby raport syncu pokazywał prawdę. Rozważone alternatywy: wyszukiwanie z sortowaniem po dacie (niestabilne wsparcie `$orderby`), endpointy aktywności (niedostępne dla kont osobistych). Szczegóły: `graph-files.service.ts`. |
 | **Cache `deltaLink` w localStorage** | Pierwszy przebieg delta przechodzi cały dysk (na dużym OneDrive to dziesiątki sekund). Zapamiętany `deltaLink` sprawia, że kolejne synchronizacje pobierają wyłącznie zmiany. Link zapisywany dopiero po udanym zapisie w backendzie (obejmującym też tombstone'y); wygaśnięcie (HTTP 410) czyści cache i wymusza pełny przebieg. Zapisany adres jest walidowany przed użyciem — podmieniony wskaźnik nie wyśle tokenu pod obcy host. |
 | **Strefa czasowa: `Prefer` + strefa biznesowa** | Kalendarz przychodzi w czasie lokalnym (nagłówek `Prefer: outlook.timezone`), dokumenty w UTC. Backend sprowadza oba źródła do wspólnej strefy biznesowej (`Suggestions:BusinessTimeZoneId`, ID IANA, domyślnie `Europe/Warsaw`): okno dokumentów walidowane na oryginalnym UTC, a `StartedAt`/`EntryDate` i agregacja per dzień liczone lokalnie; okno kalendarza liczone bezpośrednio w strefie biznesowej; „dzisiaj" w podsumowaniu również. Czas trwania spotkań liczony z różnicy instantów UTC, nie lokalnych `DateTime` — w noc zmiany czasu różnica lokalna kłamie o godzinę. Konwencje nocy zmiany czasu są jawne (`BusinessTime`): czas niejednoznaczny = pierwsze wystąpienie, czas nieistniejący = jakby zegar już przeskoczył (mapowanie monotoniczne — bez ujemnych trwań). |
 | **Odporność na błędy Graph** | Wspólny helper obu serwisów Graph: ponowienia dla 429/502/503/504 z odczytem `Retry-After`, token pobierany per stronę, limit czasu żądania. Kalendarz i delta podążają za `@odata.nextLink` przez wszystkie strony. |
@@ -82,7 +82,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 
 | Metoda i ścieżka | Opis |
 |---|---|
-| `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalnie: tombstone'y usuniętych plików, liczniki filtrów klienckich, domyślny czas dokumentu), zwraca pełny raport; 409 przy kolizji z równoległą synchronizacją |
+| `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalnie: tombstone'y usuniętych plików, liczniki filtrów klienckich, domyślny czas dokumentu, nadpisanie okna synchronizacji `syncDaysBack`, maks. 90 dni), zwraca pełny raport z faktycznie użytym oknem (`windowDays`); 409 przy kolizji z równoległą synchronizacją |
 | `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące) |
 | `POST /api/suggestions/{id}/approve` | Tworzy wpis czasu, zamyka sugestię |
 | `POST /api/suggestions/{id}/reject` | Odrzuca (status, bez usuwania) |
@@ -94,7 +94,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | `DELETE /api/time-entries/{id}` | Usuwa wpis i przywraca sugestię |
 | `GET /api/summary` | Liczniki do kafelków podsumowania |
 
-Wszystkie wywołania przykładowe: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
+Przykładowe wywołania: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
 
 ## Uruchomienie
 
@@ -134,7 +134,7 @@ i nie możesz jej uzyskać, utwórz własną rejestrację (platforma **SPA**, re
 `http://localhost:4200`, te same uprawnienia) i podmień `entraClientId`
 w `environment.ts`.
 
-**Testy** (107 testów backendu xUnit + 38 testów frontendu Vitest — bez sieci i logowania):
+**Testy** (161 testów backendu xUnit + 83 testy frontendu Vitest — bez sieci i logowania):
 
 ```bash
 cd TimeSuggestions
@@ -179,9 +179,12 @@ timesuggestions-web/
   skonfigurowany próg (domyślnie 5 min; dokładnie próg przechodzi), całodniowe, poza
   oknem synchronizacji oraz z nieprawidłowymi datami (koniec przed początkiem) —
   a raport syncu pokazuje, ile i dlaczego (łącznie z filtrami wykonanymi w przeglądarce).
+- Okno synchronizacji obejmuje domyślnie ostatnie 7 dni; użytkownik może je poszerzyć
+  w UI do 14 lub 30 dni (np. po urlopie), a backend przyjmuje nadpisanie do 90 dni —
+  wartości spoza zakresu odrzuca walidacja.
 - Z dysku wchodzą tylko pliki Word/Excel zmodyfikowane przez zalogowanego użytkownika
-  w oknie 7 dni; kilka edycji tego samego pliku jednego dnia (w strefie biznesowej) =
-  jedna sugestia. Sugestia dokumentowa odzwierciedla ostatnią zaobserwowaną modyfikację
+  w oknie synchronizacji; kilka edycji tego samego pliku jednego dnia (w strefie
+  biznesowej) = jedna sugestia. Sugestia dokumentowa odzwierciedla ostatnią zaobserwowaną modyfikację
   pliku, nie pełną historię dni pracy (patrz „Ograniczenia prototypu").
 - Dopasowanie do sprawy po **pełnych tokenach** znormalizowanego tekstu: termin
   jednowyrazowy musi być identycznym słowem („Alfa" nie pasuje do „Alfabet"), termin

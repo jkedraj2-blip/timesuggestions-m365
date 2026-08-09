@@ -1,8 +1,10 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, effect, inject, signal, untracked } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { ApiService } from '../services/api.service';
+import { DataRefreshService } from '../services/data-refresh.service';
 import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
+import { toUserMessage } from '../services/user-message';
 import { TimeEntriesResponse, TimeEntry } from '../models/api.models';
 import { DurationPipe } from '../pipes/duration.pipe';
 
@@ -93,6 +95,19 @@ export class TimeEntriesPage implements OnInit {
   private api = inject(ApiService);
   private summaryStore = inject(SummaryStore);
   private toasts = inject(ToastService);
+  private dataRefresh = inject(DataRefreshService);
+
+  constructor() {
+    // Przeładowanie po operacjach spoza tego widoku (np. "Cofnij" z toastu).
+    let lastSeen: number | null = null;
+    effect(() => {
+      const version = this.dataRefresh.changes();
+      if (lastSeen !== null && version !== lastSeen) {
+        untracked(() => void this.loadData());
+      }
+      lastSeen = version;
+    });
+  }
 
   protected data = signal<TimeEntriesResponse | null>(null);
   protected loading = signal(false);
@@ -109,7 +124,7 @@ export class TimeEntriesPage implements OnInit {
     try {
       this.data.set(await this.api.getTimeEntries());
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Nie udało się pobrać wpisów.');
+      this.error.set(toUserMessage(error, 'Nie udało się pobrać wpisów.'));
     } finally {
       this.loading.set(false);
     }
@@ -125,7 +140,7 @@ export class TimeEntriesPage implements OnInit {
       await this.summaryStore.refresh();
       this.toasts.show('Usunięto wpis — sugestia wróciła na listę oczekujących.');
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Nie udało się usunąć wpisu.');
+      this.error.set(toUserMessage(error, 'Nie udało się usunąć wpisu.'));
     } finally {
       this.busyId.set(null);
     }

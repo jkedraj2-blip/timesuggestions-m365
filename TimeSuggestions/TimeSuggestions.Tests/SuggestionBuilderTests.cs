@@ -59,8 +59,57 @@ public class SuggestionBuilderTests
             [morningEdit, afternoonEdit], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         var suggestion = Assert.Single(suggestions);
-        // Sugestia dostaje godzinę pierwszej modyfikacji danego dnia.
-        Assert.Equal(new DateTime(2026, 7, 24, 9, 0, 0), suggestion.StartedAt);
+        // Sugestia dostaje godzinę pierwszej modyfikacji danego dnia,
+        // przeliczoną z UTC na strefę biznesową (lipiec = CEST, UTC+2).
+        Assert.Equal(new DateTime(2026, 7, 24, 11, 0, 0), suggestion.StartedAt);
+    }
+
+    [Fact]
+    public void BuildFromDocuments_PrzeliczaCzasUtcNaStrefeBiznesowa()
+    {
+        // 22:30 UTC 6 sierpnia = 00:30 CEST 7 sierpnia — EntryDate i StartedAt
+        // muszą być w strefie biznesowej, nie w UTC.
+        var nowUtc = new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc);
+        var file = CreateFile("file-1", "Umowa_NovaTech.docx", new DateTime(2026, 8, 6, 22, 30, 0, DateTimeKind.Utc));
+
+        var suggestions = CreateBuilder().BuildFromDocuments(
+            [file], TestHelpers.CreateTestCases(), nowUtc.AddDays(-7), nowUtc, nowUtc).Suggestions;
+
+        var suggestion = Assert.Single(suggestions);
+        Assert.Equal(new DateOnly(2026, 8, 7), suggestion.EntryDate);
+        Assert.Equal(new DateTime(2026, 8, 7, 0, 30, 0), suggestion.StartedAt);
+    }
+
+    [Fact]
+    public void BuildFromDocuments_DwieEdycjeWTymSamymDniuUtcAleRoznychDniachLokalnychDajaDwieSugestie()
+    {
+        var nowUtc = new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc);
+        // Obie edycje 6 sierpnia UTC, ale druga to już 7 sierpnia czasu lokalnego.
+        var dayEdit = CreateFile("file-1", "Umowa_NovaTech.docx", new DateTime(2026, 8, 6, 10, 0, 0, DateTimeKind.Utc));
+        var lateEdit = CreateFile("file-1", "Umowa_NovaTech.docx", new DateTime(2026, 8, 6, 22, 30, 0, DateTimeKind.Utc));
+
+        var suggestions = CreateBuilder().BuildFromDocuments(
+            [dayEdit, lateEdit], TestHelpers.CreateTestCases(), nowUtc.AddDays(-7), nowUtc, nowUtc).Suggestions;
+
+        Assert.Equal(2, suggestions.Count);
+        Assert.Equal([new DateOnly(2026, 8, 6), new DateOnly(2026, 8, 7)],
+            suggestions.Select(suggestion => suggestion.EntryDate).Order().ToList());
+    }
+
+    [Fact]
+    public void BuildFromDocuments_DwieEdycjeWTymSamymDniuLokalnymPoObuStronachPolnocyUtcDajaJednaSugestie()
+    {
+        var nowUtc = new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc);
+        // 22:30 UTC 5 sierpnia = 00:30 lokalnie 6 sierpnia; druga edycja 6 sierpnia w południe —
+        // ten sam dzień lokalny mimo różnych dni UTC.
+        var nightEdit = CreateFile("file-1", "Umowa_NovaTech.docx", new DateTime(2026, 8, 5, 22, 30, 0, DateTimeKind.Utc));
+        var dayEdit = CreateFile("file-1", "Umowa_NovaTech.docx", new DateTime(2026, 8, 6, 10, 0, 0, DateTimeKind.Utc));
+
+        var suggestions = CreateBuilder().BuildFromDocuments(
+            [nightEdit, dayEdit], TestHelpers.CreateTestCases(), nowUtc.AddDays(-7), nowUtc, nowUtc).Suggestions;
+
+        var suggestion = Assert.Single(suggestions);
+        Assert.Equal(new DateOnly(2026, 8, 6), suggestion.EntryDate);
     }
 
     [Fact]

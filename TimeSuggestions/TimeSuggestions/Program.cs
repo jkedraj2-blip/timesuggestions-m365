@@ -33,10 +33,12 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Migracja przy starcie — baza plikowa SQLite ma być zawsze aktualna bez ręcznych kroków.
+// Migracja przy starcie — baza plikowa SQLite ma być zawsze aktualna bez ręcznych
+// kroków. Przy oczekujących migracjach najpierw powstaje kopia pliku bazy
+// (szczegóły i procedura odtworzenia: DatabaseMigrator oraz README).
 using (var scope = app.Services.CreateScope())
 {
-    scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.Migrate();
+    DatabaseMigrator.MigrateWithBackup(scope.ServiceProvider.GetRequiredService<AppDbContext>());
 }
 
 if (app.Environment.IsDevelopment())
@@ -44,10 +46,13 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
-
+// Celowo bez UseHttpsRedirection: aplikacja działa na profilu http (localhost),
+// który nie ma endpointu https — przekierowanie psułoby preflighty CORS.
 app.UseCors();
 
 app.MapControllers();
 
 app.Run();
+
+/// <summary>Marker dla WebApplicationFactory — testy integracyjne uruchamiają pełny pipeline HTTP.</summary>
+public partial class Program;

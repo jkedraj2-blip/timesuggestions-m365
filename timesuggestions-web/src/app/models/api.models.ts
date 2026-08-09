@@ -10,6 +10,7 @@ export interface CalendarEventPayload {
   endDateTime: string;
   isAllDay: boolean;
   sensitivity: string | null;
+  isCancelled: boolean;
 }
 
 export interface DriveFilePayload {
@@ -19,9 +20,27 @@ export interface DriveFilePayload {
   lastModifiedByMe: boolean;
 }
 
+/** Liczniki pozycji odfiltrowanych w przeglądarce — backend dolicza je do raportu. */
+export interface ClientFilteredCounts {
+  private: number;
+  cancelled: number;
+  documentsOutsideWindow: number;
+  documentsNotOfficeDocument: number;
+}
+
 export interface SyncRequest {
   calendarEvents: CalendarEventPayload[];
+  /** Czy calendarEvents to kompletny snapshot okna (wszystkie strony pobrane bez błędu) — warunek destrukcyjnej rekonsyliacji. */
+  calendarSnapshotComplete: boolean;
+  /** Ile ostatnich pełnych dni lokalnych pokrywa snapshot — backend kasuje tylko w przecięciu tego zakresu ze swoim oknem. */
+  calendarSnapshotDaysBack?: number;
+  /** Nadpisanie okna synchronizacji (preferencja z UI); brak wartości = konfiguracja backendu. */
+  syncDaysBack?: number;
   driveFiles: DriveFilePayload[];
+  /** Tombstone'y z delta OneDrive — backend usuwa oczekujące sugestie usuniętych plików. */
+  deletedDriveFileIds?: string[];
+  /** Liczniki filtrów klienckich (prywatność + wstępne filtrowanie dokumentów). */
+  clientFilteredCounts?: ClientFilteredCounts;
   /** Opcjonalna preferencja użytkownika — bez wartości obowiązuje konfiguracja backendu. */
   defaultDocumentDurationMinutes?: number;
 }
@@ -110,6 +129,8 @@ export interface SyncFilteredOutCounts {
   private: number;
   tooShort: number;
   allDay: number;
+  cancelled: number;
+  invalidDates: number;
   notOfficeDocument: number;
   outsideWindow: number;
   notModifiedByUser: number;
@@ -127,9 +148,15 @@ export interface SyncReport {
   fetched: SyncFetchedCounts;
   filteredOut: SyncFilteredOutCounts;
   aggregated: number;
+  /** Duplikaty tego samego klucza scalone w obrębie jednego żądania (np. wydarzenie zduplikowane między stronami calendarView). */
+  deduplicated: number;
   created: number;
-  /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku). */
+  /** Istniejące sugestie oczekujące odświeżone po zmianie źródła (np. nowej nazwie pliku lub dacie spotkania). */
   updated: number;
   skippedExisting: number;
+  /** Oczekujące usunięte przez rekonsyliację (spotkania zniknięte/nierozliczalne, tombstone'y plików). */
+  removed: number;
   matched: SyncMatchedCounts;
+  /** Faktycznie użyte okno w dniach — teksty raportu pokazują je zamiast zgadywać z własnej stałej. */
+  windowDays: number;
 }

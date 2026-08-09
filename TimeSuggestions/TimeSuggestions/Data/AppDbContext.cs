@@ -22,6 +22,27 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasIndex(s => new { s.Source, s.ExternalId, s.EntryDate })
             .IsUnique();
 
+        // Jeden wpis czasu na sugestię — dwa równoległe zatwierdzenia rozstrzyga baza:
+        // drugi INSERT kończy się konfliktem unikalności (SQLITE_CONSTRAINT_UNIQUE),
+        // który serwis mapuje na 409, a nie duplikatem wpisu.
+        modelBuilder.Entity<TimeEntry>()
+            .HasIndex(entry => entry.SuggestionId)
+            .IsUnique();
+
+        // Unikalność numeru sprawy na poziomie bazy — kontroler sprawdza duplikat przed
+        // zapisem, ale wyścig check-then-insert domyka dopiero indeks.
+        modelBuilder.Entity<Case>()
+            .HasIndex(legalCase => legalCase.CaseNumber)
+            .IsUnique();
+
+        // Restrict zamiast domyślnej kaskady: usunięcie sprawy nie może po cichu
+        // skasować wpisów czasu (dane rozliczeniowe muszą przetrwać).
+        modelBuilder.Entity<TimeEntry>()
+            .HasOne(entry => entry.Case)
+            .WithMany()
+            .HasForeignKey(entry => entry.CaseId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         // Fikcyjne sprawy testowe zaprojektowane pod przypadki logiki dopasowania:
         // diakrytyki (Grzegrzółka), wspólne słowo kluczowe "Beta" (niejednoznaczność #4 vs #5).
         modelBuilder.Entity<Case>().HasData(

@@ -44,6 +44,9 @@ namespace TimeSuggestions.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CaseNumber")
+                        .IsUnique();
+
                     b.ToTable("Cases");
 
                     b.HasData(
@@ -201,7 +204,8 @@ namespace TimeSuggestions.Migrations
 
                     b.HasIndex("CaseId");
 
-                    b.HasIndex("SuggestionId");
+                    b.HasIndex("SuggestionId")
+                        .IsUnique();
 
                     b.ToTable("TimeEntries");
                 });
@@ -220,7 +224,7 @@ namespace TimeSuggestions.Migrations
                     b.HasOne("TimeSuggestions.Models.Case", "Case")
                         .WithMany()
                         .HasForeignKey("CaseId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.HasOne("TimeSuggestions.Models.Suggestion", "Suggestion")

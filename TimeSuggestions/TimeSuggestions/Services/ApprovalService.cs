@@ -13,6 +13,9 @@ public enum ApprovalOutcome
     SuggestionNotRejected,
     CaseNotFound,
     TimeEntryNotFound,
+
+    /// <summary>Równoległe żądanie zdążyło utworzyć wpis dla tej samej sugestii — konflikt, nie duplikat.</summary>
+    AlreadyApproved,
 }
 
 /// <summary>Jawny wynik zamiast wyjątków — kontroler tłumaczy go na kody HTTP.</summary>
@@ -65,7 +68,18 @@ public class ApprovalService(AppDbContext db)
 
         suggestion.Status = SuggestionStatus.Approved;
         db.TimeEntries.Add(timeEntry);
-        await db.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
+        {
+            // Indeks unikalny TimeEntries.SuggestionId: równoległe zatwierdzenie zdążyło
+            // wstawić wpis między naszym odczytem a zapisem. Mapujemy wyłącznie
+            // SQLITE_CONSTRAINT_UNIQUE (2067) — inne błędy zapisu propagują bez maskowania.
+            return new ApprovalResult(ApprovalOutcome.AlreadyApproved);
+        }
 
         return new ApprovalResult(ApprovalOutcome.Success, timeEntry);
     }

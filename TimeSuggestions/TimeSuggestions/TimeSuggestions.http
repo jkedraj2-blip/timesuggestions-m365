@@ -64,6 +64,38 @@ DELETE {{TimeSuggestions_HostAddress}}/api/time-entries/1
 GET {{TimeSuggestions_HostAddress}}/api/cases
 Accept: application/json
 
+### Wszystkie sprawy, łącznie ze zdezaktywowanymi (widok "Sprawy")
+GET {{TimeSuggestions_HostAddress}}/api/cases?includeInactive=true
+Accept: application/json
+
+### Dodanie sprawy — numer musi być unikalny (409 przy duplikacie)
+POST {{TimeSuggestions_HostAddress}}/api/cases
+Content-Type: application/json
+
+{
+  "name": "Umowa serwisowa NovaTech",
+  "caseNumber": "KG/2026/042",
+  "clientName": "NovaTech Sp. z o.o.",
+  "keywords": ["NovaTech", "umowa serwisowa"]
+}
+
+### Edycja sprawy (id=1) — te same pola i walidacja co przy dodawaniu
+PUT {{TimeSuggestions_HostAddress}}/api/cases/1
+Content-Type: application/json
+
+{
+  "name": "Umowa serwisowa NovaTech — aneks",
+  "caseNumber": "KG/2026/042",
+  "clientName": "NovaTech Sp. z o.o.",
+  "keywords": ["NovaTech", "umowa serwisowa", "aneks"]
+}
+
+### Dezaktywacja sprawy (id=1) — zamiast usuwania; znika z dopasowania i list wyboru
+POST {{TimeSuggestions_HostAddress}}/api/cases/1/deactivate
+
+### Ponowna aktywacja sprawy (id=1)
+POST {{TimeSuggestions_HostAddress}}/api/cases/1/activate
+
 ### Wpisy czasu pracy (weryfikacja na demo)
 GET {{TimeSuggestions_HostAddress}}/api/time-entries
 Accept: application/json

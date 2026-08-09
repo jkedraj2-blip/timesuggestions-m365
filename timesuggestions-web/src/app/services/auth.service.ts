@@ -4,6 +4,7 @@ import {
   InteractionRequiredAuthError,
   AccountInfo,
 } from '@azure/msal-browser';
+import { environment } from '../../environments/environment';
 
 export const GRAPH_SCOPES = ['Calendars.Read', 'Files.Read'];
 
@@ -11,9 +12,9 @@ export const GRAPH_SCOPES = ['Calendars.Read', 'Files.Read'];
 export class AuthService {
   private msal = new PublicClientApplication({
     auth: {
-      clientId: '3f813718-6d67-4bca-b359-6d9cb6ab0c35',
-      authority: 'https://login.microsoftonline.com/common',
-      redirectUri: 'http://localhost:4200',
+      clientId: environment.entraClientId,
+      authority: environment.entraAuthority,
+      redirectUri: environment.entraRedirectUri,
     },
     cache: { cacheLocation: 'sessionStorage' },
   });

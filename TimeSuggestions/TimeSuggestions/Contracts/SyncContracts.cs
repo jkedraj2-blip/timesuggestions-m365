@@ -6,11 +6,56 @@ namespace TimeSuggestions.Contracts;
 /// Surowe dane z Microsoft Graph przysyłane przez frontend.
 /// Backend celowo nie woła Graph sam — token użytkownika nigdy nie opuszcza przeglądarki.
 /// </summary>
-public class SyncRequest
+public class SyncRequest : IValidatableObject
 {
     public List<CalendarEventDto> CalendarEvents { get; set; } = [];
 
     public List<DriveFileDto> DriveFiles { get; set; } = [];
+
+    /// <summary>
+    /// Identyfikatory plików usuniętych z OneDrive (tombstone'y z delta query) —
+    /// backend usuwa ich OCZEKUJĄCE sugestie. Pole opcjonalne: starszy frontend
+    /// go nie wysyła, a pusta lista nie zmienia zachowania.
+    /// </summary>
+    public List<string> DeletedDriveFileIds { get; set; } = [];
+
+    /// <summary>
+    /// Liczniki pozycji odfiltrowanych po stronie przeglądarki, zanim payload
+    /// powstał (prywatność: tytuły prywatnych wydarzeń nie opuszczają przeglądarki;
+    /// dokumenty: frontend filtruje delta feed przed wysyłką). Opcjonalne —
+    /// starszy frontend go nie wysyła, a zerowe liczniki nic nie zmieniają.
+    /// </summary>
+    public ClientFilteredCounts ClientFilteredCounts { get; set; } = new();
+
+    /// <summary>
+    /// Czy CalendarEvents to KOMPLETNY snapshot okna synchronizacji (wszystkie strony
+    /// @odata.nextLink pobrane bez błędu). Tylko wtedy backend wykonuje destrukcyjną
+    /// część rekonsyliacji kalendarza (usuwanie oczekujących sugestii spotkań
+    /// nieobecnych w payloadzie). Domyślnie false — klient, który pola nie przysłał
+    /// (starsza wersja, przerwane stronicowanie), nie może skasować prawidłowych sugestii.
+    /// </summary>
+    public bool CalendarSnapshotComplete { get; set; }
+
+    /// <summary>
+    /// Ile ostatnich pełnych dni lokalnych pokrywa zadeklarowany kompletny snapshot
+    /// kalendarza. Backend ogranicza destrukcyjną rekonsyliację do PRZECIĘCIA tego
+    /// zakresu ze swoim oknem (Suggestions:SyncDaysBack) — rozjazd konfiguracji
+    /// okien frontend/backend zawęża kasowanie, zamiast kasować oczekujące sugestie
+    /// spotkań, których klient w ogóle nie pobrał. Brak wartości przy zadeklarowanej
+    /// kompletności (starszy klient) = zakres nieznany — część destrukcyjna się
+    /// nie uruchamia.
+    /// </summary>
+    [Range(1, 365, ErrorMessage = "Zakres snapshotu kalendarza musi mieścić się w zakresie 1–365 dni.")]
+    public int? CalendarSnapshotDaysBack { get; set; }
+
+    /// <summary>
+    /// Opcjonalne nadpisanie okna synchronizacji (preferencja użytkownika z UI).
+    /// Brak wartości = obowiązuje konfiguracja backendu (Suggestions:SyncDaysBack).
+    /// Górny limit chroni przed żądaniem wieloletniej historii.
+    /// </summary>
+    [Range(1, Configuration.SuggestionOptions.MaxSyncDaysBack,
+        ErrorMessage = "Okno synchronizacji musi mieścić się w zakresie 1–90 dni.")]
+    public int? SyncDaysBack { get; set; }
 
     /// <summary>
     /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
@@ -19,14 +64,52 @@ public class SyncRequest
     [Range(1, Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
         ErrorMessage = "Domyślny czas dokumentu musi mieścić się w zakresie 1–480 minut.")]
     public int? DefaultDocumentDurationMinutes { get; set; }
+
+    /// <summary>
+    /// Elementy listy tombstone'ów walidowane jak pozostałe identyfikatory z Graph.
+    /// MVC nie odrzuca null WEWNĄTRZ kolekcji (waliduje tylko niepuste elementy),
+    /// więc puste pozycje łapiemy tu jawnie — czytelny 400 zamiast 500 w logice.
+    /// </summary>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (CalendarEvents.Any(calendarEvent => calendarEvent is null))
+        {
+            yield return new ValidationResult(
+                "Lista wydarzeń kalendarza zawiera pusty element.", [nameof(CalendarEvents)]);
+        }
+
+        if (DriveFiles.Any(file => file is null))
+        {
+            yield return new ValidationResult(
+                "Lista plików zawiera pusty element.", [nameof(DriveFiles)]);
+        }
+
+        // IsNullOrWhiteSpace: identyfikator z samych spacji jest tak samo bezużyteczny jak pusty.
+        if (DeletedDriveFileIds.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > CalendarEventDto.MaxTextLength))
+        {
+            yield return new ValidationResult(
+                "Identyfikator usuniętego pliku jest pusty albo za długi.", [nameof(DeletedDriveFileIds)]);
+        }
+    }
 }
 
 /// <summary>Wydarzenie z kalendarza Outlook (podzbiór pól Graph potrzebny logice).</summary>
 public class CalendarEventDto
 {
+    /// <summary>Górna granica długości pól tekstowych z Graph — ochrona przed absurdalnie dużym payloadem.</summary>
+    public const int MaxTextLength = 2000;
+
+    /// <summary>
+    /// Sensitivity to krótka wartość słownikowa Graph (normal/personal/private/
+    /// confidential) — limit z dużym zapasem, ale bez przyjmowania kilobajtów.
+    /// </summary>
+    public const int MaxSensitivityLength = 256;
+
     [Required]
+    [MaxLength(MaxTextLength, ErrorMessage = "Identyfikator wydarzenia jest za długi.")]
     public required string Id { get; set; }
 
+    [MaxLength(MaxTextLength, ErrorMessage = "Tytuł wydarzenia jest za długi.")]
     public string? Subject { get; set; }
 
     public DateTime StartDateTime { get; set; }
@@ -35,22 +118,52 @@ public class CalendarEventDto
 
     public bool IsAllDay { get; set; }
 
+    [MaxLength(MaxSensitivityLength, ErrorMessage = "Pole sensitivity jest za długie.")]
     public string? Sensitivity { get; set; }
+
+    /// <summary>Anulowane spotkania nie są czasem przepracowanym — backend je odrzuca.</summary>
+    public bool IsCancelled { get; set; }
 }
 
 /// <summary>Plik z OneDrive (podzbiór pól Graph potrzebny logice).</summary>
 public class DriveFileDto
 {
     [Required]
+    [MaxLength(CalendarEventDto.MaxTextLength, ErrorMessage = "Identyfikator pliku jest za długi.")]
     public required string Id { get; set; }
 
     [Required]
+    [MaxLength(CalendarEventDto.MaxTextLength, ErrorMessage = "Nazwa pliku jest za długa.")]
     public required string Name { get; set; }
 
     public DateTime LastModifiedDateTime { get; set; }
 
     /// <summary>Czy modyfikacji dokonał zalogowany użytkownik — frontend ustala to porównując konto MSAL z lastModifiedBy.</summary>
     public bool LastModifiedByMe { get; set; }
+}
+
+/// <summary>
+/// Liczniki filtrów klienckich — backend nie widzi odfiltrowanych pozycji
+/// (celowo, prywatność), więc dolicza deklarowane liczby do raportu, aby ten
+/// pokazywał prawdę. Wartości walidowane jako nieujemne i rozsądnie ograniczone.
+/// </summary>
+public class ClientFilteredCounts
+{
+    public const int MaxCount = 100_000;
+
+    private const string RangeMessage = "Licznik filtrowania klienckiego musi być z zakresu 0–100000.";
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int Private { get; set; }
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int Cancelled { get; set; }
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int DocumentsOutsideWindow { get; set; }
+
+    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
+    public int DocumentsNotOfficeDocument { get; set; }
 }
 
 public record SyncFetchedCounts(int CalendarEvents, int DriveFiles);
@@ -60,11 +173,14 @@ public record SyncFilteredOutCounts(
     int Private,
     int TooShort,
     int AllDay,
+    int Cancelled,
+    int InvalidDates,
     int NotOfficeDocument,
     int OutsideWindow,
     int NotModifiedByUser)
 {
-    public int Total => Private + TooShort + AllDay + NotOfficeDocument + OutsideWindow + NotModifiedByUser;
+    public int Total => Private + TooShort + AllDay + Cancelled + InvalidDates
+        + NotOfficeDocument + OutsideWindow + NotModifiedByUser;
 }
 
 /// <summary>Wyniki dopasowania nowo utworzonych sugestii do spraw.</summary>
@@ -78,7 +194,17 @@ public record SyncReport(
     SyncFetchedCounts Fetched,
     SyncFilteredOutCounts FilteredOut,
     int Aggregated,
+    // Duplikaty tego samego klucza (źródło, id, dzień) scalone w obrębie jednego
+    // żądania — odpowiednik Aggregated dla powtórzeń z Graph (np. wydarzenie
+    // zduplikowane między stronami calendarView). Utrzymuje niezmiennik:
+    // pobrano = utworzone + zaktualizowane + pominięte + odfiltrowane
+    //         + zagregowane + zdeduplikowane.
+    int Deduplicated,
     int Created,
     int Updated,
     int SkippedExisting,
-    SyncMatchedCounts Matched);
+    int Removed,
+    SyncMatchedCounts Matched,
+    // Faktycznie użyte okno w dniach (konfiguracja albo nadpisanie z żądania) —
+    // UI pokazuje je w tekstach raportu zamiast zgadywać z własnej stałej.
+    int WindowDays);

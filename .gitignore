@@ -7,9 +7,11 @@
 .env
 
 # Lokalna baza SQLite — dane lokalne nie trafiają do repozytorium
+# (łącznie z kopiami tworzonymi przed automatyczną migracją, np. *.db.bak-<data>_<migracja>)
 *.db
 *.db-shm
 *.db-wal
+*.db.bak-*
 
 # Scenariusz demo — materiał lokalny, poza zdalnym repozytorium
 DEMO.md

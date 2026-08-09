@@ -38,13 +38,18 @@ public record SuggestionDto(
 /// <summary>Wartości finalne wpisu — edycja to zatwierdzenie z poprawionymi wartościami (jeden endpoint).</summary>
 public class ApproveSuggestionRequest
 {
-    [Required]
+    /// <summary>Górna granica czasu jednego wpisu — pełna doba.</summary>
+    public const int MaxEntryDurationMinutes = 1440;
+
+    public const int MaxDescriptionLength = 500;
+
     public int CaseId { get; set; }
 
-    [Range(1, int.MaxValue, ErrorMessage = "Czas trwania musi być większy od zera.")]
+    [Range(1, MaxEntryDurationMinutes, ErrorMessage = "Czas trwania musi mieścić się w zakresie 1–1440 minut.")]
     public int DurationMinutes { get; set; }
 
     [Required(AllowEmptyStrings = false, ErrorMessage = "Opis czynności jest wymagany.")]
+    [MaxLength(MaxDescriptionLength, ErrorMessage = "Opis czynności może mieć najwyżej 500 znaków.")]
     public string Description { get; set; } = string.Empty;
 }
 
@@ -59,22 +64,93 @@ public record CaseDto(int Id, string Name, string CaseNumber, string ClientName,
         legalCase.IsActive);
 }
 
-/// <summary>Dane sprawy przy tworzeniu i edycji — słowa kluczowe jako lista, sklejane do formatu bazy.</summary>
-public class CaseWriteRequest
+/// <summary>
+/// Dane sprawy przy tworzeniu i edycji — słowa kluczowe jako lista, sklejane do formatu bazy.
+/// Pola tekstowe są przycinane po stronie backendu (settery); wartości z samych białych
+/// znaków stają się puste i odpadają na [Required]. Walidacja [Required]/[MaxLength]
+/// działa już na wartościach przyciętych.
+/// </summary>
+public class CaseWriteRequest : IValidatableObject
 {
+    public const int MaxNameLength = 200;
+
+    public const int MaxCaseNumberLength = 100;
+
+    public const int MaxKeywordLength = 100;
+
+    private string name = string.Empty;
+    private string caseNumber = string.Empty;
+    private string clientName = string.Empty;
+
     [Required(AllowEmptyStrings = false, ErrorMessage = "Nazwa sprawy jest wymagana.")]
-    public string Name { get; set; } = string.Empty;
+    [MaxLength(MaxNameLength, ErrorMessage = "Nazwa sprawy może mieć najwyżej 200 znaków.")]
+    public string Name { get => name; set => name = value?.Trim() ?? string.Empty; }
 
     [Required(AllowEmptyStrings = false, ErrorMessage = "Numer sprawy jest wymagany.")]
-    public string CaseNumber { get; set; } = string.Empty;
+    [MaxLength(MaxCaseNumberLength, ErrorMessage = "Numer sprawy może mieć najwyżej 100 znaków.")]
+    public string CaseNumber { get => caseNumber; set => caseNumber = value?.Trim() ?? string.Empty; }
 
     [Required(AllowEmptyStrings = false, ErrorMessage = "Nazwa klienta jest wymagana.")]
-    public string ClientName { get; set; } = string.Empty;
+    [MaxLength(MaxNameLength, ErrorMessage = "Nazwa klienta może mieć najwyżej 200 znaków.")]
+    public string ClientName { get => clientName; set => clientName = value?.Trim() ?? string.Empty; }
 
     public List<string> Keywords { get; set; } = [];
 
-    /// <summary>Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej tabeli — YAGNI).</summary>
-    public string JoinedKeywords => string.Join(';', Keywords
+    /// <summary>
+    /// Średnik to separator formatu bazy — słowo kluczowe z ';' odrzucamy jawnym błędem
+    /// zamiast po cichu modyfikować dane użytkownika. MVC nie odrzuca null wewnątrz
+    /// kolekcji, więc puste elementy łapiemy tu jawnie (400 zamiast 500).
+    /// </summary>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        foreach (var keyword in Keywords)
+        {
+            if (keyword is null)
+            {
+                yield return new ValidationResult(
+                    "Lista słów kluczowych zawiera pusty element.", [nameof(Keywords)]);
+                continue;
+            }
+
+            var trimmed = keyword.Trim();
+            if (trimmed.Contains(';'))
+            {
+                // Komunikat nie odbija pełnej wartości wejściowej (niezaufane dane
+                // dowolnej długości) — tylko krótki ucięty podgląd.
+                yield return new ValidationResult(
+                    $"Słowo kluczowe nie może zawierać średnika: \"{TruncateForMessage(trimmed)}\".",
+                    [nameof(Keywords)]);
+            }
+
+            if (trimmed.Length > MaxKeywordLength)
+            {
+                yield return new ValidationResult(
+                    "Pojedyncze słowo kluczowe może mieć najwyżej 100 znaków.", [nameof(Keywords)]);
+            }
+        }
+    }
+
+    private static string TruncateForMessage(string value)
+    {
+        if (value.Length <= 32)
+        {
+            return value;
+        }
+
+        // Cięcie nie może rozdzielić pary zastępczej UTF-16 — samotny surogat
+        // zostałby zserializowany jako U+FFFD i zniekształcił podgląd.
+        var length = char.IsHighSurrogate(value[31]) ? 31 : 32;
+        return $"{value[..length]}…";
+    }
+
+    /// <summary>
+    /// Format przechowywania: pojedyncza kolumna rozdzielana średnikiem (bez osobnej
+    /// tabeli — YAGNI). Metoda, nie właściwość: walidacja modelu MVC czyta wszystkie
+    /// publiczne właściwości, a getter rzucał NRE dla null w Keywords zanim
+    /// Validate() zdążył zwrócić czytelny błąd 400.
+    /// </summary>
+    public string JoinKeywords() => string.Join(';', Keywords
+        .Where(keyword => keyword is not null)
         .Select(keyword => keyword.Trim())
         .Where(keyword => keyword.Length > 0));
 }

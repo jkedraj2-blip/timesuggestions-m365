@@ -31,9 +31,11 @@ public class CasesController(AppDbContext db) : ControllerBase
     [HttpPost]
     public async Task<ActionResult<CaseDto>> Create(CaseWriteRequest request, CancellationToken cancellationToken)
     {
+        // Wstępne sprawdzenie daje przyjazny komunikat; wyścig check-then-insert
+        // domyka indeks unikalny na CaseNumber (naruszenie mapowane niżej na 409).
         if (await CaseNumberTakenAsync(request.CaseNumber, excludeCaseId: null, cancellationToken))
         {
-            return BadRequest(new { message = "Sprawa o tym numerze już istnieje." });
+            return Conflict(new { message = "Sprawa o tym numerze już istnieje." });
         }
 
         var legalCase = new Case
@@ -41,12 +43,20 @@ public class CasesController(AppDbContext db) : ControllerBase
             Name = request.Name,
             CaseNumber = request.CaseNumber,
             ClientName = request.ClientName,
-            Keywords = request.JoinedKeywords,
+            Keywords = request.JoinKeywords(),
             IsActive = true,
         };
 
         db.Cases.Add(legalCase);
-        await db.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
+        {
+            return Conflict(new { message = "Sprawa o tym numerze już istnieje." });
+        }
 
         return Ok(CaseDto.FromEntity(legalCase));
     }
@@ -62,14 +72,22 @@ public class CasesController(AppDbContext db) : ControllerBase
 
         if (await CaseNumberTakenAsync(request.CaseNumber, excludeCaseId: id, cancellationToken))
         {
-            return BadRequest(new { message = "Inna sprawa ma już ten numer." });
+            return Conflict(new { message = "Inna sprawa ma już ten numer." });
         }
 
         legalCase.Name = request.Name;
         legalCase.CaseNumber = request.CaseNumber;
         legalCase.ClientName = request.ClientName;
-        legalCase.Keywords = request.JoinedKeywords;
-        await db.SaveChangesAsync(cancellationToken);
+        legalCase.Keywords = request.JoinKeywords();
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
+        {
+            return Conflict(new { message = "Inna sprawa ma już ten numer." });
+        }
 
         return Ok(CaseDto.FromEntity(legalCase));
     }

@@ -24,6 +24,12 @@ public class SuggestionBuilder(SuggestionOptions options)
 {
     private static readonly string[] AllowedDocumentExtensions = [".docx", ".doc", ".xlsx", ".xls"];
 
+    /// <summary>
+    /// Strefa biznesowa do przeliczania czasów UTC dokumentów. ID IANA działa też na
+    /// Windows (konwersja przez ICU) — potwierdzone testem.
+    /// </summary>
+    private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
+
     public List<Suggestion> BuildFromCalendar(
         IEnumerable<CalendarEventDto> billableEvents,
         IReadOnlyList<Case> activeCases,
@@ -44,6 +50,8 @@ public class SuggestionBuilder(SuggestionOptions options)
 
         // Kategoryzacja odrzuceń po pierwszym niespełnionym warunku — liczniki
         // trafiają do raportu synchronizacji pokazywanego użytkownikowi.
+        // Okno czasu sprawdzane na oryginalnym UTC z Graph; konwersja na strefę
+        // biznesową następuje dopiero przy budowie sugestii.
         foreach (var file in files)
         {
             if (!file.LastModifiedByMe)
@@ -52,7 +60,8 @@ public class SuggestionBuilder(SuggestionOptions options)
                 continue;
             }
 
-            if (file.LastModifiedDateTime < windowStart || file.LastModifiedDateTime > windowEnd)
+            var modifiedAtUtc = AsUtc(file.LastModifiedDateTime);
+            if (modifiedAtUtc < windowStart || modifiedAtUtc > windowEnd)
             {
                 outsideWindowCount++;
                 continue;
@@ -69,8 +78,9 @@ public class SuggestionBuilder(SuggestionOptions options)
 
         // Agregacja: kilka modyfikacji tego samego pliku jednego dnia = jedna sugestia
         // (Graph mówi tylko KIEDY plik zmieniono, nie JAK DŁUGO nad nim pracowano).
+        // Dzień liczony w strefie biznesowej — edycja 22:30 UTC to już następny dzień lokalny.
         var oneFilePerDay = eligibleFiles
-            .GroupBy(file => (file.Id, Date: DateOnly.FromDateTime(file.LastModifiedDateTime)))
+            .GroupBy(file => (file.Id, Date: DateOnly.FromDateTime(ToBusinessLocal(file.LastModifiedDateTime))))
             .Select(group => group.OrderBy(file => file.LastModifiedDateTime).First())
             .ToList();
 
@@ -92,16 +102,20 @@ public class SuggestionBuilder(SuggestionOptions options)
         DateTime createdAt)
     {
         var title = string.IsNullOrWhiteSpace(calendarEvent.Subject) ? "(bez tytułu)" : calendarEvent.Subject;
-        var match = CaseMatcher.Match(calendarEvent.Subject, activeCases);
+        var match = CaseMatcher.Match(calendarEvent.Subject, activeCases, MatchTextSource.MeetingTitle);
+
+        // Czasy z Graph przychodzą lokalne (Prefer: outlook.timezone), ale JSON z "Z"
+        // lub offsetem też musi dać spójny czas lokalny strefy biznesowej.
+        var startedAtLocal = BusinessTime.ToBusinessLocal(calendarEvent.StartDateTime, businessTimeZone);
 
         return new Suggestion
         {
             Source = SuggestionSource.Calendar,
             ExternalId = calendarEvent.Id,
             Title = title,
-            StartedAt = calendarEvent.StartDateTime,
-            EntryDate = DateOnly.FromDateTime(calendarEvent.StartDateTime),
-            DurationMinutes = CalendarEventFilter.GetDurationMinutes(calendarEvent),
+            StartedAt = startedAtLocal,
+            EntryDate = DateOnly.FromDateTime(startedAtLocal),
+            DurationMinutes = CalendarEventFilter.GetDurationMinutes(calendarEvent, businessTimeZone),
             CaseId = match.MatchedCase?.Id,
             IsAmbiguous = match.Kind == MatchKind.Multiple,
             ProposedDescription = title,
@@ -115,15 +129,19 @@ public class SuggestionBuilder(SuggestionOptions options)
         IReadOnlyList<Case> activeCases,
         DateTime createdAt)
     {
-        var match = CaseMatcher.Match(file.Name, activeCases);
+        var match = CaseMatcher.Match(file.Name, activeCases, MatchTextSource.DocumentName);
+
+        // StartedAt i EntryDate z tego samego czasu lokalnego — dokumenty i kalendarz
+        // (przychodzący już w strefie lokalnej) mają wspólną podstawę czasu.
+        var startedAtLocal = ToBusinessLocal(file.LastModifiedDateTime);
 
         return new Suggestion
         {
             Source = SuggestionSource.Document,
             ExternalId = file.Id,
             Title = file.Name,
-            StartedAt = file.LastModifiedDateTime,
-            EntryDate = DateOnly.FromDateTime(file.LastModifiedDateTime),
+            StartedAt = startedAtLocal,
+            EntryDate = DateOnly.FromDateTime(startedAtLocal),
             DurationMinutes = options.DefaultDocumentDurationMinutes,
             CaseId = match.MatchedCase?.Id,
             IsAmbiguous = match.Kind == MatchKind.Multiple,
@@ -136,4 +154,18 @@ public class SuggestionBuilder(SuggestionOptions options)
     private static bool HasAllowedExtension(string fileName)
         => AllowedDocumentExtensions.Any(extension =>
             fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+
+    private DateTime ToBusinessLocal(DateTime dateTime)
+        => TimeZoneInfo.ConvertTimeFromUtc(AsUtc(dateTime), businessTimeZone);
+
+    /// <summary>
+    /// lastModifiedDateTime z Graph jest w UTC, ale po deserializacji Kind bywa
+    /// Unspecified (JSON bez "Z") — jawnie oznaczamy wartość jako UTC.
+    /// </summary>
+    private static DateTime AsUtc(DateTime dateTime) => dateTime.Kind switch
+    {
+        DateTimeKind.Utc => dateTime,
+        DateTimeKind.Local => dateTime.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc),
+    };
 }

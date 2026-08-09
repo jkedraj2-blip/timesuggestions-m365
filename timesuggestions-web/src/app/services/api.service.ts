@@ -21,9 +21,12 @@ import { GraphEvent } from '../models/graph.models';
 
 /** Etapy synchronizacji raportowane do UI — user widzi, że coś się dzieje. */
 export type SyncStage =
-  | { kind: 'calendar' }
+  | { kind: 'calendar'; page: number }
   | { kind: 'files'; page: number }
   | { kind: 'processing' };
+
+/** Wydarzenia o tych poufnościach nie opuszczają przeglądarki (spójnie z filtrem backendu). */
+const EXCLUDED_SENSITIVITIES = ['personal', 'private', 'confidential'];
 
 /**
  * REST do backendu TimeSuggestions. Celowo bez nagłówka Authorization —
@@ -35,28 +38,74 @@ export class ApiService {
   private graphFiles = inject(GraphFilesService);
   private baseUrl = environment.apiBaseUrl;
 
-  /** Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania. */
+  /**
+   * Pobiera dane z obu źródeł Graph i przekazuje backendowi do filtrowania i dopasowania.
+   * Kompletność snapshotu kalendarza jest deklarowana jawnie (calendarSnapshotComplete):
+   * częściowo pobrany kalendarz trafia do backendu bez tej deklaracji, więc
+   * destrukcyjna rekonsyliacja się nie uruchamia.
+   */
   async syncNow(
     onStage?: (stage: SyncStage) => void,
     defaultDocumentDurationMinutes?: number,
+    syncDaysBack?: number,
   ): Promise<SyncReport> {
-    onStage?.({ kind: 'calendar' });
-    const events = await this.graphCalendar.getEventsLastDays(SYNC_DAYS_BACK);
+    // Zakres wybrany w UI; brak wartości = domyślne okno (SYNC_DAYS_BACK).
+    const days = syncDaysBack ?? SYNC_DAYS_BACK;
+    const calendarSnapshot = await this.graphCalendar.getEventsLastDays(days, (page) =>
+      onStage?.({ kind: 'calendar', page }),
+    );
+    const rawEvents = calendarSnapshot.events;
 
-    const files = await this.graphFiles.getRecentDocuments(SYNC_DAYS_BACK, (page) =>
+    // Filtr prywatności w przeglądarce: TYTUŁY wydarzeń prywatnych/poufnych/osobistych
+    // i anulowanych nie mogą w ogóle trafić do API. Backend powtarza swoje filtry
+    // (klientowi nie ufa) — a odrzucenia stąd raportujemy licznikami, żeby raport
+    // syncu pokazywał prawdę.
+    let privateCount = 0;
+    let cancelledCount = 0;
+    const events = rawEvents.filter((event) => {
+      if (event.isCancelled) {
+        cancelledCount++;
+        return false;
+      }
+      if (event.sensitivity && EXCLUDED_SENSITIVITIES.includes(event.sensitivity.toLowerCase())) {
+        privateCount++;
+        return false;
+      }
+      return true;
+    });
+
+    const driveResult = await this.graphFiles.getRecentDocuments(days, (page) =>
       onStage?.({ kind: 'files', page }),
     );
 
     onStage?.({ kind: 'processing' });
     const request: SyncRequest = {
       calendarEvents: events.map((event) => this.toCalendarPayload(event)),
-      driveFiles: files,
+      // Destrukcyjna rekonsyliacja kalendarza w backendzie tylko przy KOMPLETNYM
+      // snapshocie okna — częściowe pobranie nie może kasować prawidłowych sugestii.
+      calendarSnapshotComplete: calendarSnapshot.snapshotComplete,
+      // Deklaracja zakresu snapshotu: backend kasuje oczekujące sugestie wyłącznie
+      // w przecięciu tego zakresu ze swoim oknem, więc rozjazd okien frontend/backend
+      // zawęża kasowanie zamiast niszczyć dane.
+      calendarSnapshotDaysBack: days,
+      // Nadpisanie okna backendu tą samą wartością — jedno źródło prawdy dla
+      // pobierania, filtrowania i tekstów raportu (raport odsyła windowDays).
+      syncDaysBack: days,
+      driveFiles: driveResult.files,
+      deletedDriveFileIds: driveResult.deletedDriveFileIds,
+      clientFilteredCounts: {
+        private: privateCount,
+        cancelled: cancelledCount,
+        documentsOutsideWindow: driveResult.documentsOutsideWindow,
+        documentsNotOfficeDocument: driveResult.documentsNotOfficeDocument,
+      },
       defaultDocumentDurationMinutes,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);
 
-    // Wskaźnik delta przesuwamy dopiero po udanym zapisie — nieudany sync nie gubi zmian.
+    // Wskaźnik delta przesuwamy dopiero po udanym zapisie (obejmującym też
+    // tombstone'y) — nieudany sync nie gubi zmian.
     this.graphFiles.commitDeltaLink();
 
     return report;
@@ -122,6 +171,7 @@ export class ApiService {
       endDateTime: event.end.dateTime,
       isAllDay: event.isAllDay,
       sensitivity: event.sensitivity ?? null,
+      isCancelled: event.isCancelled ?? false,
     };
   }
 

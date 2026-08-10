@@ -2,6 +2,7 @@ import { Component, computed, effect, inject, input, output, signal, untracked }
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
+import { formatCaseMeta } from '../services/case-label';
 import { ApprovePayload, CaseInfo, Suggestion, TimeEntry } from '../models/api.models';
 import { DurationPipe } from '../pipes/duration.pipe';
 
@@ -37,10 +38,20 @@ export interface SuggestionResolved {
             title="Microsoft Graph nie podaje, jak długo trwała edycja — to wartość domyślna z konfiguracji. Popraw ją, jeśli pracowałeś dłużej. Sugestia odpowiada ostatniej zaobserwowanej modyfikacji pliku (delta), a nie pełnej historii dni pracy — edycje z dni pomiędzy synchronizacjami nie są odtwarzane."
           >czas domyślny</span>
         }
-        @if (suggestion().caseName) {
-          <span class="badge badge-success">{{ suggestion().caseName }}</span>
-        }
       </div>
+
+      @if (suggestion().caseName) {
+        <!-- Sprawa w osobnej, podpisanej linii — z tego widoku powstaje rozliczenie,
+             a numer sprawy to identyfikator z faktury; plakietka w wierszu metadanych
+             była niezauważalna. Zielona plakietka zostaje: sygnalizuje "dopasowano". -->
+        <p class="case-line">
+          <span class="text-muted">Sprawa:</span>
+          <span class="badge badge-success">{{ suggestion().caseName }}</span>
+          @if (caseMeta()) {
+            <span class="text-muted">· {{ caseMeta() }}</span>
+          }
+        </p>
+      }
 
       @if (reviewReason()) {
         <p class="review-reason text-warn">{{ reviewReason() }}</p>
@@ -72,7 +83,8 @@ export interface SuggestionResolved {
             <select [(ngModel)]="selectedCaseId">
               <option [ngValue]="null">— wybierz sprawę —</option>
               @for (caseInfo of cases(); track caseInfo.id) {
-                <option [ngValue]="caseInfo.id">{{ caseInfo.name }} ({{ caseInfo.caseNumber }})</option>
+                <!-- Klient obok numeru: przy podobnych nazwach spraw to on rozstrzyga wybór. -->
+                <option [ngValue]="caseInfo.id">{{ caseInfo.name }} ({{ caseInfo.caseNumber }}) · {{ caseInfo.clientName }}</option>
               }
             </select>
           </label>
@@ -108,6 +120,7 @@ export interface SuggestionResolved {
     .card-header { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
     .title { flex: 1; font-size: var(--font-size-lg); }
     .card-details { display: flex; align-items: center; gap: var(--space-4); margin: var(--space-2) 0; flex-wrap: wrap; }
+    .case-line { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; margin: var(--space-1) 0; }
     .review-reason { margin: var(--space-1) 0; font-size: var(--font-size-sm); }
     .description { margin: var(--space-2) 0; }
     .edit-form { display: flex; flex-direction: column; gap: var(--space-2); margin: var(--space-3) 0; }
@@ -154,6 +167,10 @@ export class SuggestionCard {
   protected isRejected = computed(() => this.suggestion().status === 'rejected');
 
   protected isArchived = computed(() => this.suggestion().status === 'archived');
+
+  protected caseMeta = computed(() =>
+    formatCaseMeta(this.suggestion().caseNumber, this.suggestion().clientName),
+  );
 
   protected sourceIcon = computed(() => (this.suggestion().source === 'calendar' ? '📅' : '📄'));
 

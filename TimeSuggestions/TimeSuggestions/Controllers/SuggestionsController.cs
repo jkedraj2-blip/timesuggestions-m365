@@ -57,9 +57,11 @@ public class SuggestionsController(
             ? MatchTextSource.DocumentName
             : MatchTextSource.MeetingTitle;
 
+        // Numer sprawy w nawiasie: to moment, w którym użytkownik rozstrzyga między
+        // podobnymi sprawami, a numer jest jednoznaczny tam, gdzie nazwy bywają mylące.
         return CaseMatcher.Match(suggestion.Title, activeCases, textSource)
             .Candidates
-            .Select(candidate => candidate.Name)
+            .Select(candidate => $"{candidate.Name} ({candidate.CaseNumber})")
             .ToList();
     }
 

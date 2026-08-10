@@ -132,6 +132,14 @@
   box-sizing: border-box;
 }
 
+/* Płynne przewijanie programowe (np. do formularza sprawy) tylko dla użytkowników
+   bez zgłoszonej wrażliwości na ruch — pozostali dostają natychmiastowy przeskok. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 body {
   margin: 0;
   background: var(--bg);

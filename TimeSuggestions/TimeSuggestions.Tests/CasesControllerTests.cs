@@ -51,12 +51,31 @@ public sealed class CasesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_DuplikatNumeruSprawyZwraca409()
+    public async Task Create_DuplikatNumeruSprawyZwraca409ZNazwaKolidujacejSprawy()
     {
         // "K-2026-001" istnieje w seedzie — duplikat to konflikt stanu (409), nie błąd żądania.
         var result = await controller.Create(CreateRequest("K-2026-001"), CancellationToken.None);
 
-        Assert.IsType<ConflictObjectResult>(result.Result);
+        var conflict = Assert.IsType<ConflictObjectResult>(result.Result);
+        // Komunikat wskazuje sprawę, a nie odbija wpisanego numeru.
+        Assert.Contains("Kowalski sp. z o.o.", conflict.Value!.ToString());
+        Assert.DoesNotContain("K-2026-001", conflict.Value.ToString());
+    }
+
+    [Fact]
+    public async Task Create_NumerZajetyPrzezNIEAKTYWNASprawe_KomunikatMowiOStanieIPodpowiadaAktywacje()
+    {
+        // Numer nie zwalnia się po dezaktywacji, a nieaktywna sprawa jest domyślnie
+        // niewidoczna na liście — bez tej informacji kolizja wygląda jak błąd aplikacji.
+        await controller.Deactivate(1, CancellationToken.None);
+
+        var result = await controller.Create(CreateRequest("K-2026-001"), CancellationToken.None);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result.Result);
+        var message = conflict.Value!.ToString()!;
+        Assert.Contains("Kowalski sp. z o.o.", message);
+        Assert.Contains("nieaktywna", message);
+        Assert.Contains("Aktywuj", message);
     }
 
     [Fact]
@@ -64,7 +83,21 @@ public sealed class CasesControllerTests : IDisposable
     {
         var result = await controller.Update(2, CreateRequest("K-2026-001"), CancellationToken.None);
 
-        Assert.IsType<ConflictObjectResult>(result.Result);
+        var conflict = Assert.IsType<ConflictObjectResult>(result.Result);
+        Assert.Contains("Kowalski sp. z o.o.", conflict.Value!.ToString());
+    }
+
+    [Fact]
+    public async Task Update_WlasnyNumerSprawyNieJestKonfliktem()
+    {
+        // Zapis sprawy bez zmiany numeru musi przechodzić — inaczej edycja nazwy
+        // albo słów kluczowych byłaby niemożliwa.
+        var request = CreateRequest("K-2026-001");
+
+        var result = await controller.Update(1, request, CancellationToken.None);
+
+        var updated = Assert.IsType<CaseDto>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal("K-2026-001", updated.CaseNumber);
     }
 
     [Fact]

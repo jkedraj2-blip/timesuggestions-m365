@@ -1,11 +1,11 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, ElementRef, OnInit, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
 import { toUserMessage } from '../services/user-message';
 import { CaseInfo, CaseWritePayload } from '../models/api.models';
 
-/** Robocze pola formularza sprawy — słowa kluczowe jako tekst rozdzielany przecinkami. */
+/** Robocze pola formularza sprawy — słowa kluczowe jako jeden tekst z separatorami. */
 interface CaseFormDraft {
   name: string;
   caseNumber: string;
@@ -14,6 +14,21 @@ interface CaseFormDraft {
 }
 
 const EMPTY_DRAFT: CaseFormDraft = { name: '', caseNumber: '', clientName: '', keywordsText: '' };
+
+/**
+ * Słowa kluczowe z pojedynczego pola tekstowego. Przecinek i średnik znaczą to samo:
+ * średnik jest formatem przechowywania po stronie backendu, więc użytkownik widuje go
+ * w dokumentacji i odruchowo powtarza. Bez tego wpisanie „Alfa; Beta" tworzyło JEDNO
+ * słowo kluczowe ze średnikiem w środku, a backend odbijał je błędem walidacji.
+ * Podział po stronie klienta sprawia, że API dostaje czyste wartości — zakaz średnika
+ * w pojedynczym słowie kluczowym zostaje nienaruszony i nadal chroni sam endpoint.
+ */
+export function parseKeywords(text: string): string[] {
+  return text
+    .split(/[,;]/)
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => keyword.length > 0);
+}
 
 /**
  * Widok spraw: tłumaczy zasadę dopasowania i pozwala zarządzać listą
@@ -57,12 +72,12 @@ const EMPTY_DRAFT: CaseFormDraft = { name: '', caseNumber: '', clientName: '', k
     </div>
 
     @if (formVisible()) {
-      <div class="card form-card">
+      <div class="card form-card" #formCard>
         <h3>{{ editedCaseId() === null ? 'Nowa sprawa' : 'Edycja sprawy' }}</h3>
         <div class="form-grid">
           <label class="field">
             Nazwa sprawy
-            <input type="text" [(ngModel)]="draft.name" />
+            <input type="text" #nameField [(ngModel)]="draft.name" />
           </label>
           <label class="field">
             Numer sprawy
@@ -73,7 +88,7 @@ const EMPTY_DRAFT: CaseFormDraft = { name: '', caseNumber: '', clientName: '', k
             <input type="text" [(ngModel)]="draft.clientName" />
           </label>
           <label class="field">
-            Słowa kluczowe (po przecinku)
+            Słowa kluczowe (po przecinku lub średniku)
             <input type="text" [(ngModel)]="draft.keywordsText" placeholder="np. Kowalski, K-2026" />
           </label>
         </div>
@@ -145,6 +160,35 @@ export class CasesPage implements OnInit {
   private api = inject(ApiService);
   private toasts = inject(ToastService);
 
+  private formCard = viewChild<ElementRef<HTMLElement>>('formCard');
+  private nameField = viewChild<ElementRef<HTMLInputElement>>('nameField');
+
+  /** Otwarcie formularza zgłasza żądanie przewinięcia — realizowane po renderze bloku @if. */
+  private formOpenRequested = signal(false);
+
+  constructor() {
+    // Formularz siedzi w @if, więc w momencie kliknięcia „Edytuj"/„Dodaj sprawę" element
+    // jeszcze nie istnieje. Sygnał viewChild aktualizuje się dopiero po renderze —
+    // effect odpala się dokładnie wtedy, gdy karta formularza pojawia się w DOM,
+    // bez setTimeout z magicznym opóźnieniem.
+    effect(() => {
+      const card = this.formCard();
+      if (!this.formOpenRequested() || card === undefined) {
+        return;
+      }
+      untracked(() => {
+        this.formOpenRequested.set(false);
+        // Płynność przewijania kontroluje media query prefers-reduced-motion
+        // w styles.css (scroll-behavior na html) — tu tylko żądanie przewinięcia.
+        // Wywołanie opcjonalne: środowisko testowe (jsdom) nie implementuje scrollIntoView.
+        card.nativeElement.scrollIntoView?.({ block: 'start' });
+        // Fokus dla klawiatury i czytników ekranu; preventScroll — fokus nie może
+        // przerwać rozpoczętego płynnego przewijania.
+        this.nameField()?.nativeElement.focus({ preventScroll: true });
+      });
+    });
+  }
+
   protected cases = signal<CaseInfo[]>([]);
   protected loading = signal(false);
   protected busy = signal(false);
@@ -179,7 +223,7 @@ export class CasesPage implements OnInit {
   protected startCreate(): void {
     this.editedCaseId.set(null);
     this.draft = { ...EMPTY_DRAFT };
-    this.formVisible.set(true);
+    this.openForm();
   }
 
   protected startEdit(caseInfo: CaseInfo): void {
@@ -190,7 +234,17 @@ export class CasesPage implements OnInit {
       clientName: caseInfo.clientName,
       keywordsText: caseInfo.keywords.join(', '),
     };
+    this.openForm();
+  }
+
+  /**
+   * Wspólne otwarcie dla dodawania i edycji: przy dłuższej liście spraw formularz
+   * renderuje się poza ekranem i przycisk wygląda na zepsuty — stąd przewinięcie
+   * z fokusem na pierwszym polu (obsługa w effect w konstruktorze).
+   */
+  private openForm(): void {
     this.formVisible.set(true);
+    this.formOpenRequested.set(true);
   }
 
   protected cancelForm(): void {
@@ -248,10 +302,7 @@ export class CasesPage implements OnInit {
       name: this.draft.name.trim(),
       caseNumber: this.draft.caseNumber.trim(),
       clientName: this.draft.clientName.trim(),
-      keywords: this.draft.keywordsText
-        .split(',')
-        .map((keyword) => keyword.trim())
-        .filter((keyword) => keyword.length > 0),
+      keywords: parseKeywords(this.draft.keywordsText),
     };
   }
 }

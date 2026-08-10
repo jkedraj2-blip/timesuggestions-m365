@@ -6,6 +6,7 @@ import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
 import { TwoStepConfirm } from '../services/confirm-state';
 import { toUserMessage } from '../services/user-message';
+import { formatCaseMeta } from '../services/case-label';
 import { TimeEntriesResponse, TimeEntry } from '../models/api.models';
 import { DurationPipe, formatDuration } from '../pipes/duration.pipe';
 import { polishPlural } from '../pipes/polish-plural';
@@ -189,6 +190,11 @@ export function confirmSettleLabel(
                   <div class="entry-header">
                     <span class="badge badge-neutral">{{ entry.source === 'calendar' ? '📅 Spotkanie' : '📄 Dokument' }}</span>
                     <strong>{{ entry.caseName }}</strong>
+                    @if (formatCaseMeta(entry.caseNumber, entry.clientName); as caseMeta) {
+                      <!-- Numer sprawy to identyfikator z faktury — widoczny tam, gdzie
+                           powstaje rozliczenie, zamiast szukania sprawy na innej zakładce. -->
+                      <span class="text-muted">{{ caseMeta }}</span>
+                    }
                     <span class="badge badge-success">{{ entry.durationMinutes | duration }}</span>
                     @if (entry.archivedAt) {
                       <span class="badge badge-neutral">rozliczono {{ entry.archivedAt | date: 'dd.MM.yyyy' }}</span>
@@ -297,6 +303,8 @@ export class TimeEntriesPage implements OnInit {
 
   /** Dwustopniowe potwierdzenie akcji rozliczenia — archiwizacja jest nieodwracalna. */
   protected confirm = new TwoStepConfirm();
+
+  protected readonly formatCaseMeta = formatCaseMeta;
 
   /** Zakresy przycisków hurtowych — z dat lokalnych przeglądarki i załadowanej listy. */
   private ranges = computed<Record<'week' | 'month' | 'all', DateRange | null>>(() => {

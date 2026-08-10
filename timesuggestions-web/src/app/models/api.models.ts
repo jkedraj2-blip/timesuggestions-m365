@@ -53,8 +53,11 @@ export interface Suggestion {
   durationMinutes: number;
   caseId: number | null;
   caseName: string | null;
+  /** Numer i klient czytane na żywo z dopasowanej sprawy (bez snapshotu) — null, gdy brak dopasowania. */
+  caseNumber: string | null;
+  clientName: string | null;
   isAmbiguous: boolean;
-  /** Nazwy spraw pasujących przy niejednoznacznym dopasowaniu — UI mówi konkretnie "pasuje do X i Y". */
+  /** Sprawy pasujące przy niejednoznacznym dopasowaniu, w formacie „Nazwa (Numer)" — UI mówi konkretnie "pasuje do X i Y". */
   matchCandidates: string[];
   proposedDescription: string;
   status: SuggestionStatus;
@@ -87,6 +90,9 @@ export interface TimeEntry {
   id: number;
   caseId: number;
   caseName: string | null;
+  /** Numer i klient czytane na żywo z powiązanej sprawy (bez snapshotu) — null, gdy nawigacja niezaładowana. */
+  caseNumber: string | null;
+  clientName: string | null;
   entryDate: string;
   durationMinutes: number;
   description: string;

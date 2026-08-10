@@ -33,9 +33,9 @@ public class CasesController(AppDbContext db) : ControllerBase
     {
         // Wstępne sprawdzenie daje przyjazny komunikat; wyścig check-then-insert
         // domyka indeks unikalny na CaseNumber (naruszenie mapowane niżej na 409).
-        if (await CaseNumberTakenAsync(request.CaseNumber, excludeCaseId: null, cancellationToken))
+        if (await FindCaseNumberOwnerAsync(request.CaseNumber, excludeCaseId: null, cancellationToken) is Case conflicting)
         {
-            return Conflict(new { message = "Sprawa o tym numerze już istnieje." });
+            return Conflict(new { message = CaseNumberConflictMessage(conflicting) });
         }
 
         var legalCase = new Case
@@ -55,6 +55,8 @@ public class CasesController(AppDbContext db) : ControllerBase
         }
         catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
         {
+            // Ścieżka wyścigu: numer zajęto między sprawdzeniem a zapisem. Nie mamy tu
+            // kolidującej encji, więc komunikat pozostaje ogólny (wariant skrajnie rzadki).
             return Conflict(new { message = "Sprawa o tym numerze już istnieje." });
         }
 
@@ -70,9 +72,9 @@ public class CasesController(AppDbContext db) : ControllerBase
             return NotFound(new { message = "Sprawa nie istnieje." });
         }
 
-        if (await CaseNumberTakenAsync(request.CaseNumber, excludeCaseId: id, cancellationToken))
+        if (await FindCaseNumberOwnerAsync(request.CaseNumber, excludeCaseId: id, cancellationToken) is Case conflicting)
         {
-            return Conflict(new { message = "Inna sprawa ma już ten numer." });
+            return Conflict(new { message = CaseNumberConflictMessage(conflicting) });
         }
 
         legalCase.Name = request.Name;
@@ -86,6 +88,7 @@ public class CasesController(AppDbContext db) : ControllerBase
         }
         catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
         {
+            // Jak wyżej: wyścig, bez dostępu do kolidującej encji.
             return Conflict(new { message = "Inna sprawa ma już ten numer." });
         }
 
@@ -117,8 +120,26 @@ public class CasesController(AppDbContext db) : ControllerBase
         return NoContent();
     }
 
-    private Task<bool> CaseNumberTakenAsync(string caseNumber, int? excludeCaseId, CancellationToken cancellationToken)
-        => db.Cases.AnyAsync(
+    /// <summary>
+    /// Sprawa trzymająca dany numer, także nieaktywna: numer identyfikuje sprawę
+    /// w historii rozliczeń, więc dezaktywacja go nie zwalnia (recykling numeru
+    /// uczyniłby stare wpisy czasu dwuznacznymi).
+    /// </summary>
+    private Task<Case?> FindCaseNumberOwnerAsync(string caseNumber, int? excludeCaseId, CancellationToken cancellationToken)
+        => db.Cases.FirstOrDefaultAsync(
             legalCase => legalCase.CaseNumber == caseNumber && (excludeCaseId == null || legalCase.Id != excludeCaseId),
             cancellationToken);
+
+    /// <summary>
+    /// Komunikat konfliktu numeru. Wskazuje NAZWĘ kolidującej sprawy (dane z bazy,
+    /// ograniczone długością), zamiast powtarzać wpisany numer — komunikaty błędów
+    /// nie odbijają danych wejściowych. Nieaktywność musi paść wprost: domyślna lista
+    /// pokazuje wyłącznie sprawy aktywne, więc bez tego użytkownik szuka na ekranie
+    /// kolizji, której nie ma jak zobaczyć, i wygląda to jak błąd aplikacji.
+    /// </summary>
+    private static string CaseNumberConflictMessage(Case conflicting)
+        => conflicting.IsActive
+            ? $"Ten numer ma już sprawa \"{conflicting.Name}\"."
+            : $"Ten numer ma już sprawa \"{conflicting.Name}\", obecnie nieaktywna. "
+                + "Aktywuj ją ponownie albo użyj innego numeru.";
 }

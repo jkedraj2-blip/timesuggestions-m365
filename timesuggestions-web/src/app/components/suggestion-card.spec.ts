@@ -14,6 +14,8 @@ function createSuggestion(overrides: Partial<Suggestion> = {}): Suggestion {
     durationMinutes: 60,
     caseId: 1,
     caseName: 'Kowalski sp. z o.o.',
+    caseNumber: 'K-2026-001',
+    clientName: 'Kowalski',
     isAmbiguous: false,
     matchCandidates: [],
     proposedDescription: 'Spotkanie z Kowalski',
@@ -61,6 +63,21 @@ describe('SuggestionCard', () => {
   it('inicjalizuje drafty z wartości sugestii', () => {
     expect(card().durationDraft()).toBe(60);
     expect(card().descriptionDraft()).toBe('Spotkanie z Kowalski');
+  });
+
+  it('pokazuje dopasowaną sprawę w podpisanej linii z numerem i klientem', () => {
+    const caseLine = (fixture.nativeElement as HTMLElement).querySelector('.case-line');
+
+    expect(caseLine?.textContent).toContain('Sprawa:');
+    // Zielona plakietka sygnalizuje dopasowanie — jak przed przeniesieniem do osobnej linii.
+    expect(caseLine?.querySelector('.badge-success')?.textContent).toBe('Kowalski sp. z o.o.');
+    expect(caseLine?.textContent).toContain('K-2026-001 · Kowalski');
+  });
+
+  it('ukrywa linię sprawy przy braku dopasowania', async () => {
+    await setSuggestion(createSuggestion({ caseId: null, caseName: null, caseNumber: null, clientName: null }));
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.case-line')).toBeNull();
   });
 
   it('resetuje drafty po zmianie inputa, gdy użytkownik nie edytuje', async () => {

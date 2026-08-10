@@ -3,7 +3,7 @@ using TimeSuggestions.Models;
 
 namespace TimeSuggestions.Contracts;
 
-/// <summary>Sugestia w kształcie dla interfejsu — spłaszczona nazwa sprawy zamiast pełnej encji.</summary>
+/// <summary>Sugestia w kształcie dla interfejsu — spłaszczone dane sprawy zamiast pełnej encji.</summary>
 public record SuggestionDto(
     int Id,
     SuggestionSource Source,
@@ -12,14 +12,17 @@ public record SuggestionDto(
     int DurationMinutes,
     int? CaseId,
     string? CaseName,
+    string? CaseNumber,
+    string? ClientName,
     bool IsAmbiguous,
     IReadOnlyList<string> MatchCandidates,
     string ProposedDescription,
     SuggestionStatus Status)
 {
     /// <summary>
-    /// Dla sugestii niejednoznacznych przekazujemy nazwy pasujących spraw —
+    /// Dla sugestii niejednoznacznych przekazujemy pasujące sprawy —
     /// UI mówi użytkownikowi konkretnie "pasuje do X i Y", a nie tylko "sprawdź to".
+    /// Numer i klient czytane na żywo z nawigacji Case (bez snapshotu w sugestii).
     /// </summary>
     public static SuggestionDto FromEntity(Suggestion suggestion, IReadOnlyList<string>? matchCandidates = null) => new(
         suggestion.Id,
@@ -29,6 +32,8 @@ public record SuggestionDto(
         suggestion.DurationMinutes,
         suggestion.CaseId,
         suggestion.Case?.Name,
+        suggestion.Case?.CaseNumber,
+        suggestion.Case?.ClientName,
         suggestion.IsAmbiguous,
         matchCandidates ?? [],
         suggestion.ProposedDescription,
@@ -205,6 +210,8 @@ public record TimeEntryDto(
     int Id,
     int CaseId,
     string? CaseName,
+    string? CaseNumber,
+    string? ClientName,
     DateOnly EntryDate,
     int DurationMinutes,
     string Description,
@@ -223,6 +230,8 @@ public record TimeEntryDto(
         entry.Id,
         entry.CaseId,
         entry.Case?.Name,
+        entry.Case?.CaseNumber,
+        entry.Case?.ClientName,
         entry.EntryDate,
         entry.DurationMinutes,
         entry.Description,

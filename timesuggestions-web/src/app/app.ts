@@ -6,10 +6,11 @@ import { SummaryStore } from './services/summary-store';
 import { ToastService } from './services/toast.service';
 import { ThemeService } from './services/theme.service';
 import { DurationPipe } from './pipes/duration.pipe';
+import { TimelinePanel } from './components/timeline-panel';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, DatePipe, DurationPipe],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, DatePipe, DurationPipe, TimelinePanel],
   template: `
     <header class="app-header">
       <div>
@@ -81,6 +82,9 @@ import { DurationPipe } from './pipes/duration.pipe';
           </div>
         </div>
       }
+
+      <!-- Globalna, zwijana oś czasu — widoczna z każdej zakładki, domyślnie zwinięta. -->
+      <app-timeline-panel />
 
       <nav class="tabs">
         <a class="tab" routerLink="/suggestions" routerLinkActive="active">Sugestie</a>

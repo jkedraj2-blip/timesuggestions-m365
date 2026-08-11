@@ -67,6 +67,19 @@ są walidowane przed dołączeniem nagłówka `Authorization`.
 | **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami i pochodzeniem (z jakiego spotkania/pliku powstały); przy każdym wpisie nazwa sprawy z numerem i klientem (numer to identyfikator używany na fakturze); przełącznik widoków Aktywne / Archiwum; "Cofnij zatwierdzenie" usuwa aktywny wpis i przywraca sugestię; rozliczanie okresowe (dzień, ostatni tydzień, bieżący miesiąc, wszystko) z dwustopniowym potwierdzeniem przenosi wpisy do archiwum |
 | **Sprawy** | Zarządzanie sprawami: dodawanie, edycja (w tym słów kluczowych sterujących dopasowaniem), dezaktywacja (celowo bez twardego usuwania); wyjaśnienie zasady dopasowania |
 
+Pod kafelkami podsumowania znajduje się **globalna, zwijana oś czasu** (widoczna z każdej
+zakładki, domyślnie zwinięta; stan zwinięcia i wybrany miesiąc w localStorage per konto,
+jak `deltaLink`): pasek miesiąca `← 01.08–31.08.2026 →` z komórkami dni (data, skrót dnia
+z Intl, badge z liczbą pozycji; dni bez pozycji wygaszone i nieklikalne, weekend i dziś
+wyróżnione tokenami CSS we wszystkich trzech motywach), a po kliknięciu w dzień —
+pionowa lista pozycji (godziny od–do, tytuł, sprawa z numerem i klientem, czas, status
+kolorem **i** etykietą: `sugestia` / `do rozliczenia` / `rozliczone`; rozliczone
+wyszarzone i nieklikalne). Klik w pozycję nierozliczoną przenosi do właściwej zakładki
+i przewija do elementu z chwilowym podświetleniem (wspólny util `scroll-highlight`,
+wyciągnięty z formularza edycji sprawy); jeśli element nie jest widoczny — toast
+z wyjaśnieniem, nie cisza. Pasek i lista są obsługiwane klawiaturą (`aria-label`
+z pełną datą i liczbą pozycji).
+
 Nad zakładkami znajdują się kafelki podsumowania: oczekujące sugestie, zapisane wpisy,
 nierozliczony czas (tylko aktywne wpisy; archiwizacja zdejmuje godziny z kafelka),
 ostatnia synchronizacja. W nagłówku przełącznik trzech motywów (jasny / niebieski / ciemny),
@@ -118,6 +131,8 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | `POST /api/time-entries/{id}/adjust` | Szybka korekta `{minutes: ±N}`; wynik w przedziale (0, 480] min |
 | `POST /api/time-entries/archive` | Rozlicza (archiwizuje) aktywne wpisy z domkniętego zakresu dat (maks. 366 dni); idempotentne, zwraca liczbę wpisów i sumę minut |
 | `DELETE /api/time-entries/{id}` | Cofa zatwierdzenie: usuwa aktywny wpis i przywraca sugestię; 409 dla wpisu rozliczonego |
+| `GET /api/timeline?from=&to=` | Agregacja osi czasu per dzień: `[{date, pendingCount, activeCount, archivedCount}]` — jedno żądanie na cały miesiąc (maks. 366 dni), zatwierdzona sugestia liczona raz (jako wpis) |
+| `GET /api/timeline/{date}` | Pozycje jednego dnia (oczekujące sugestie + wpisy) posortowane po godzinie startu, ze statusem `pending`/`active`/`archived` |
 | `GET /api/summary` | Liczniki do kafelków podsumowania |
 
 Przykładowe wywołania wszystkich endpointów: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.

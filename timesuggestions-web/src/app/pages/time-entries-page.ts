@@ -231,7 +231,8 @@ export function mergePreview(entries: TimeEntry[]): { sessionsMinutes: number; w
             </header>
 
             @for (entry of day.entries; track entry.id) {
-              <div class="card entry">
+              <!-- Kotwica DOM dla nawigacji z osi czasu (przewiń i podświetl). -->
+              <div class="card entry" [id]="'time-entry-' + entry.id">
                 <div class="entry-main">
                   <div class="entry-header">
                     @if (view() === 'active' && isMergeSelectable(entry)) {

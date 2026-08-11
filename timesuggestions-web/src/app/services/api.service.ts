@@ -18,6 +18,8 @@ import {
   SyncRequest,
   TimeEntriesResponse,
   TimeEntry,
+  TimelineDay,
+  TimelineItem,
 } from '../models/api.models';
 import { GraphEvent } from '../models/graph.models';
 
@@ -211,6 +213,16 @@ export class ApiService {
 
   getSummary(): Promise<Summary> {
     return this.requestJson<Summary>('GET', '/api/summary');
+  }
+
+  /** Agregacja osi czasu per dzień — jedno żądanie na cały miesiąc, nie 31. */
+  getTimeline(from: string, to: string): Promise<TimelineDay[]> {
+    return this.requestJson<TimelineDay[]>('GET', `/api/timeline?from=${from}&to=${to}`);
+  }
+
+  /** Pozycje jednego dnia osi czasu, posortowane po godzinie startu. */
+  getTimelineDay(date: string): Promise<TimelineItem[]> {
+    return this.requestJson<TimelineItem[]>('GET', `/api/timeline/${date}`);
   }
 
   private toCalendarPayload(event: GraphEvent): CalendarEventPayload {

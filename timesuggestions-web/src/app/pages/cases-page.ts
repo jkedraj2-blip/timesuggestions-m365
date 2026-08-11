@@ -2,6 +2,7 @@ import { Component, ElementRef, OnInit, effect, inject, signal, untracked, viewC
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
+import { scrollToElement } from '../services/scroll-highlight';
 import { toUserMessage } from '../services/user-message';
 import { CaseInfo, CaseWritePayload } from '../models/api.models';
 
@@ -178,10 +179,9 @@ export class CasesPage implements OnInit {
       }
       untracked(() => {
         this.formOpenRequested.set(false);
-        // Płynność przewijania kontroluje media query prefers-reduced-motion
-        // w styles.css (scroll-behavior na html) — tu tylko żądanie przewinięcia.
-        // Wywołanie opcjonalne: środowisko testowe (jsdom) nie implementuje scrollIntoView.
-        card.nativeElement.scrollIntoView?.({ block: 'start' });
+        // Wspólny util "przewiń i pokaż" (scroll-highlight) — ten sam wzorzec
+        // wykorzystuje nawigacja z osi czasu.
+        scrollToElement(card.nativeElement, 'start');
         // Fokus dla klawiatury i czytników ekranu; preventScroll — fokus nie może
         // przerwać rozpoczętego płynnego przewijania.
         this.nameField()?.nativeElement.focus({ preventScroll: true });

@@ -296,7 +296,9 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
       <p class="empty-state">Ładowanie sugestii…</p>
     } @else {
       @for (suggestion of visibleSuggestions(); track suggestion.id) {
+        <!-- Kotwica DOM dla nawigacji z osi czasu (przewiń i podświetl). -->
         <app-suggestion-card
+          [id]="'suggestion-' + suggestion.id"
           [suggestion]="suggestion"
           [cases]="cases()"
           (resolved)="onResolved($event)"

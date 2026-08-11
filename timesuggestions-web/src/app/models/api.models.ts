@@ -149,6 +149,31 @@ export interface TimeEntryDay {
   entries: TimeEntry[];
 }
 
+/** Liczniki jednego dnia osi czasu — zatwierdzona sugestia liczona raz, jako wpis. */
+export interface TimelineDay {
+  date: string;
+  pendingCount: number;
+  activeCount: number;
+  archivedCount: number;
+}
+
+/** Pozycja listy dnia na osi czasu. */
+export interface TimelineItem {
+  /** Typ mówi, do której zakładki nawigować po kliknięciu. */
+  type: 'suggestion' | 'timeEntry';
+  id: number;
+  source: SuggestionSource;
+  startedAt: string;
+  endedAt: string;
+  durationMinutes: number;
+  title: string;
+  caseName: string | null;
+  caseNumber: string | null;
+  clientName: string | null;
+  /** Status koloruje i etykietuje pozycję (nigdy samym kolorem); archived jest nieklikalne. */
+  status: 'pending' | 'active' | 'archived';
+}
+
 /** Liczniki dla kafelków podsumowania. */
 export interface Summary {
   pendingCount: number;

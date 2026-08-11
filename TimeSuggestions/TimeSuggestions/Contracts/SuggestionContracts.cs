@@ -1,7 +1,17 @@
 using System.ComponentModel.DataAnnotations;
 using TimeSuggestions.Models;
+using TimeSuggestions.Services;
 
 namespace TimeSuggestions.Contracts;
+
+/// <summary>Wykryta przerwa sesji w kształcie dla interfejsu (czasy strefy biznesowej).</summary>
+public record DetectedGapDto(DateTime StartAt, DateTime EndAt, int Minutes)
+{
+    public static IReadOnlyList<DetectedGapDto> FromJson(string? json)
+        => DetectedGaps.Deserialize(json)
+            .Select(gap => new DetectedGapDto(gap.StartAt, gap.EndAt, gap.Minutes))
+            .ToList();
+}
 
 /// <summary>Sugestia w kształcie dla interfejsu — spłaszczone dane sprawy zamiast pełnej encji.</summary>
 public record SuggestionDto(
@@ -17,7 +27,8 @@ public record SuggestionDto(
     bool IsAmbiguous,
     IReadOnlyList<string> MatchCandidates,
     string ProposedDescription,
-    SuggestionStatus Status)
+    SuggestionStatus Status,
+    IReadOnlyList<DetectedGapDto> DetectedGaps)
 {
     /// <summary>
     /// Dla sugestii niejednoznacznych przekazujemy pasujące sprawy —
@@ -37,7 +48,8 @@ public record SuggestionDto(
         suggestion.IsAmbiguous,
         matchCandidates ?? [],
         suggestion.ProposedDescription,
-        suggestion.Status);
+        suggestion.Status,
+        DetectedGapDto.FromJson(suggestion.DetectedGapsJson));
 }
 
 /// <summary>Wartości finalne wpisu — edycja to zatwierdzenie z poprawionymi wartościami (jeden endpoint).</summary>
@@ -222,7 +234,8 @@ public record TimeEntryDto(
     IReadOnlyList<int> SuggestionIds,
     string? SourceTitle,
     DateTime? SourceStartedAt,
-    DateTime? ArchivedAt)
+    DateTime? ArchivedAt,
+    IReadOnlyList<DetectedGapDto> DetectedGaps)
 {
     /// <summary>
     /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
@@ -249,6 +262,7 @@ public record TimeEntryDto(
             entry.Suggestions.Select(suggestion => suggestion.Id).ToList(),
             firstSuggestion?.Title,
             firstSuggestion?.StartedAt,
-            entry.ArchivedAt);
+            entry.ArchivedAt,
+            DetectedGapDto.FromJson(entry.DetectedGapsJson));
     }
 }

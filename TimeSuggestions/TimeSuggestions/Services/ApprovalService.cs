@@ -68,6 +68,9 @@ public class ApprovalService(AppDbContext db)
             Description = request.Description,
             CreatedFromSuggestion = true,
             Source = suggestion.Source,
+            // Wykryte przerwy jadą na wpis — "Odejmij przerwę" waliduje zakres wobec
+            // tej listy (danych z sesji), a nie wobec wartości przysłanych przez klienta.
+            DetectedGapsJson = suggestion.DetectedGapsJson,
             CreatedAt = nowUtc,
         };
 

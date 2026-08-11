@@ -6,14 +6,17 @@ namespace TimeSuggestions.Services;
 
 /// <summary>
 /// Wynik budowy sugestii z dokumentów wraz z licznikami odrzuceń i agregacji —
-/// zasilają raport synchronizacji widoczny dla użytkownika.
+/// zasilają raport synchronizacji widoczny dla użytkownika. SessionBased wskazuje
+/// kandydatów wyliczonych z historii wersji (silnik sesji): merge stosuje do nich
+/// regułę "scalania w dół" kotwicy, a do kandydatów fallbackowych nie.
 /// </summary>
 public record DocumentBuildResult(
     List<Suggestion> Suggestions,
     int NotModifiedByUserCount,
     int OutsideWindowCount,
     int NotOfficeDocumentCount,
-    int AggregatedCount);
+    int AggregatedCount,
+    IReadOnlySet<Suggestion> SessionBased);
 
 /// <summary>
 /// Składa przefiltrowane dane z obu źródeł w jednolite obiekty sugestii.
@@ -41,7 +44,8 @@ public class SuggestionBuilder(SuggestionOptions options)
         IReadOnlyList<Case> activeCases,
         DateTime windowStart,
         DateTime windowEnd,
-        DateTime createdAt)
+        DateTime createdAt,
+        IReadOnlyDictionary<string, IReadOnlyList<DocumentActivity>>? activitiesByFile = null)
     {
         var eligibleFiles = new List<DriveFileDto>();
         var notModifiedByUserCount = 0;
@@ -76,24 +80,91 @@ public class SuggestionBuilder(SuggestionOptions options)
             eligibleFiles.Add(file);
         }
 
-        // Agregacja: kilka modyfikacji tego samego pliku jednego dnia = jedna sugestia
-        // (Graph mówi tylko KIEDY plik zmieniono, nie JAK DŁUGO nad nim pracowano).
+        // Rozdział na dwa tory: plik z historią wersji w dzienniku → sesje z silnika
+        // (realny czas pracy zamiast sztywnych 30 min); plik bez historii (stary sync,
+        // błąd Graph dla pojedynczego pliku) → dotychczasowy fallback z domyślnym
+        // czasem. Błąd wersji jednego pliku nie wywala syncu — po prostu ląduje w torze
+        // fallbackowym, a raport wersji liczy go osobno.
+        var sessionEngine = new DocumentSessionEngine(options);
+        var sessionBased = new HashSet<Suggestion>();
+        var suggestions = new List<Suggestion>();
+        var fallbackFiles = new List<DriveFileDto>();
+
+        foreach (var file in eligibleFiles)
+        {
+            if (activitiesByFile is not null
+                && activitiesByFile.TryGetValue(file.Id, out var activities)
+                && activities.Count > 0)
+            {
+                foreach (var session in sessionEngine.BuildSessions(activities))
+                {
+                    // Okno na osi UTC (kotwica i przybliżony koniec sesji): sesje sprzed
+                    // okna mają już swoje sugestie z poprzednich synców — odtwarzanie ich
+                    // rozszerzałoby okno tylnymi drzwiami.
+                    var sessionEndUtc = session.AnchorUtc.AddMinutes(session.GrossMinutes);
+                    if (sessionEndUtc < windowStart || session.AnchorUtc > windowEnd)
+                    {
+                        continue;
+                    }
+
+                    var suggestion = BuildSessionSuggestion(file, session, activeCases, createdAt);
+                    suggestions.Add(suggestion);
+                    sessionBased.Add(suggestion);
+                }
+            }
+            else
+            {
+                fallbackFiles.Add(file);
+            }
+        }
+
+        // Agregacja (tylko tor fallbackowy): kilka modyfikacji tego samego pliku jednego
+        // dnia = jedna sugestia (bez historii wersji Graph mówi tylko KIEDY plik zmieniono).
         // Dzień liczony w strefie biznesowej — edycja 22:30 UTC to już następny dzień lokalny.
-        var oneFilePerDay = eligibleFiles
+        var oneFilePerDay = fallbackFiles
             .GroupBy(file => (file.Id, Date: DateOnly.FromDateTime(ToBusinessLocal(file.LastModifiedDateTime))))
             .Select(group => group.OrderBy(file => file.LastModifiedDateTime).First())
             .ToList();
 
-        var suggestions = oneFilePerDay
-            .Select(file => BuildDocumentSuggestion(file, activeCases, createdAt))
-            .ToList();
+        suggestions.AddRange(oneFilePerDay.Select(file => BuildDocumentSuggestion(file, activeCases, createdAt)));
 
         return new DocumentBuildResult(
             suggestions,
             notModifiedByUserCount,
             outsideWindowCount,
             notOfficeDocumentCount,
-            AggregatedCount: eligibleFiles.Count - oneFilePerDay.Count);
+            AggregatedCount: fallbackFiles.Count - oneFilePerDay.Count,
+            SessionBased: sessionBased);
+    }
+
+    /// <summary>Sugestia z jednej sesji pracy — czas i godziny z historii wersji, nie z domyślnych 30 min.</summary>
+    private Suggestion BuildSessionSuggestion(
+        DriveFileDto file,
+        DocumentSession session,
+        IReadOnlyList<Case> activeCases,
+        DateTime createdAt)
+    {
+        var match = CaseMatcher.Match(file.Name, activeCases, MatchTextSource.DocumentName);
+
+        return new Suggestion
+        {
+            Source = SuggestionSource.Document,
+            ExternalId = file.Id,
+            Title = file.Name,
+            StartedAt = session.StartAt,
+            // Kotwica sesji = czas pierwszej wersji (UTC): stabilna, gdy sesja rośnie
+            // "od tyłu" (kolejne wersje przesuwają tylko koniec). Przypadek zaległej
+            // wersji STARSZEJ niż kotwica obsługuje merge w SyncService (scalanie w dół).
+            SessionAnchor = session.AnchorUtc,
+            EntryDate = DateOnly.FromDateTime(session.StartAt),
+            DurationMinutes = session.GrossMinutes,
+            DetectedGapsJson = DetectedGaps.Serialize(session.DetectedGaps),
+            CaseId = match.MatchedCase?.Id,
+            IsAmbiguous = match.Kind == MatchKind.Multiple,
+            ProposedDescription = $"Praca nad dokumentem: {file.Name}",
+            Status = SuggestionStatus.Pending,
+            CreatedAt = createdAt,
+        };
     }
 
     private Suggestion BuildCalendarSuggestion(

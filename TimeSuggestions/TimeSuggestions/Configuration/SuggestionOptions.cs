@@ -40,4 +40,27 @@ public class SuggestionOptions
     /// wspólna strefa sprowadza EntryDate i StartedAt obu źródeł do tej samej podstawy.
     /// </summary>
     public string BusinessTimeZoneId { get; set; } = "Europe/Warsaw";
+
+    /// <summary>
+    /// Przerwa między wersjami pliku, do której (włącznie) sesja trwa nieprzerwanie —
+    /// dokładnie 15 minut nadal jest jedną ciągłą sesją.
+    /// </summary>
+    public int SessionContinuationGapMinutes { get; set; } = 15;
+
+    /// <summary>
+    /// Górna granica przerwy (włącznie), przy której wersje nadal należą do jednej sesji,
+    /// ale luka jest zapisywana jako wykryta przerwa (przycisk "Odejmij przerwę").
+    /// Powyżej tej wartości zaczyna się nowa sesja → nowa sugestia.
+    /// </summary>
+    public int SessionFlaggedGapMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Rozbieg sesji: wersja to moment ZAPISU, nie otwarcia pliku — sesja zaczyna się
+    /// tyle minut przed pierwszą wersją (przycięte do północy dnia biznesowego,
+    /// bo sesje nie przechodzą granicy dnia).
+    /// </summary>
+    public int SessionLeadInMinutes { get; set; } = 10;
+
+    /// <summary>Minimalny czas sesji — sesja z jedną wersją nie może wyjść zerowa.</summary>
+    public int MinimumSessionMinutes { get; set; } = 5;
 }

@@ -67,6 +67,12 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             windowEnd: nowLocal,
             businessTimeZone);
 
+        // Sesje liczą się z UNII dziennika i bieżącego payloadu: dziennik pamięta fakty,
+        // które OneDrive mógł już wyciąć z historii wersji (ograniczona retencja),
+        // a payload niesie fakty jeszcze niezapisane (INSERT dzieje się dopiero w pętli
+        // zapisu niżej) — dopiero razem dają pełną znaną historię pliku.
+        var activitiesByFile = await LoadActivitiesUnionAsync(request.DriveFiles, nowUtc, cancellationToken);
+
         // To samo okno dla dokumentów — granica lokalna przeliczona na instant UTC,
         // bo czasy modyfikacji plików z Graph są w UTC.
         var documentResult = builder.BuildFromDocuments(
@@ -74,7 +80,8 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             activeCases,
             BusinessTime.ToUtcInstant(windowStartLocal, businessTimeZone),
             nowUtc,
-            nowUtc);
+            nowUtc,
+            activitiesByFile);
 
         var rawCandidates = builder
             .BuildFromCalendar(eventFilterResult.Accepted, activeCases, nowUtc)
@@ -113,6 +120,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         {
             merge = await MergeWithExistingAsync(
                 candidates,
+                documentResult.SessionBased,
                 DateOnly.FromDateTime(windowStartLocal),
                 DateOnly.FromDateTime(nowLocal),
                 request.DeletedDriveFileIds,
@@ -263,6 +271,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     /// </summary>
     private async Task<MergeOutcome> MergeWithExistingAsync(
         List<Suggestion> candidates,
+        IReadOnlySet<Suggestion> sessionCandidates,
         DateOnly windowStartDate,
         DateOnly windowEndDate,
         IReadOnlyCollection<string> deletedDriveFileIds,
@@ -279,24 +288,78 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         if (documentCandidates.Count > 0)
         {
             var documentIds = documentCandidates.Select(candidate => candidate.ExternalId).ToList();
-            var existingByKey = (await db.Suggestions
-                    .Where(suggestion => suggestion.Source == SuggestionSource.Document
-                        && documentIds.Contains(suggestion.ExternalId))
-                    .ToListAsync(cancellationToken))
+            var existingDocuments = await db.Suggestions
+                .Where(suggestion => suggestion.Source == SuggestionSource.Document
+                    && documentIds.Contains(suggestion.ExternalId))
+                .ToListAsync(cancellationToken);
+            var existingByKey = existingDocuments
                 .ToDictionary(suggestion => (suggestion.ExternalId, suggestion.SessionAnchor));
+            var existingByFile = existingDocuments
+                .GroupBy(suggestion => suggestion.ExternalId)
+                .ToDictionary(group => group.Key, group => group.ToList());
+            var alreadyRemoved = new HashSet<Suggestion>();
 
             foreach (var candidate in documentCandidates)
             {
-                if (!existingByKey.TryGetValue((candidate.ExternalId, candidate.SessionAnchor), out var existing))
+                existingByKey.TryGetValue((candidate.ExternalId, candidate.SessionAnchor), out var target);
+
+                // Przypadek brzegowy sesji: sync doniósł ZALEGŁĄ wersję. Starsza niż
+                // kotwica, bliżej niż próg sesji → sesja scalana "w dół": kotwica
+                // kandydata leży PRZED kotwicą starej sugestii, a stara kotwica mieści
+                // się wewnątrz nowej sesji — starej sugestii nie duplikujemy, tylko
+                // aktualizujemy w miejscu (kotwica się przesuwa). Wersja W ŚRODKU między
+                // dwiema sesjami mostkuje je w jedną: pierwsza sugestia jest celem
+                // aktualizacji, nadmiarowe oczekujące znikają. Ta sama reguła przejmuje
+                // dawną sugestię fallbackową (kotwica = północ dnia), gdy plik zyskał
+                // historię wersji.
+                List<Suggestion> swallowed = [];
+                if (sessionCandidates.Contains(candidate))
+                {
+                    var sessionEndUtc = candidate.SessionAnchor.AddMinutes(candidate.DurationMinutes);
+                    swallowed = existingByFile.GetValueOrDefault(candidate.ExternalId, [])
+                        .Where(suggestion => !alreadyRemoved.Contains(suggestion)
+                            && !ReferenceEquals(suggestion, target)
+                            && ((suggestion.SessionAnchor > candidate.SessionAnchor
+                                    && suggestion.SessionAnchor <= sessionEndUtc)
+                                || (IsFallbackAnchor(suggestion) && suggestion.EntryDate == candidate.EntryDate)))
+                        .OrderBy(suggestion => suggestion.SessionAnchor)
+                        .ToList();
+                }
+
+                if (target is null)
+                {
+                    // Rozstrzygnięta (zatwierdzona/odrzucona) sugestia wewnątrz sesji:
+                    // sesję już rozpatrzono — nie odtwarzamy jej pod nową kotwicą
+                    // (odrzucona nie wraca, zatwierdzonej nie rozliczamy drugi raz).
+                    if (swallowed.Any(suggestion => suggestion.Status != SuggestionStatus.Pending))
+                    {
+                        continue;
+                    }
+
+                    target = swallowed.FirstOrDefault();
+                    swallowed = swallowed.Skip(1).ToList();
+                }
+
+                if (target is null)
                 {
                     newSuggestions.Add(candidate);
                     continue;
                 }
 
                 // Licznik rośnie tylko przy faktycznej zmianie — raport nie może kłamać.
-                if (existing.Status == SuggestionStatus.Pending && RefreshFromSource(existing, candidate))
+                if (target.Status == SuggestionStatus.Pending && RefreshFromSource(target, candidate))
                 {
                     updatedCount++;
+                }
+
+                // Zmostkowane sesje: znikają wyłącznie OCZEKUJĄCE nadmiarowe sugestie —
+                // rozstrzygniętych sync nie dotyka (mogą chwilowo współistnieć z szerszą
+                // sesją; użytkownik rozstrzygnął je świadomie).
+                foreach (var extra in swallowed.Where(s => s.Status == SuggestionStatus.Pending))
+                {
+                    db.Suggestions.Remove(extra);
+                    alreadyRemoved.Add(extra);
+                    removedCount++;
                 }
             }
         }
@@ -392,6 +455,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             || existing.SessionAnchor != fromSource.SessionAnchor
             || existing.EntryDate != fromSource.EntryDate
             || existing.DurationMinutes != fromSource.DurationMinutes
+            || existing.DetectedGapsJson != fromSource.DetectedGapsJson
             || existing.CaseId != fromSource.CaseId
             || existing.IsAmbiguous != fromSource.IsAmbiguous
             || existing.ProposedDescription != fromSource.ProposedDescription;
@@ -406,10 +470,65 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         existing.SessionAnchor = fromSource.SessionAnchor;
         existing.EntryDate = fromSource.EntryDate;
         existing.DurationMinutes = fromSource.DurationMinutes;
+        existing.DetectedGapsJson = fromSource.DetectedGapsJson;
         existing.CaseId = fromSource.CaseId;
         existing.IsAmbiguous = fromSource.IsAmbiguous;
         existing.ProposedDescription = fromSource.ProposedDescription;
         return true;
+    }
+
+    /// <summary>
+    /// Kotwica fallbackowa (plik bez historii wersji) = północ dnia biznesowego.
+    /// Rozpoznanie po kształcie wartości: sesyjne kotwice to czasy pierwszych wersji
+    /// w UTC — trafienie dokładnie w lokalną północ jest praktycznie wykluczone,
+    /// a fałszywe trafienie skończyłoby się co najwyżej odświeżeniem w miejscu.
+    /// </summary>
+    private static bool IsFallbackAnchor(Suggestion suggestion)
+        => suggestion.SessionAnchor.TimeOfDay == TimeSpan.Zero
+            && DateOnly.FromDateTime(suggestion.SessionAnchor) == suggestion.EntryDate;
+
+    /// <summary>
+    /// Unia historii wersji: fakty już zapisane w dzienniku + fakty z bieżącego payloadu
+    /// (jeszcze niezapisane — INSERT dzieje się w pętli zapisu). Dziennik pamięta wersje,
+    /// które OneDrive mógł już wyciąć z historii (retencja), payload niesie najnowsze.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<DocumentActivity>>> LoadActivitiesUnionAsync(
+        IReadOnlyList<DriveFileDto> files,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var fileIds = files.Select(file => file.Id).Distinct().ToList();
+        if (fileIds.Count == 0)
+        {
+            return new Dictionary<string, IReadOnlyList<DocumentActivity>>();
+        }
+
+        var union = (await db.DocumentActivities
+                .AsNoTracking()
+                .Where(activity => fileIds.Contains(activity.ExternalId))
+                .ToListAsync(cancellationToken))
+            .ToDictionary(activity => (activity.ExternalId, activity.VersionId));
+
+        foreach (var file in files)
+        {
+            foreach (var version in file.Versions ?? [])
+            {
+                union.TryAdd((file.Id, version.VersionId), new DocumentActivity
+                {
+                    ExternalId = file.Id,
+                    VersionId = version.VersionId,
+                    OccurredAt = AsUtc(version.LastModifiedDateTime),
+                    Size = version.Size,
+                    RecordedAt = nowUtc,
+                });
+            }
+        }
+
+        return union.Values
+            .GroupBy(activity => activity.ExternalId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<DocumentActivity>)group.ToList());
     }
 
     private static SyncMatchedCounts CountMatches(IReadOnlyList<Suggestion> suggestions) => new(

@@ -20,6 +20,7 @@ function createSuggestion(overrides: Partial<Suggestion> = {}): Suggestion {
     matchCandidates: [],
     proposedDescription: 'Spotkanie z Kowalski',
     status: 'pending',
+    detectedGaps: [],
     ...overrides,
   };
 }

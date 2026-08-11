@@ -50,6 +50,12 @@ public class TimeEntry
     /// <summary>Dziennik korekt prawnika — audyt zmian czasu, nigdy nie kasowany przez sync.</summary>
     public List<TimeEntryAdjustment> Adjustments { get; set; } = [];
 
+    /// <summary>
+    /// Wykryte przerwy przeniesione z sugestii przy zatwierdzeniu (JSON; null = brak) —
+    /// operacja "Odejmij wykrytą przerwę" waliduje zakres wobec tej listy, nie ufa klientowi.
+    /// </summary>
+    public string? DetectedGapsJson { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>

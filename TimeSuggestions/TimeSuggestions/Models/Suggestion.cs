@@ -46,6 +46,12 @@ public class Suggestion
 
     public string ProposedDescription { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Wykryte przerwy sesji (15–30 min między wersjami) jako JSON; null = brak przerw.
+    /// Kolumna zamiast tabeli — uzasadnienie przy DetectedGaps.Serialize.
+    /// </summary>
+    public string? DetectedGapsJson { get; set; }
+
     public SuggestionStatus Status { get; set; } = SuggestionStatus.Pending;
 
     /// <summary>

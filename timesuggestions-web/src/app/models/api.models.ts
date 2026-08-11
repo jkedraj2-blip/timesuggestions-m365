@@ -59,6 +59,13 @@ export interface SyncRequest {
   driveFileVersionFetchErrors?: number;
 }
 
+/** Wykryta przerwa sesji (15–30 min między wersjami) — czasy strefy biznesowej. */
+export interface DetectedGap {
+  startAt: string;
+  endAt: string;
+  minutes: number;
+}
+
 export interface Suggestion {
   id: number;
   source: SuggestionSource;
@@ -75,6 +82,8 @@ export interface Suggestion {
   matchCandidates: string[];
   proposedDescription: string;
   status: SuggestionStatus;
+  /** Wykryte przerwy sesji dokumentowej — przycisk "Odejmij przerwę" bierze dane stąd, nie z heurystyki UI. */
+  detectedGaps: DetectedGap[];
 }
 
 export interface CaseInfo {
@@ -122,6 +131,8 @@ export interface TimeEntry {
   sourceStartedAt: string | null;
   /** Moment rozliczenia (UTC); null = wpis aktywny. Zarchiwizowany wpis jest tylko do odczytu. */
   archivedAt: string | null;
+  /** Wykryte przerwy przeniesione z sugestii przy zatwierdzeniu. */
+  detectedGaps: DetectedGap[];
 }
 
 /** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */

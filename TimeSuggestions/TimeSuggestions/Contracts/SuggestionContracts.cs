@@ -213,11 +213,13 @@ public record TimeEntryDto(
     string? CaseNumber,
     string? ClientName,
     DateOnly EntryDate,
+    DateTime StartedAt,
+    DateTime EndedAt,
     int DurationMinutes,
     string Description,
     bool CreatedFromSuggestion,
     SuggestionSource Source,
-    int SuggestionId,
+    IReadOnlyList<int> SuggestionIds,
     string? SourceTitle,
     DateTime? SourceStartedAt,
     DateTime? ArchivedAt)
@@ -225,20 +227,28 @@ public record TimeEntryDto(
     /// <summary>
     /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
     /// lub nazwa pliku) — opis mógł zostać nadpisany przez użytkownika przy zatwierdzaniu.
+    /// Po scaleniu sesji wpis ma wiele sugestii: kotwicą jest najwcześniejsza z nich.
     /// </summary>
-    public static TimeEntryDto FromEntity(TimeEntry entry) => new(
-        entry.Id,
-        entry.CaseId,
-        entry.Case?.Name,
-        entry.Case?.CaseNumber,
-        entry.Case?.ClientName,
-        entry.EntryDate,
-        entry.DurationMinutes,
-        entry.Description,
-        entry.CreatedFromSuggestion,
-        entry.Source,
-        entry.SuggestionId,
-        entry.Suggestion?.Title,
-        entry.Suggestion?.StartedAt,
-        entry.ArchivedAt);
+    public static TimeEntryDto FromEntity(TimeEntry entry)
+    {
+        var firstSuggestion = entry.Suggestions.OrderBy(suggestion => suggestion.StartedAt).FirstOrDefault();
+
+        return new(
+            entry.Id,
+            entry.CaseId,
+            entry.Case?.Name,
+            entry.Case?.CaseNumber,
+            entry.Case?.ClientName,
+            entry.EntryDate,
+            entry.StartedAt,
+            entry.EndedAt,
+            entry.DurationMinutes,
+            entry.Description,
+            entry.CreatedFromSuggestion,
+            entry.Source,
+            entry.Suggestions.Select(suggestion => suggestion.Id).ToList(),
+            firstSuggestion?.Title,
+            firstSuggestion?.StartedAt,
+            entry.ArchivedAt);
+    }
 }

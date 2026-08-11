@@ -71,30 +71,25 @@ public sealed class ConcurrencyTests : IDisposable
     };
 
     [Fact]
-    public async Task ApproveAsync_KonfliktUnikalnosciZwracaAlreadyApproved()
+    public async Task ApproveAsync_KonfliktWspolbieznosciZwracaAlreadyApproved()
     {
         var suggestionId = await SeedPendingSuggestionAsync();
 
-        // Symulacja przegranego wyścigu: równoległe żądanie zdążyło wstawić wpis
-        // dla tej samej sugestii po naszym odczycie (status w naszym kontekście
-        // wciąż wygląda na Pending) — INSERT musi skończyć się kodem 2067.
+        // Symulacja przegranego wyścigu: nasz kontekst przyszpila stan Pending
+        // (identity resolution EF odda tę samą, nieodświeżoną instancję), po czym
+        // równoległe żądanie zatwierdza sugestię. Nasz UPDATE z tokenem
+        // współbieżności na statusie trafia zero wierszy → jawny konflikt,
+        // a wycofana transakcja nie zostawia drugiego wpisu.
+        using var db = CreateContext();
+        await db.Suggestions.SingleAsync(suggestion => suggestion.Id == suggestionId);
+
         using (var other = CreateContext())
         {
-            other.TimeEntries.Add(new TimeEntry
-            {
-                CaseId = 1,
-                EntryDate = DateOnly.FromDateTime(Now.AddDays(-1)),
-                DurationMinutes = 60,
-                Description = "Praca",
-                CreatedFromSuggestion = true,
-                Source = SuggestionSource.Calendar,
-                SuggestionId = suggestionId,
-                CreatedAt = Now,
-            });
-            await other.SaveChangesAsync();
+            var otherResult = await new ApprovalService(other)
+                .ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None);
+            Assert.Equal(ApprovalOutcome.Success, otherResult.Outcome);
         }
 
-        using var db = CreateContext();
         var result = await new ApprovalService(db)
             .ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None);
 

@@ -16,9 +16,21 @@ public class Suggestion
     public DateTime StartedAt { get; set; }
 
     /// <summary>
-    /// Data dzienna wyliczona ze StartedAt, zmapowana jako osobna kolumna,
-    /// aby indeks unikalny (Source, ExternalId, EntryDate) mógł deduplikować
-    /// dokumenty agregowane per dzień.
+    /// Kotwica sesji — stabilny między synchronizacjami składnik klucza dedupu
+    /// (Source, ExternalId, SessionAnchor), dzięki któremu jeden plik może mieć
+    /// wiele sesji (sugestii) tego samego dnia. Wartości:
+    /// dokument z historią wersji — czas pierwszej wersji sesji (UTC; sesja rosnąca
+    /// "od tyłu" nie zmienia kotwicy, kolejne wersje przesuwają tylko koniec);
+    /// dokument bez historii (fallback) — początek dnia biznesowego (odpowiednik
+    /// dawnego klucza po EntryDate, więc zachowanie bez wersji się nie zmienia);
+    /// kalendarz — lokalny początek spotkania (dedup i tak działa per ExternalId,
+    /// kotwica domyka wyłącznie wyścig równoległych synchronizacji).
+    /// </summary>
+    public DateTime SessionAnchor { get; set; }
+
+    /// <summary>
+    /// Data dzienna wyliczona ze StartedAt w strefie biznesowej — oś grupowania,
+    /// agregacji i archiwizacji (indeks dedupu przeszedł na SessionAnchor).
     /// </summary>
     public DateOnly EntryDate { get; set; }
 
@@ -35,6 +47,16 @@ public class Suggestion
     public string ProposedDescription { get; set; } = string.Empty;
 
     public SuggestionStatus Status { get; set; } = SuggestionStatus.Pending;
+
+    /// <summary>
+    /// Wpis czasu, do którego trafiła zatwierdzona sugestia. Relacja odwrócona
+    /// (klucz obcy po stronie sugestii), bo scalanie sesji dokumentowych łączy
+    /// WIELE sugestii w JEDEN wpis — dawny unikalny TimeEntries.SuggestionId
+    /// wykluczał tę relację. null = sugestia bez wpisu (oczekująca/odrzucona).
+    /// </summary>
+    public int? TimeEntryId { get; set; }
+
+    public TimeEntry? TimeEntry { get; set; }
 
     public DateTime CreatedAt { get; set; }
 }

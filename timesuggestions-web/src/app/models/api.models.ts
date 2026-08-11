@@ -108,11 +108,15 @@ export interface TimeEntry {
   caseNumber: string | null;
   clientName: string | null;
   entryDate: string;
+  /** Początek i koniec wpisu w strefie biznesowej — oś niezmiennika nakładania i osi czasu. */
+  startedAt: string;
+  endedAt: string;
   durationMinutes: number;
   description: string;
   createdFromSuggestion: boolean;
   source: SuggestionSource;
-  suggestionId: number;
+  /** Sugestie składowe wpisu — po scaleniu sesji jest ich więcej niż jedna. */
+  suggestionIds: number[];
   /** Tytuł spotkania / nazwa pliku, z którego powstał wpis — kotwica w realnym zdarzeniu. */
   sourceTitle: string | null;
   sourceStartedAt: string | null;

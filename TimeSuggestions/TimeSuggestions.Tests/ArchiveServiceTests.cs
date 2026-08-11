@@ -59,7 +59,7 @@ public sealed class ArchiveServiceTests : IDisposable
             Description = "Praca",
             CreatedFromSuggestion = true,
             Source = SuggestionSource.Calendar,
-            Suggestion = suggestion,
+            Suggestions = [suggestion],
             CreatedAt = Now,
             ArchivedAt = archivedAt,
         };

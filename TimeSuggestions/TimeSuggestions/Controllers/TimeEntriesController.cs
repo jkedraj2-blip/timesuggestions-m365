@@ -23,7 +23,7 @@ public class TimeEntriesController(
         var entries = await db.TimeEntries
             .Where(entry => archived ? entry.ArchivedAt != null : entry.ArchivedAt == null)
             .Include(entry => entry.Case)
-            .Include(entry => entry.Suggestion)
+            .Include(entry => entry.Suggestions)
             .OrderByDescending(entry => entry.EntryDate)
             .ThenByDescending(entry => entry.Id)
             .ToListAsync(cancellationToken);

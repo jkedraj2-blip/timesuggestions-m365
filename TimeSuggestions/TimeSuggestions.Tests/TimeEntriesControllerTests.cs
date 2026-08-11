@@ -61,7 +61,7 @@ public sealed class TimeEntriesControllerTests : IDisposable
             Description = "Praca",
             CreatedFromSuggestion = true,
             Source = SuggestionSource.Calendar,
-            Suggestion = suggestion,
+            Suggestions = [suggestion],
             CreatedAt = Now,
             ArchivedAt = archivedAt,
         };

@@ -131,7 +131,7 @@ public sealed class SummaryServiceTests : IDisposable
             Description = "Praca",
             CreatedFromSuggestion = true,
             Source = SuggestionSource.Calendar,
-            Suggestion = suggestion,
+            Suggestions = [suggestion],
             CreatedAt = DateTime.UtcNow,
             ArchivedAt = archivedAt,
         };

@@ -114,6 +114,9 @@ public class SuggestionBuilder(SuggestionOptions options)
             ExternalId = calendarEvent.Id,
             Title = title,
             StartedAt = startedAtLocal,
+            // Kotwica kalendarza = lokalny początek spotkania: dedup działa per
+            // ExternalId, kotwica domyka tylko wyścig równoległych synchronizacji.
+            SessionAnchor = startedAtLocal,
             EntryDate = DateOnly.FromDateTime(startedAtLocal),
             DurationMinutes = CalendarEventFilter.GetDurationMinutes(calendarEvent, businessTimeZone),
             CaseId = match.MatchedCase?.Id,
@@ -141,6 +144,12 @@ public class SuggestionBuilder(SuggestionOptions options)
             ExternalId = file.Id,
             Title = file.Name,
             StartedAt = startedAtLocal,
+            // Fallback bez historii wersji: kotwica = początek dnia biznesowego,
+            // czyli odpowiednik dawnego klucza po EntryDate — ostatnia modyfikacja
+            // pliku zmienia się między syncami, więc nie nadaje się na stabilny klucz.
+            // Silnik sesji (dla plików Z historią) podmienia kotwicę na czas
+            // pierwszej wersji sesji.
+            SessionAnchor = startedAtLocal.Date,
             EntryDate = DateOnly.FromDateTime(startedAtLocal),
             DurationMinutes = options.DefaultDocumentDurationMinutes,
             CaseId = match.MatchedCase?.Id,

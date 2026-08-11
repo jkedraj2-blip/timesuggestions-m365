@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TimeSuggestions.Data;
 
@@ -10,9 +11,11 @@ using TimeSuggestions.Data;
 namespace TimeSuggestions.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811165902_MoveTimeEntryLinkToSuggestion")]
+    partial class MoveTimeEntryLinkToSuggestion
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
@@ -234,17 +237,11 @@ namespace TimeSuggestions.Migrations
                     b.Property<int>("DurationMinutes")
                         .HasColumnType("INTEGER");
 
-                    b.Property<DateTime>("EndedAt")
-                        .HasColumnType("TEXT");
-
                     b.Property<DateOnly>("EntryDate")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Source")
                         .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("StartedAt")
-                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
@@ -253,37 +250,6 @@ namespace TimeSuggestions.Migrations
                     b.HasIndex("CaseId");
 
                     b.ToTable("TimeEntries");
-                });
-
-            modelBuilder.Entity("TimeSuggestions.Models.TimeEntryAdjustment", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("GapEndAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("GapStartAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Kind")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("Minutes")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("TimeEntryId")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TimeEntryId");
-
-                    b.ToTable("TimeEntryAdjustments");
                 });
 
             modelBuilder.Entity("TimeSuggestions.Models.Suggestion", b =>
@@ -313,21 +279,8 @@ namespace TimeSuggestions.Migrations
                     b.Navigation("Case");
                 });
 
-            modelBuilder.Entity("TimeSuggestions.Models.TimeEntryAdjustment", b =>
-                {
-                    b.HasOne("TimeSuggestions.Models.TimeEntry", "TimeEntry")
-                        .WithMany("Adjustments")
-                        .HasForeignKey("TimeEntryId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("TimeEntry");
-                });
-
             modelBuilder.Entity("TimeSuggestions.Models.TimeEntry", b =>
                 {
-                    b.Navigation("Adjustments");
-
                     b.Navigation("Suggestions");
                 });
 #pragma warning restore 612, 618

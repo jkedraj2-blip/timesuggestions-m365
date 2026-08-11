@@ -60,27 +60,30 @@ public class ApprovalService(AppDbContext db)
             CaseId = selectedCase.Id,
             Case = selectedCase,
             EntryDate = suggestion.EntryDate,
+            // Godziny wpisu ze StartedAt sugestii + finalnego czasu — od tej pory wpis
+            // sam zna swoje położenie na osi dnia (niezmiennik nakładania, oś czasu).
+            StartedAt = suggestion.StartedAt,
+            EndedAt = suggestion.StartedAt.AddMinutes(request.DurationMinutes),
             DurationMinutes = request.DurationMinutes,
             Description = request.Description,
             CreatedFromSuggestion = true,
             Source = suggestion.Source,
-            SuggestionId = suggestion.Id,
-            Suggestion = suggestion,
             CreatedAt = nowUtc,
         };
 
         suggestion.Status = SuggestionStatus.Approved;
+        suggestion.TimeEntry = timeEntry;
         db.TimeEntries.Add(timeEntry);
 
         try
         {
             await db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException exception) when (SqliteErrors.IsUniqueConstraintViolation(exception))
+        catch (DbUpdateConcurrencyException)
         {
-            // Indeks unikalny TimeEntries.SuggestionId: równoległe zatwierdzenie zdążyło
-            // wstawić wpis między naszym odczytem a zapisem. Mapujemy wyłącznie
-            // SQLITE_CONSTRAINT_UNIQUE (2067) — inne błędy zapisu propagują bez maskowania.
+            // Token współbieżności na statusie sugestii: równoległe zatwierdzenie
+            // zdążyło zmienić status między naszym odczytem a zapisem — UPDATE trafił
+            // zero wierszy, transakcja (łącznie z INSERT wpisu) wycofana.
             return new ApprovalResult(ApprovalOutcome.AlreadyApproved);
         }
 
@@ -131,13 +134,14 @@ public class ApprovalService(AppDbContext db)
     }
 
     /// <summary>
-    /// Usuwa wpis czasu i przywraca powiązaną sugestię do oczekujących.
-    /// Jedno SaveChanges = jedna transakcja: albo oba kroki, albo żaden.
+    /// Usuwa wpis czasu i przywraca powiązane sugestie do oczekujących
+    /// (po scaleniu sesji wpis może mieć ich kilka — wracają wszystkie).
+    /// Jedno SaveChanges = jedna transakcja: albo wszystkie kroki, albo żaden.
     /// </summary>
     public async Task<ApprovalResult> DeleteTimeEntryAsync(int timeEntryId, CancellationToken cancellationToken)
     {
         var timeEntry = await db.TimeEntries
-            .Include(entry => entry.Suggestion)
+            .Include(entry => entry.Suggestions)
             .FirstOrDefaultAsync(entry => entry.Id == timeEntryId, cancellationToken);
         if (timeEntry is null)
         {
@@ -150,9 +154,10 @@ public class ApprovalService(AppDbContext db)
             return new ApprovalResult(ApprovalOutcome.TimeEntryArchived);
         }
 
-        if (timeEntry.Suggestion is not null)
+        foreach (var suggestion in timeEntry.Suggestions)
         {
-            timeEntry.Suggestion.Status = SuggestionStatus.Pending;
+            suggestion.Status = SuggestionStatus.Pending;
+            suggestion.TimeEntryId = null;
         }
 
         db.TimeEntries.Remove(timeEntry);

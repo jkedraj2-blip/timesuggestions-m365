@@ -87,7 +87,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // się sumować z resztą liczników (Graph potrafi zduplikować wydarzenie
         // między stronami przy zmieniającej się kolekcji).
         var candidates = rawCandidates
-            .GroupBy(candidate => (candidate.Source, candidate.ExternalId, candidate.EntryDate))
+            .GroupBy(candidate => (candidate.Source, candidate.ExternalId, candidate.SessionAnchor))
             .Select(group => group.Last())
             .ToList();
         var deduplicatedCount = rawCandidates.Count - candidates.Count;
@@ -283,11 +283,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                     .Where(suggestion => suggestion.Source == SuggestionSource.Document
                         && documentIds.Contains(suggestion.ExternalId))
                     .ToListAsync(cancellationToken))
-                .ToDictionary(suggestion => (suggestion.ExternalId, suggestion.EntryDate));
+                .ToDictionary(suggestion => (suggestion.ExternalId, suggestion.SessionAnchor));
 
             foreach (var candidate in documentCandidates)
             {
-                if (!existingByKey.TryGetValue((candidate.ExternalId, candidate.EntryDate), out var existing))
+                if (!existingByKey.TryGetValue((candidate.ExternalId, candidate.SessionAnchor), out var existing))
                 {
                     newSuggestions.Add(candidate);
                     continue;
@@ -389,6 +389,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     {
         var changed = existing.Title != fromSource.Title
             || existing.StartedAt != fromSource.StartedAt
+            || existing.SessionAnchor != fromSource.SessionAnchor
             || existing.EntryDate != fromSource.EntryDate
             || existing.DurationMinutes != fromSource.DurationMinutes
             || existing.CaseId != fromSource.CaseId
@@ -402,6 +403,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
 
         existing.Title = fromSource.Title;
         existing.StartedAt = fromSource.StartedAt;
+        existing.SessionAnchor = fromSource.SessionAnchor;
         existing.EntryDate = fromSource.EntryDate;
         existing.DurationMinutes = fromSource.DurationMinutes;
         existing.CaseId = fromSource.CaseId;

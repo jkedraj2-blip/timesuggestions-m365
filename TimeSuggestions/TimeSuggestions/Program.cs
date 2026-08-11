@@ -25,6 +25,7 @@ builder.Services.AddScoped<SyncService>();
 builder.Services.AddScoped<ApprovalService>();
 builder.Services.AddScoped<ArchiveService>();
 builder.Services.AddScoped<SummaryService>();
+builder.Services.AddScoped<TimeEntryOperationsService>();
 
 // CORS zawężony do originów z konfiguracji (frontend deweloperski) — celowo nie AllowAnyOrigin.
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];

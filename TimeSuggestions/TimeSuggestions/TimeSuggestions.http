@@ -30,6 +30,43 @@ Content-Type: application/json
   "driveFileVersionFetchErrors": 0
 }
 
+### Scalenie wpisów jednej sesji dokumentu (z doliczeniem wolnych luk)
+POST {{TimeSuggestions_HostAddress}}/api/time-entries/merge
+Content-Type: application/json
+
+{
+  "timeEntryIds": [1, 2],
+  "includeGaps": true
+}
+
+### Odwrócenie scalenia — przywraca wpisy składowe z ich sesji
+POST {{TimeSuggestions_HostAddress}}/api/time-entries/1/unmerge
+
+### Odjęcie wykrytej przerwy (zakres z listy detectedGaps wpisu)
+POST {{TimeSuggestions_HostAddress}}/api/time-entries/1/subtract-gap
+Content-Type: application/json
+
+{
+  "gapStartAt": "2026-07-24T10:00:00",
+  "gapEndAt": "2026-07-24T10:20:00"
+}
+
+### Doliczenie wolnej luki do sąsiedniej pozycji (minuty liczy serwer)
+POST {{TimeSuggestions_HostAddress}}/api/time-entries/1/claim-gap
+Content-Type: application/json
+
+{
+  "direction": "before"
+}
+
+### Szybka korekta czasu wpisu
+POST {{TimeSuggestions_HostAddress}}/api/time-entries/1/adjust
+Content-Type: application/json
+
+{
+  "minutes": -15
+}
+
 ### Lista sugestii oczekujących (domyślnie status=pending)
 GET {{TimeSuggestions_HostAddress}}/api/suggestions
 Accept: application/json

@@ -111,6 +111,11 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | `POST /api/cases`, `PUT /api/cases/{id}` | Dodawanie i edycja spraw (unikalny numer sprawy) |
 | `POST /api/cases/{id}/activate` / `deactivate` | Przełączanie aktywności (zamiast usuwania) |
 | `GET /api/time-entries?archived=` | Wpisy pogrupowane po dniach z sumami (domyślnie aktywne; `archived=true` zwraca archiwum, suma dotyczy zwróconego widoku) |
+| `POST /api/time-entries/merge` | Scala wpisy jednej sesji dokumentu (`{timeEntryIds, includeGaps}`): ≥2 wpisy, ten sam dokument i dzień, żaden nie zarchiwizowany, sąsiedztwo globalne (między pierwszym a ostatnim żadnej innej pozycji — inaczej 409 z tytułem blokującej); `includeGaps` dolicza wolne luki z zapisem `GapAddition` |
+| `POST /api/time-entries/{id}/unmerge` | Odwraca scalenie: przywraca wpisy składowe z ich sesji (możliwe do momentu archiwizacji) |
+| `POST /api/time-entries/{id}/subtract-gap` | Odejmuje wykrytą przerwę (`{gapStartAt, gapEndAt}` z listy wykrytych przerw wpisu); idempotentne — druga próba na tę samą lukę → 409 |
+| `POST /api/time-entries/{id}/claim-gap` | Dolicza wolną lukę do sąsiedniej pozycji na osi dnia (`{direction: before\|after}`); minuty liczy serwer, tylko jeśli luka wolna |
+| `POST /api/time-entries/{id}/adjust` | Szybka korekta `{minutes: ±N}`; wynik w przedziale (0, 480] min |
 | `POST /api/time-entries/archive` | Rozlicza (archiwizuje) aktywne wpisy z domkniętego zakresu dat (maks. 366 dni); idempotentne, zwraca liczbę wpisów i sumę minut |
 | `DELETE /api/time-entries/{id}` | Cofa zatwierdzenie: usuwa aktywny wpis i przywraca sugestię; 409 dla wpisu rozliczonego |
 | `GET /api/summary` | Liczniki do kafelków podsumowania |
@@ -223,11 +228,26 @@ timesuggestions-web/
   rozpoznawane; można je dodać jako słowa kluczowe sprawy. Trzy stany: jedno trafienie
   (sprawa przypisana), brak (karta „sprawdź to" z wyjaśnieniem), wiele (niejednoznaczna,
   UI wymienia pasujące sprawy).
+- **Niezmiennik nakładania: każda minuta doby należy do najwyżej jednego wpisu czasu.**
+  Wszystkie reguły anty-podwójne z niego wynikają: przerwa doliczona do wpisu A nie jest
+  dostępna dla wpisu B, scalenie „z przerwami" jest legalne tylko dla przerw wolnych,
+  a zatwierdzenie sugestii waliduje nakładanie z istniejącymi wpisami (409 z nazwą
+  blokującego wpisu zamiast cichego nakładu). Walidacja odbywa się na backendzie
+  (klientowi nie ufamy); w niezmienniku uczestniczą wpisy każdego źródła oraz oczekujące
+  sugestie (jako rezerwacje minut). Przedziały są półotwarte: koniec 10:00 i start 10:00
+  to nie nakład.
 - Zatwierdzenie wymaga wybranej sprawy i czasu 1–1440 min; tworzy `TimeEntry` ze źródłem
-  pochodzenia i referencją do sugestii (dokładnie jeden wpis na sugestię, co gwarantuje
-  indeks unikalny). Decyzje są odwracalne (Cofnij / Przywróć / Cofnij zatwierdzenie),
-  a „Cofnij" działa także po przejściu na inną zakładkę; jedynym świadomym wyjątkiem
-  jest rozliczenie (archiwizacja), które jest nieodwracalne.
+  pochodzenia, godzinami z sugestii i powiązaniem sugestii przez `TimeEntryId`.
+  Decyzje są odwracalne (Cofnij / Przywróć / Cofnij zatwierdzenie — to ostatnie
+  przywraca wszystkie sugestie składowe wpisu), a „Cofnij" działa także po przejściu
+  na inną zakładkę; jedynym świadomym wyjątkiem jest rozliczenie (archiwizacja),
+  które jest nieodwracalne.
+- Operacje prawnika na wpisach (scalanie, rozdzielanie, korekty ±N, odjęcie wykrytej
+  przerwy, doliczenie wolnej luki) działają wyłącznie na wpisach aktywnych — archiwum
+  blokuje wszystkie. Scalenie jest odwracalne (`unmerge` przywraca wpisy składowe
+  z ich sesji; korekty scalonego wpisu przepadają świadomie). Każda korekta ląduje
+  w dzienniku `TimeEntryAdjustment`; sync nigdy nie modyfikuje wpisów — dotyka
+  wyłącznie sugestii `Pending`.
 - Cykl życia wpisu czasu: aktywny, potem rozliczony (zarchiwizowany). Rozliczenie jest
   hurtowe (dzień albo zakres dat, maks. 366 dni), jednokierunkowe i blokuje edycję;
   „Cofnij zatwierdzenie" działa wyłącznie dla wpisów aktywnych. Odrzuconą sugestię

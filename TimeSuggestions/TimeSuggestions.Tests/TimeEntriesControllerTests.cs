@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
 using TimeSuggestions.Controllers;
 using TimeSuggestions.Data;
@@ -30,7 +32,11 @@ public sealed class TimeEntriesControllerTests : IDisposable
         db = new AppDbContext(options);
         db.Database.EnsureCreated();
 
-        controller = new TimeEntriesController(db, new ApprovalService(db), new ArchiveService(db));
+        controller = new TimeEntriesController(
+            db,
+            new ApprovalService(db),
+            new ArchiveService(db),
+            new TimeEntryOperationsService(db, Options.Create(new SuggestionOptions())));
     }
 
     public void Dispose()

@@ -181,6 +181,34 @@ export class ApiService {
     await this.request('DELETE', `/api/time-entries/${timeEntryId}`);
   }
 
+  /** Scala wpisy jednej sesji dokumentu; includeGaps dolicza wolne luki między sesjami. */
+  mergeTimeEntries(timeEntryIds: number[], includeGaps: boolean): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', '/api/time-entries/merge', { timeEntryIds, includeGaps });
+  }
+
+  /** Odwraca scalenie — przywraca wpisy składowe z ich sesji. */
+  unmergeTimeEntry(timeEntryId: number): Promise<TimeEntry[]> {
+    return this.requestJson<TimeEntry[]>('POST', `/api/time-entries/${timeEntryId}/unmerge`);
+  }
+
+  /** Odejmuje wykrytą przerwę — zakres musi pochodzić z listy detectedGaps wpisu. */
+  subtractGap(timeEntryId: number, gapStartAt: string, gapEndAt: string): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/subtract-gap`, {
+      gapStartAt,
+      gapEndAt,
+    });
+  }
+
+  /** Dolicza wolną lukę do sąsiedniej pozycji — minuty liczy serwer. */
+  claimGap(timeEntryId: number, direction: 'before' | 'after'): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/claim-gap`, { direction });
+  }
+
+  /** Szybka korekta czasu wpisu o ±N minut. */
+  adjustTimeEntry(timeEntryId: number, minutes: number): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/adjust`, { minutes });
+  }
+
   getSummary(): Promise<Summary> {
     return this.requestJson<Summary>('GET', '/api/summary');
   }

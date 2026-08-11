@@ -129,6 +129,8 @@ export interface TimeEntry {
   /** Tytuł spotkania / nazwa pliku, z którego powstał wpis — kotwica w realnym zdarzeniu. */
   sourceTitle: string | null;
   sourceStartedAt: string | null;
+  /** Id pliku z Graph (wpisy dokumentowe) — po nim UI rozpoznaje wpisy tego samego dokumentu do scalenia. */
+  sourceExternalId: string | null;
   /** Moment rozliczenia (UTC); null = wpis aktywny. Zarchiwizowany wpis jest tylko do odczytu. */
   archivedAt: string | null;
   /** Wykryte przerwy przeniesione z sugestii przy zatwierdzeniu. */

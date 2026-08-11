@@ -213,6 +213,71 @@ public class ArchiveTimeEntriesRequest : IValidatableObject
     }
 }
 
+/// <summary>Żądanie scalenia wpisów jednej sesji dokumentu w jeden wpis.</summary>
+public class MergeTimeEntriesRequest : IValidatableObject
+{
+    /// <summary>Rozsądny limit liczby scalanych wpisów — więcej sesji jednego pliku jednego dnia nie istnieje.</summary>
+    public const int MaxMergeCount = 50;
+
+    [Required(ErrorMessage = "Lista wpisów do scalenia jest wymagana.")]
+    public List<int> TimeEntryIds { get; set; } = [];
+
+    /// <summary>true = dolicz wolne luki między sesjami (zapis GapAddition per lukę).</summary>
+    public bool IncludeGaps { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (TimeEntryIds.Count < 2)
+        {
+            yield return new ValidationResult(
+                "Scalenie wymaga co najmniej dwóch wpisów.", [nameof(TimeEntryIds)]);
+        }
+
+        if (TimeEntryIds.Count > MaxMergeCount)
+        {
+            yield return new ValidationResult(
+                "Scalenie może objąć najwyżej 50 wpisów.", [nameof(TimeEntryIds)]);
+        }
+    }
+}
+
+/// <summary>
+/// Żądanie odjęcia wykrytej przerwy — zakres identyfikuje przerwę z listy wykrytych
+/// przerw wpisu (backend waliduje pochodzenie, klientowi nie ufa).
+/// </summary>
+public class SubtractGapRequest
+{
+    [Required(ErrorMessage = "Początek przerwy jest wymagany.")]
+    public DateTime? GapStartAt { get; set; }
+
+    [Required(ErrorMessage = "Koniec przerwy jest wymagany.")]
+    public DateTime? GapEndAt { get; set; }
+}
+
+/// <summary>Żądanie doliczenia przerwy do sąsiedniej pozycji — minuty liczy serwer, nie klient.</summary>
+public class ClaimGapRequest
+{
+    [Required(ErrorMessage = "Kierunek doliczenia przerwy jest wymagany.")]
+    public Services.GapDirection? Direction { get; set; }
+}
+
+/// <summary>Szybka korekta czasu wpisu o ±N minut.</summary>
+public class AdjustTimeEntryRequest : IValidatableObject
+{
+    [Range(-Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        ErrorMessage = "Korekta musi mieścić się w zakresie ±480 minut.")]
+    public int Minutes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (Minutes == 0)
+        {
+            yield return new ValidationResult("Korekta o zero minut nic nie zmienia.", [nameof(Minutes)]);
+        }
+    }
+}
+
 /// <summary>Wpisy pogrupowane po dniach z sumami — widok "Wpisy czasu" pokazuje je od razu policzone.</summary>
 public record TimeEntriesResponse(int TotalMinutes, IReadOnlyList<TimeEntryDayDto> Days);
 
@@ -234,6 +299,9 @@ public record TimeEntryDto(
     IReadOnlyList<int> SuggestionIds,
     string? SourceTitle,
     DateTime? SourceStartedAt,
+    // Id pliku z Graph (dla wpisów dokumentowych) — UI po nim rozpoznaje, które wpisy
+    // wolno zaznaczyć do scalenia; backend i tak waliduje po swojej stronie.
+    string? SourceExternalId,
     DateTime? ArchivedAt,
     IReadOnlyList<DetectedGapDto> DetectedGaps)
 {
@@ -241,10 +309,16 @@ public record TimeEntryDto(
     /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
     /// lub nazwa pliku) — opis mógł zostać nadpisany przez użytkownika przy zatwierdzaniu.
     /// Po scaleniu sesji wpis ma wiele sugestii: kotwicą jest najwcześniejsza z nich.
+    /// DetectedGaps zwraca wyłącznie przerwy JESZCZE NIE odjęte (dziennik korekt musi
+    /// być załadowany) — przycisk "Odejmij przerwę" znika po użyciu, bez heurystyk w UI.
     /// </summary>
     public static TimeEntryDto FromEntity(TimeEntry entry)
     {
         var firstSuggestion = entry.Suggestions.OrderBy(suggestion => suggestion.StartedAt).FirstOrDefault();
+        var subtractedGaps = entry.Adjustments
+            .Where(adjustment => adjustment.Kind == AdjustmentKind.DetectedGapSubtraction)
+            .Select(adjustment => (adjustment.GapStartAt, adjustment.GapEndAt))
+            .ToHashSet();
 
         return new(
             entry.Id,
@@ -262,7 +336,10 @@ public record TimeEntryDto(
             entry.Suggestions.Select(suggestion => suggestion.Id).ToList(),
             firstSuggestion?.Title,
             firstSuggestion?.StartedAt,
+            entry.Source == SuggestionSource.Document ? firstSuggestion?.ExternalId : null,
             entry.ArchivedAt,
-            DetectedGapDto.FromJson(entry.DetectedGapsJson));
+            DetectedGapDto.FromJson(entry.DetectedGapsJson)
+                .Where(gap => !subtractedGaps.Contains((gap.StartAt, gap.EndAt)))
+                .ToList());
     }
 }

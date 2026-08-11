@@ -19,10 +19,13 @@ public enum ApprovalOutcome
 
     /// <summary>Wpis rozliczony (zarchiwizowany) — cofnięcie zatwierdzenia jest zablokowane.</summary>
     TimeEntryArchived,
+
+    /// <summary>Nowy wpis nachodziłby na istniejący — niezmiennik "minuta należy do najwyżej jednego wpisu".</summary>
+    OverlapConflict,
 }
 
 /// <summary>Jawny wynik zamiast wyjątków — kontroler tłumaczy go na kody HTTP.</summary>
-public record ApprovalResult(ApprovalOutcome Outcome, TimeEntry? CreatedEntry = null);
+public record ApprovalResult(ApprovalOutcome Outcome, TimeEntry? CreatedEntry = null, string? Error = null);
 
 /// <summary>
 /// Zatwierdzanie i odrzucanie sugestii. Odrzucenie zmienia tylko status (bez usuwania
@@ -53,6 +56,38 @@ public class ApprovalService(AppDbContext db)
         if (selectedCase is null)
         {
             return new ApprovalResult(ApprovalOutcome.CaseNotFound);
+        }
+
+        // Niezmiennik nakładania: nowy wpis nie może zachodzić na żaden istniejący
+        // (dowolnego źródła, także rozliczony — rozliczona minuta to nadal minuta).
+        // 409 z nazwą blokującego wpisu zamiast cichego nakładu. Dzień ±1, bo
+        // spotkanie kalendarzowe może przechodzić przez północ.
+        var newStart = suggestion.StartedAt;
+        var newEnd = suggestion.StartedAt.AddMinutes(request.DurationMinutes);
+        var neighborFrom = suggestion.EntryDate.AddDays(-1);
+        var neighborTo = suggestion.EntryDate.AddDays(1);
+        var blocking = await db.TimeEntries
+            .Where(entry => entry.EntryDate >= neighborFrom && entry.EntryDate <= neighborTo
+                && entry.StartedAt < newEnd && newStart < entry.EndedAt)
+            .OrderBy(entry => entry.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (blocking is not null)
+        {
+            // Blokujący wpis powstał z TEJ SAMEJ sugestii = przegrany wyścig podwójnego
+            // zatwierdzenia (nasz odczyt statusu był stary) — to inny komunikat niż
+            // kolizja z cudzym wpisem. AsNoTracking: nasz kontekst śledzi sugestię
+            // ze STARYM TimeEntryId, a tu potrzebujemy świeżej wartości z bazy.
+            var linkedToSameSuggestion = await db.Suggestions.AsNoTracking()
+                .AnyAsync(fresh => fresh.Id == suggestion.Id && fresh.TimeEntryId == blocking.Id, cancellationToken);
+            if (linkedToSameSuggestion)
+            {
+                return new ApprovalResult(ApprovalOutcome.AlreadyApproved);
+            }
+
+            return new ApprovalResult(
+                ApprovalOutcome.OverlapConflict,
+                Error: $"Ten czas nachodzi na istniejący wpis „{blocking.Description}\" " +
+                    $"({blocking.StartedAt:HH\\:mm}–{blocking.EndedAt:HH\\:mm}).");
         }
 
         var timeEntry = new TimeEntry

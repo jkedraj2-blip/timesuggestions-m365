@@ -172,6 +172,19 @@ export interface TimelineItem {
   clientName: string | null;
   /** Status koloruje i etykietuje pozycję (nigdy samym kolorem); archived jest nieklikalne. */
   status: 'pending' | 'active' | 'archived';
+  /** Id pliku z Graph dla pozycji dokumentowych — zasila chronologię modyfikacji i diff wersji. */
+  externalId: string | null;
+}
+
+/** Jedna wersja z chronologii modyfikacji dokumentu (poziom 3 osi czasu). */
+export interface DocumentActivityItem {
+  versionId: string;
+  occurredAt: string;
+  size: number;
+  /** Przerwa od poprzedniej wersji w minutach; null dla pierwszej. */
+  gapMinutesSincePrevious: number | null;
+  /** true = przerwa w przedziale wykrywanym (15–30 min). */
+  isDetectedGapRange: boolean;
 }
 
 /** Liczniki dla kafelków podsumowania. */

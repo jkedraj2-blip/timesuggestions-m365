@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
 using TimeSuggestions.Data;
 using TimeSuggestions.Models;
@@ -10,8 +12,9 @@ namespace TimeSuggestions.Services;
 /// Pasek miesiąca zasilają DWA zapytania grupujące (sugestie i wpisy) na cały zakres —
 /// nie 31 osobnych żądań; scalanie wyników w pamięci jest tanie (maks. 31 kluczy).
 /// </summary>
-public class TimelineService(AppDbContext db)
+public class TimelineService(AppDbContext db, IOptions<SuggestionOptions> optionsAccessor)
 {
+    private readonly SuggestionOptions options = optionsAccessor.Value;
     public async Task<List<TimelineDayDto>> GetRangeAsync(
         DateOnly from,
         DateOnly to,
@@ -59,6 +62,7 @@ public class TimelineService(AppDbContext db)
 
         var entries = await db.TimeEntries
             .Include(entry => entry.Case)
+            .Include(entry => entry.Suggestions)
             .Where(entry => entry.EntryDate == date)
             .ToListAsync(cancellationToken);
 
@@ -74,7 +78,8 @@ public class TimelineService(AppDbContext db)
                 suggestion.Case?.Name,
                 suggestion.Case?.CaseNumber,
                 suggestion.Case?.ClientName,
-                Status: "pending"))
+                Status: "pending",
+                ExternalId: suggestion.Source == SuggestionSource.Document ? suggestion.ExternalId : null))
             .Concat(entries.Select(entry => new TimelineItemDto(
                 Type: "timeEntry",
                 entry.Id,
@@ -86,9 +91,53 @@ public class TimelineService(AppDbContext db)
                 entry.Case?.Name,
                 entry.Case?.CaseNumber,
                 entry.Case?.ClientName,
-                Status: entry.ArchivedAt == null ? "active" : "archived")))
+                Status: entry.ArchivedAt == null ? "active" : "archived",
+                ExternalId: entry.Source == SuggestionSource.Document
+                    ? entry.Suggestions.FirstOrDefault()?.ExternalId
+                    : null)))
             .OrderBy(item => item.StartedAt)
             .ThenBy(item => item.Id)
             .ToList();
+    }
+
+    /// <summary>
+    /// Chronologia modyfikacji pliku z append-only dziennika DocumentActivity:
+    /// godzina każdej wersji (strefa biznesowa), rozmiar i przerwa od poprzedniej,
+    /// z oznaczeniem przerw w przedziale wykrywanym (15–30 min). Dane już są w bazie —
+    /// to czysty odczyt, bez wywołań Graph.
+    /// </summary>
+    public async Task<List<DocumentActivityDto>> GetDocumentActivityAsync(
+        string externalId,
+        CancellationToken cancellationToken)
+    {
+        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
+
+        var activities = (await db.DocumentActivities
+                .AsNoTracking()
+                .Where(activity => activity.ExternalId == externalId)
+                .ToListAsync(cancellationToken))
+            .OrderBy(activity => activity.OccurredAt)
+            .ToList();
+
+        var result = new List<DocumentActivityDto>(activities.Count);
+        DateTime? previousUtc = null;
+        foreach (var activity in activities)
+        {
+            var occurredUtc = DateTime.SpecifyKind(activity.OccurredAt, DateTimeKind.Utc);
+            int? gapMinutes = previousUtc is DateTime previous
+                ? (int)Math.Round((occurredUtc - previous).TotalMinutes)
+                : null;
+
+            result.Add(new DocumentActivityDto(
+                activity.VersionId,
+                TimeZoneInfo.ConvertTimeFromUtc(occurredUtc, businessTimeZone),
+                activity.Size,
+                gapMinutes,
+                IsDetectedGapRange: gapMinutes > options.SessionContinuationGapMinutes
+                    && gapMinutes <= options.SessionFlaggedGapMinutes));
+            previousUtc = occurredUtc;
+        }
+
+        return result;
     }
 }

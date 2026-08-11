@@ -1,5 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using TimeSuggestions.Configuration;
 using TimeSuggestions.Data;
 using TimeSuggestions.Models;
 using TimeSuggestions.Services;
@@ -28,7 +30,7 @@ public sealed class TimelineServiceTests : IDisposable
         db = new AppDbContext(options);
         db.Database.EnsureCreated();
 
-        timeline = new TimelineService(db);
+        timeline = new TimelineService(db, Options.Create(new SuggestionOptions()));
     }
 
     public void Dispose()
@@ -124,6 +126,30 @@ public sealed class TimelineServiceTests : IDisposable
         var days = await timeline.GetRangeAsync(new DateOnly(2026, 8, 5), new DateOnly(2026, 8, 31), CancellationToken.None);
 
         Assert.Empty(days);
+    }
+
+    [Fact]
+    public async Task GetDocumentActivityAsync_ChronologiaZPrzerwamiIOznaczeniemWykrytych()
+    {
+        // Wersje: 10:00, 10:20 (przerwa 20 min — w przedziale wykrywanym 15–30),
+        // 11:20 (przerwa 60 min — poza przedziałem). Czasy UTC → strefa biznesowa (+2 CEST).
+        var baseUtc = new DateTime(2026, 8, 6, 8, 0, 0, DateTimeKind.Utc);
+        db.DocumentActivities.AddRange(
+            new DocumentActivity { ExternalId = "file-1", VersionId = "1.0", OccurredAt = baseUtc, Size = 100, RecordedAt = Now },
+            new DocumentActivity { ExternalId = "file-1", VersionId = "2.0", OccurredAt = baseUtc.AddMinutes(20), Size = 200, RecordedAt = Now },
+            new DocumentActivity { ExternalId = "file-1", VersionId = "3.0", OccurredAt = baseUtc.AddMinutes(80), Size = 300, RecordedAt = Now },
+            new DocumentActivity { ExternalId = "file-2", VersionId = "1.0", OccurredAt = baseUtc, Size = 50, RecordedAt = Now });
+        await db.SaveChangesAsync();
+
+        var activity = await timeline.GetDocumentActivityAsync("file-1", CancellationToken.None);
+
+        Assert.Equal(3, activity.Count);
+        Assert.Equal(new DateTime(2026, 8, 6, 10, 0, 0), activity[0].OccurredAt);
+        Assert.Null(activity[0].GapMinutesSincePrevious);
+        Assert.Equal(20, activity[1].GapMinutesSincePrevious);
+        Assert.True(activity[1].IsDetectedGapRange);
+        Assert.Equal(60, activity[2].GapMinutesSincePrevious);
+        Assert.False(activity[2].IsDetectedGapRange);
     }
 
     [Fact]

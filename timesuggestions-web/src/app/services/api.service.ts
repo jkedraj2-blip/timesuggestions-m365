@@ -18,6 +18,7 @@ import {
   SyncRequest,
   TimeEntriesResponse,
   TimeEntry,
+  DocumentActivityItem,
   TimelineDay,
   TimelineItem,
 } from '../models/api.models';
@@ -223,6 +224,14 @@ export class ApiService {
   /** Pozycje jednego dnia osi czasu, posortowane po godzinie startu. */
   getTimelineDay(date: string): Promise<TimelineItem[]> {
     return this.requestJson<TimelineItem[]>('GET', `/api/timeline/${date}`);
+  }
+
+  /** Chronologia modyfikacji dokumentu z dziennika DocumentActivity (poziom 3 osi). */
+  getDocumentActivity(externalId: string): Promise<DocumentActivityItem[]> {
+    return this.requestJson<DocumentActivityItem[]>(
+      'GET',
+      `/api/timeline/document-activity?externalId=${encodeURIComponent(externalId)}`,
+    );
   }
 
   private toCalendarPayload(event: GraphEvent): CalendarEventPayload {

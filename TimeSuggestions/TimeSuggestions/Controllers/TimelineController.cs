@@ -40,4 +40,21 @@ public class TimelineController(TimelineService timelineService) : ControllerBas
         DateOnly date,
         CancellationToken cancellationToken)
         => Ok(await timelineService.GetDayAsync(date, cancellationToken));
+
+    /// <summary>
+    /// Chronologia modyfikacji dokumentu (poziom 3 osi czasu). Id pliku w query,
+    /// nie w ścieżce — identyfikatory Graph zawierają znaki wymagające kodowania.
+    /// </summary>
+    [HttpGet("document-activity")]
+    public async Task<ActionResult<List<DocumentActivityDto>>> GetDocumentActivity(
+        [FromQuery] string? externalId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(externalId))
+        {
+            return BadRequest(new { message = "Parametr externalId jest wymagany." });
+        }
+
+        return Ok(await timelineService.GetDocumentActivityAsync(externalId, cancellationToken));
+    }
 }

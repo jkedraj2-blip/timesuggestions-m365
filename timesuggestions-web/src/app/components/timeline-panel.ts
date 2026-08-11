@@ -10,6 +10,7 @@ import { formatCaseMeta } from '../services/case-label';
 import { scrollToAndHighlight } from '../services/scroll-highlight';
 import { TimelineDay, TimelineItem } from '../models/api.models';
 import { DurationPipe } from '../pipes/duration.pipe';
+import { DocumentHistory } from './document-history';
 
 /** Miesiąc kalendarzowy: rok + miesiąc 1–12. */
 export interface MonthRef {
@@ -85,7 +86,7 @@ interface StoredTimelineState {
  */
 @Component({
   selector: 'app-timeline-panel',
-  imports: [DatePipe, DurationPipe],
+  imports: [DatePipe, DurationPipe, DocumentHistory],
   template: `
     <section class="card timeline" aria-label="Oś czasu">
       <header class="timeline-header">
@@ -148,29 +149,46 @@ interface StoredTimelineState {
               <p class="empty-state">Ładowanie pozycji…</p>
             } @else {
               @for (item of dayItems(); track item.type + '-' + item.id) {
-                <!-- Rozliczone: wyszarzone i nieklikalne; pozostałe nawigują do zakładki. -->
-                <button
-                  class="timeline-item"
-                  [class.archived]="item.status === 'archived'"
-                  [disabled]="item.status === 'archived'"
-                  (click)="openItem(item)"
-                  [attr.aria-label]="itemAriaLabel(item)"
-                >
-                  <span class="item-hours">
-                    {{ item.startedAt | date: 'HH:mm' }}–{{ item.endedAt | date: 'HH:mm' }}
-                  </span>
-                  <span class="item-title">{{ item.title }}</span>
-                  @if (item.caseName) {
-                    <span class="item-case text-muted">
-                      {{ item.caseName }}
-                      @if (formatCaseMeta(item.caseNumber, item.clientName); as meta) {
-                        · {{ meta }}
-                      }
+                <div class="timeline-row">
+                  <!-- Rozliczone: wyszarzone i nieklikalne; pozostałe nawigują do zakładki. -->
+                  <button
+                    class="timeline-item"
+                    [class.archived]="item.status === 'archived'"
+                    [disabled]="item.status === 'archived'"
+                    (click)="openItem(item)"
+                    [attr.aria-label]="itemAriaLabel(item)"
+                  >
+                    <span class="item-hours">
+                      {{ item.startedAt | date: 'HH:mm' }}–{{ item.endedAt | date: 'HH:mm' }}
                     </span>
+                    <span class="item-title">{{ item.title }}</span>
+                    @if (item.caseName) {
+                      <span class="item-case text-muted">
+                        {{ item.caseName }}
+                        @if (formatCaseMeta(item.caseNumber, item.clientName); as meta) {
+                          · {{ meta }}
+                        }
+                      </span>
+                    }
+                    <span class="item-duration">{{ item.durationMinutes | duration }}</span>
+                    <span class="item-status status-{{ item.status }}">{{ statusLabel(item.status) }}</span>
+                  </button>
+                  @if (item.externalId; as externalId) {
+                    <!-- Poziom 3: chronologia modyfikacji + diff wersji, tylko dokumenty. -->
+                    <button
+                      class="btn btn-ghost history-toggle"
+                      (click)="toggleHistory(item)"
+                      [attr.aria-expanded]="historyKey() === historyKeyOf(item)"
+                    >
+                      {{ historyKey() === historyKeyOf(item) ? 'Ukryj historię' : 'Historia zmian' }}
+                    </button>
                   }
-                  <span class="item-duration">{{ item.durationMinutes | duration }}</span>
-                  <span class="item-status status-{{ item.status }}">{{ statusLabel(item.status) }}</span>
-                </button>
+                </div>
+                @if (item.externalId; as externalId) {
+                  @if (historyKey() === historyKeyOf(item)) {
+                    <app-document-history [externalId]="externalId" [fileName]="item.title" />
+                  }
+                }
               } @empty {
                 <p class="empty-state">Brak pozycji tego dnia.</p>
               }
@@ -230,6 +248,8 @@ interface StoredTimelineState {
 
     .day-items { margin-top: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-3); }
     .day-items-title { font-size: var(--font-size-base); text-transform: capitalize; margin-bottom: var(--space-2); }
+    .timeline-row { display: flex; align-items: center; gap: var(--space-2); }
+    .history-toggle { font-size: var(--font-size-sm); white-space: nowrap; }
     .timeline-item {
       display: flex;
       align-items: center;
@@ -377,6 +397,18 @@ export class TimelinePanel implements OnInit {
 
   protected itemAriaLabel(item: TimelineItem): string {
     return `${item.title}, ${statusLabel(item.status)}`;
+  }
+
+  /** Klucz rozwiniętej historii — jedna naraz, ponowny klik zwija. */
+  protected historyKey = signal<string | null>(null);
+
+  protected historyKeyOf(item: TimelineItem): string {
+    return `${item.type}-${item.id}`;
+  }
+
+  protected toggleHistory(item: TimelineItem): void {
+    const key = this.historyKeyOf(item);
+    this.historyKey.update((current) => (current === key ? null : key));
   }
 
   /**

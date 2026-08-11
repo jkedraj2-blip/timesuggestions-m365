@@ -18,6 +18,18 @@ export interface DriveFilePayload {
   name: string;
   lastModifiedDateTime: string;
   lastModifiedByMe: boolean;
+  /**
+   * Historia wersji pliku; null = pobranie wersji nie powiodło się dla tego pliku
+   * (backend zachowuje wtedy fallback z domyślnym czasem dokumentu).
+   */
+  versions?: DriveFileVersionPayload[] | null;
+}
+
+/** Jedna wersja pliku z historii Graph — surowy fakt do dziennika DocumentActivity w backendzie. */
+export interface DriveFileVersionPayload {
+  versionId: string;
+  lastModifiedDateTime: string;
+  size: number;
 }
 
 /** Liczniki pozycji odfiltrowanych w przeglądarce — backend dolicza je do raportu. */
@@ -43,6 +55,8 @@ export interface SyncRequest {
   clientFilteredCounts?: ClientFilteredCounts;
   /** Opcjonalna preferencja użytkownika — bez wartości obowiązuje konfiguracja backendu. */
   defaultDocumentDurationMinutes?: number;
+  /** Ile pobrań historii wersji padło po stronie klienta — raport wersji ma pokazywać prawdę. */
+  driveFileVersionFetchErrors?: number;
 }
 
 export interface Suggestion {
@@ -163,6 +177,14 @@ export interface SyncMatchedCounts {
   ambiguous: number;
 }
 
+/** Liczniki historii wersji z jednego syncu — pomiar gęstości wersji (etap 0 silnika sesji). */
+export interface SyncVersionCounts {
+  filesWithHistory: number;
+  filesWithoutHistory: number;
+  fetchErrors: number;
+  newActivities: number;
+}
+
 /** Pełny raport synchronizacji — aplikacja pokazuje użytkownikowi swoją pracę. */
 export interface SyncReport {
   fetched: SyncFetchedCounts;
@@ -179,4 +201,6 @@ export interface SyncReport {
   matched: SyncMatchedCounts;
   /** Faktycznie użyte okno w dniach — teksty raportu pokazują je zamiast zgadywać z własnej stałej. */
   windowDays: number;
+  /** Liczniki historii wersji plików — ile z historią, ile bez, ile błędów pobierania. */
+  versions: SyncVersionCounts;
 }

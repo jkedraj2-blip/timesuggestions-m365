@@ -41,3 +41,16 @@ export interface GraphDeltaResponse {
   '@odata.nextLink'?: string;
   '@odata.deltaLink'?: string;
 }
+
+/** Jedna wersja pliku z historii driveItem (GET /me/drive/items/{id}/versions). */
+export interface GraphDriveItemVersion {
+  id: string;
+  lastModifiedDateTime?: string;
+  size?: number;
+}
+
+/** Stronicowana odpowiedź historii wersji pliku. */
+export interface GraphVersionsResponse {
+  value: GraphDriveItemVersion[];
+  '@odata.nextLink'?: string;
+}

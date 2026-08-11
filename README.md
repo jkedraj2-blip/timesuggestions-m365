@@ -44,6 +44,17 @@ są walidowane przed dołączeniem nagłówka `Authorization`.
   zaobserwowany stan pliku: sugestia odpowiada ostatniej modyfikacji, a edycje z dni
   pomiędzy synchronizacjami (sprzed ostatniej zmiany pliku) nie są odtwarzane.
   Produkcyjnie rozwiązałby to endpoint `driveItem/versions`.
+- **Gęstość historii wersji zależy od klienta Worda (pomiar etapu 0 silnika sesji).**
+  Synchronizacja dociąga `GET /me/drive/items/{id}/versions` dla plików z okna
+  i zapisuje surowe fakty w append-only dzienniku `DocumentActivity`; raport syncu
+  pokazuje, ile plików wróciło z historią, ile bez i ile pobrań padło. Word Online
+  tworzy wersje często (autozapis co chwilę), ale **Word desktop potrafi oddać
+  1–2 wersje na godzinę pracy** — przy takiej gęstości progi przerw (15/30 min)
+  i przycisk „Odejmij przerwę" nie mają paliwa. Procedura pomiaru: godzina realnej
+  pracy w Wordzie desktop i osobno w Word Online, sync, odczyt liczników `versions`
+  z raportu. Wynik pomiaru należy dopisać tutaj przed oparciem UI o progi przerw;
+  do tego czasu funkcje sesji traktują rzadką historię jako jedną ciągłą sesję
+  (mechanika degraduje się łagodnie, nie błędnie).
 - **Jedna strefa biznesowa.** Czasy obu źródeł są sprowadzane do skonfigurowanej strefy
   (`Suggestions:BusinessTimeZoneId`, domyślnie `Europe/Warsaw`), bez obsługi wielu
   stref per użytkownik.
@@ -70,6 +81,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | **Strefa czasowa: `Prefer` + strefa biznesowa** | Kalendarz przychodzi w czasie lokalnym (nagłówek `Prefer: outlook.timezone`), dokumenty w UTC. Backend sprowadza oba źródła do wspólnej strefy biznesowej (`Suggestions:BusinessTimeZoneId`, ID IANA, domyślnie `Europe/Warsaw`): okno dokumentów walidowane na oryginalnym UTC, a `StartedAt`/`EntryDate` i agregacja per dzień liczone lokalnie; okno kalendarza liczone bezpośrednio w strefie biznesowej; „dzisiaj" w podsumowaniu również. Czas trwania spotkań liczony z różnicy instantów UTC, nie lokalnych `DateTime`, bo w noc zmiany czasu różnica lokalna kłamie o godzinę. Konwencje nocy zmiany czasu są jawne (`BusinessTime`): czas niejednoznaczny = pierwsze wystąpienie, czas nieistniejący = jakby zegar już przeskoczył (mapowanie monotoniczne, bez ujemnych trwań). |
 | **Odporność na błędy Graph** | Wspólny helper obu serwisów Graph: ponowienia dla 429/502/503/504 z odczytem `Retry-After`, token pobierany per stronę, limit czasu żądania. Kalendarz i delta podążają za `@odata.nextLink` przez wszystkie strony. |
 | **Filtr prywatności w przeglądarce** | Tytuły wydarzeń `private`/`confidential`/`personal` oraz anulowanych w ogóle nie opuszczają przeglądarki. Backend i tak powtarza swoje filtry (klientowi nie ufa), a liczniki filtrów klienckich są doliczane do raportu. |
+| **Append-only dziennik wersji (`DocumentActivity`)** | Historia wersji plików to fakty, nie stan: rekord `(plik, wersja, moment, rozmiar)` nigdy nie jest modyfikowany ani kasowany przez operacje użytkownika — scalanie wpisów czasu i korekty nie zmieniają historii, na której liczone są sesje. Indeks unikalny `(ExternalId, VersionId)` sprawia, że powtórny sync nie duplikuje faktów. Fakty zapisywane są także dla plików odfiltrowanych z sugestii (dziennik jest źródłem prawdy, nie pochodną reguł). Błąd pobrania wersji jednego pliku nie wywala syncu: plik jedzie z `versions=null`, dostaje fallback `DefaultDocumentDurationMinutes`, a raport liczy błąd. |
 | **Domyślny czas dokumentu jako parametr** | Graph mówi tylko *kiedy* plik zmieniono, nie *jak długo* trwała praca. Domyślne 30 min to parametr `Suggestions:DefaultDocumentDurationMinutes` w `appsettings.json`; użytkownik może poprawić wartość przed zatwierdzeniem. |
 | **Dedup po `(źródło, id z Graph, dzień)`** | Indeks unikalny w bazie + scalanie z istniejącymi przy synchronizacji (duplikaty w obrębie jednego żądania też są scalane). Powtórny sync nie tworzy duplikatów, a **odrzucona sugestia nie wraca** (status zmieniany, rekord nieusuwany). |
 | **Odświeżanie oczekujących przy syncu** | Zmiana nazwy pliku/tytułu spotkania nie zmienia ID w Graph, więc sam dedup zostawiałby stary tytuł. Sugestie **oczekujące** są nadpisywane wartościami ze źródła (z ponownym dopasowaniem); zatwierdzonych i odrzuconych sync nie dotyka. |
@@ -84,7 +96,7 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 
 | Metoda i ścieżka | Opis |
 |---|---|
-| `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalnie: tombstone'y usuniętych plików, liczniki filtrów klienckich, domyślny czas dokumentu, nadpisanie okna synchronizacji `syncDaysBack`, maks. 90 dni), zwraca pełny raport z faktycznie użytym oknem (`windowDays`); 409 przy kolizji z równoległą synchronizacją |
+| `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalnie: tombstone'y usuniętych plików, historia wersji per plik `versions`, liczniki filtrów klienckich, domyślny czas dokumentu, nadpisanie okna synchronizacji `syncDaysBack`, maks. 90 dni), zwraca pełny raport z faktycznie użytym oknem (`windowDays`) i licznikami wersji (`versions`); 409 przy kolizji z równoległą synchronizacją |
 | `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące) |
 | `POST /api/suggestions/{id}/approve` | Tworzy wpis czasu, zamyka sugestię |
 | `POST /api/suggestions/{id}/reject` | Odrzuca (status, bez usuwania) |

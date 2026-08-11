@@ -108,6 +108,7 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // od nowa (z ponownym odczytem istniejących). Maksymalnie jedno ponowienie;
         // inne błędy zapisu propagują bez maskowania.
         MergeOutcome merge;
+        int newActivitiesCount;
         for (var attempt = 0; ; attempt++)
         {
             merge = await MergeWithExistingAsync(
@@ -117,6 +118,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 request.DeletedDriveFileIds,
                 destructiveWindowStart,
                 cancellationToken);
+
+            // Dziennik wersji wewnątrz tej samej pętli ponowień: po ChangeTracker.Clear()
+            // trzeba przeliczyć brakujące fakty od nowa, a indeks (ExternalId, VersionId)
+            // domyka wyścig równoległych synchronizacji tak samo jak klucz sugestii.
+            newActivitiesCount = await RecordDocumentActivitiesAsync(request.DriveFiles, nowUtc, cancellationToken);
 
             db.Suggestions.AddRange(merge.NewSuggestions);
 
@@ -175,8 +181,75 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             SkippedExisting: candidates.Count - merge.NewSuggestions.Count - merge.UpdatedCount,
             Removed: merge.RemovedCount,
             Matched: CountMatches(merge.NewSuggestions),
-            WindowDays: effectiveOptions.SyncDaysBack);
+            WindowDays: effectiveOptions.SyncDaysBack,
+            Versions: new SyncVersionCounts(
+                FilesWithHistory: request.DriveFiles.Count(file => file.Versions is { Count: > 0 }),
+                FilesWithoutHistory: request.DriveFiles.Count(file => file.Versions is not { Count: > 0 }),
+                FetchErrors: request.DriveFileVersionFetchErrors,
+                NewActivities: newActivitiesCount));
     }
+
+    /// <summary>
+    /// Dopisuje do append-only dziennika DocumentActivity fakty wersji, których jeszcze
+    /// nie ma (klucz naturalny: plik + wersja). Fakty rejestrujemy dla WSZYSTKICH plików
+    /// z payloadu, także tych, które filtry sugestii odrzucą — dziennik jest źródłem
+    /// prawdy o historii, nie pochodną reguł sugestii. Rekordów nigdy nie modyfikujemy.
+    /// </summary>
+    private async Task<int> RecordDocumentActivitiesAsync(
+        IReadOnlyList<DriveFileDto> files,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        // Dedup w obrębie żądania (Graph może powtórzyć wersję między stronami) —
+        // wygrywa pierwsze wystąpienie klucza, bo fakt jest niezmienny.
+        var incoming = new Dictionary<(string ExternalId, string VersionId), DriveFileVersionDto>();
+        foreach (var file in files)
+        {
+            foreach (var version in file.Versions ?? [])
+            {
+                incoming.TryAdd((file.Id, version.VersionId), version);
+            }
+        }
+
+        if (incoming.Count == 0)
+        {
+            return 0;
+        }
+
+        var fileIds = incoming.Keys.Select(key => key.ExternalId).Distinct().ToList();
+        var existingKeys = (await db.DocumentActivities
+                .Where(activity => fileIds.Contains(activity.ExternalId))
+                .Select(activity => new { activity.ExternalId, activity.VersionId })
+                .ToListAsync(cancellationToken))
+            .Select(existing => (existing.ExternalId, existing.VersionId))
+            .ToHashSet();
+
+        var newActivities = incoming
+            .Where(pair => !existingKeys.Contains(pair.Key))
+            .Select(pair => new DocumentActivity
+            {
+                ExternalId = pair.Key.ExternalId,
+                VersionId = pair.Key.VersionId,
+                OccurredAt = AsUtc(pair.Value.LastModifiedDateTime),
+                Size = pair.Value.Size,
+                RecordedAt = nowUtc,
+            })
+            .ToList();
+
+        db.DocumentActivities.AddRange(newActivities);
+        return newActivities.Count;
+    }
+
+    /// <summary>
+    /// lastModifiedDateTime wersji z Graph jest w UTC, ale po deserializacji Kind bywa
+    /// Unspecified (JSON bez "Z") — jawnie oznaczamy wartość jako UTC.
+    /// </summary>
+    private static DateTime AsUtc(DateTime dateTime) => dateTime.Kind switch
+    {
+        DateTimeKind.Utc => dateTime,
+        DateTimeKind.Local => dateTime.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc),
+    };
 
     /// <summary>
     /// Scala kandydatów z istniejącymi sugestiami. Dokumenty: klucz

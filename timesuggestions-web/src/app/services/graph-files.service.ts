@@ -1,8 +1,8 @@
 import { Injectable, inject } from '@angular/core';
 import { AuthService } from './auth.service';
-import { GraphDeltaResponse, GraphDriveItem } from '../models/graph.models';
-import { DriveFilePayload } from '../models/api.models';
-import { FETCH_MARGIN_DAYS, GRAPH_BASE_URL } from './graph-config';
+import { GraphDeltaResponse, GraphDriveItem, GraphVersionsResponse } from '../models/graph.models';
+import { DriveFilePayload, DriveFileVersionPayload } from '../models/api.models';
+import { FETCH_MARGIN_DAYS, GRAPH_BASE_URL, VERSIONS_FETCH_CONCURRENCY } from './graph-config';
 import { assertTrustedGraphUrl, fetchGraphPage, GraphPageResult } from './graph-http';
 
 const ALLOWED_EXTENSIONS = ['.docx', '.doc', '.xlsx', '.xls'];
@@ -18,7 +18,12 @@ export interface DriveDeltaResult {
   /** Odrzucenia po stronie klienta — raport syncu ma pokazywać prawdę, nie zera. */
   documentsOutsideWindow: number;
   documentsNotOfficeDocument: number;
+  /** Ile pobrań historii wersji padło (per plik) — plik zostaje w payloadzie z versions=null. */
+  versionFetchErrors: number;
 }
+
+/** Postęp dociągania historii wersji — raportowany do UI jak strony delty. */
+export type VersionsProgress = { done: number; total: number };
 
 /**
  * Pobieranie ostatnio edytowanych dokumentów Word/Excel z OneDrive.
@@ -47,6 +52,7 @@ export class GraphFilesService {
   async getRecentDocuments(
     days: number,
     onPage?: (page: number) => void,
+    onVersionsProgress?: (progress: VersionsProgress) => void,
   ): Promise<DriveDeltaResult> {
     // Doba zapasu ponad okno backendu (FETCH_MARGIN_DAYS) — wstępny filtr kliencki
     // nie może odrzucić pliku, który backend uznałby za część okna lokalnego.
@@ -86,7 +92,85 @@ export class GraphFilesService {
       files.push(this.toPayload(item, name, item.lastModifiedDateTime));
     }
 
-    return { files, deletedDriveFileIds, documentsOutsideWindow, documentsNotOfficeDocument };
+    // Etap 0 silnika sesji: dla plików, które przeszły filtry delty (i tylko dla nich —
+    // wydajność), dociągamy historię wersji. Błąd pojedynczego pliku nie wywala syncu:
+    // plik zostaje w payloadzie z versions=null, a backend użyje fallbacku.
+    const versionFetchErrors = await this.fetchVersionsForFiles(files, onVersionsProgress);
+
+    return {
+      files,
+      deletedDriveFileIds,
+      documentsOutsideWindow,
+      documentsNotOfficeDocument,
+      versionFetchErrors,
+    };
+  }
+
+  /**
+   * Dociąga historię wersji dla każdego pliku z ograniczoną równoległością
+   * (VERSIONS_FETCH_CONCURRENCY) — wspólna kolejka i stała pula "workerów"
+   * zamiast Promise.all na wszystkich plikach naraz, żeby nie wpaść w 429.
+   * Zwraca liczbę plików, dla których pobranie się nie powiodło.
+   */
+  private async fetchVersionsForFiles(
+    files: DriveFilePayload[],
+    onProgress?: (progress: VersionsProgress) => void,
+  ): Promise<number> {
+    let errors = 0;
+    let done = 0;
+    const queue = [...files];
+
+    const workers = Array.from(
+      { length: Math.min(VERSIONS_FETCH_CONCURRENCY, queue.length) },
+      async () => {
+        for (let file = queue.shift(); file; file = queue.shift()) {
+          try {
+            file.versions = await this.fetchFileVersions(file.id);
+          } catch {
+            // null ≠ pusta lista: null mówi backendowi "wersje niepobrane, użyj fallbacku".
+            file.versions = null;
+            errors++;
+          }
+          done++;
+          onProgress?.({ done, total: files.length });
+        }
+      },
+    );
+    await Promise.all(workers);
+
+    return errors;
+  }
+
+  /** Historia wersji jednego pliku — stronicowana jak delta (@odata.nextLink). */
+  private async fetchFileVersions(fileId: string): Promise<DriveFileVersionPayload[]> {
+    const select = '$select=id,lastModifiedDateTime,size';
+    let url: string | undefined =
+      `${GRAPH_BASE_URL}/me/drive/items/${encodeURIComponent(fileId)}/versions?${select}`;
+
+    const versions: DriveFileVersionPayload[] = [];
+    while (url) {
+      const response: GraphPageResult<GraphVersionsResponse> =
+        await fetchGraphPage<GraphVersionsResponse>(url, () => this.auth.getToken());
+      if (!response.ok) {
+        throw new Error(`Nie udało się pobrać historii wersji pliku (Graph ${response.status}).`);
+      }
+
+      for (const version of response.body.value) {
+        // Wersja bez daty jest bezużyteczna dla silnika sesji — pomijamy ją zamiast
+        // zgadywać czas (Graph praktycznie zawsze zwraca lastModifiedDateTime).
+        if (!version.lastModifiedDateTime) {
+          continue;
+        }
+        versions.push({
+          versionId: version.id,
+          lastModifiedDateTime: version.lastModifiedDateTime,
+          size: version.size ?? 0,
+        });
+      }
+      url = response.body['@odata.nextLink'];
+    }
+
+    return versions;
   }
 
   /** Wywoływane przez ApiService po udanym POST /api/sync — dopiero wtedy przesuwamy "wskaźnik" delta. */

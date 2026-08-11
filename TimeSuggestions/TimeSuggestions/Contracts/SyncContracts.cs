@@ -66,6 +66,15 @@ public class SyncRequest : IValidatableObject
     public int? DefaultDocumentDurationMinutes { get; set; }
 
     /// <summary>
+    /// Ile pobrań historii wersji nie powiodło się po stronie klienta (per plik).
+    /// Backend nie widzi nieudanych żądań Graph — bez tego licznika raport wersji
+    /// pokazywałby "plik bez historii" nie odróżniając błędu od braku wersji.
+    /// </summary>
+    [Range(0, ClientFilteredCounts.MaxCount,
+        ErrorMessage = "Licznik błędów pobierania wersji musi być z zakresu 0–100000.")]
+    public int DriveFileVersionFetchErrors { get; set; }
+
+    /// <summary>
     /// Elementy listy tombstone'ów walidowane jak pozostałe identyfikatory z Graph.
     /// MVC nie odrzuca null WEWNĄTRZ kolekcji (waliduje tylko niepuste elementy),
     /// więc puste pozycje łapiemy tu jawnie — czytelny 400 zamiast 500 w logice.
@@ -82,6 +91,12 @@ public class SyncRequest : IValidatableObject
         {
             yield return new ValidationResult(
                 "Lista plików zawiera pusty element.", [nameof(DriveFiles)]);
+        }
+
+        if (DriveFiles.Any(file => file?.Versions?.Any(version => version is null) == true))
+        {
+            yield return new ValidationResult(
+                "Lista wersji pliku zawiera pusty element.", [nameof(DriveFiles)]);
         }
 
         // IsNullOrWhiteSpace: identyfikator z samych spacji jest tak samo bezużyteczny jak pusty.
@@ -140,6 +155,27 @@ public class DriveFileDto
 
     /// <summary>Czy modyfikacji dokonał zalogowany użytkownik — frontend ustala to porównując konto MSAL z lastModifiedBy.</summary>
     public bool LastModifiedByMe { get; set; }
+
+    /// <summary>
+    /// Historia wersji pliku (GET /me/drive/items/{id}/versions) pobrana przez frontend.
+    /// null = wersje niepobrane (starszy klient albo błąd Graph dla tego pliku) —
+    /// backend zachowuje wtedy dotychczasowy fallback z domyślnym czasem dokumentu.
+    /// Pusta lista to co innego niż null: Graph odpowiedział, ale bez historii.
+    /// </summary>
+    public List<DriveFileVersionDto>? Versions { get; set; }
+}
+
+/// <summary>Jedna wersja pliku z historii Graph — surowy fakt do dziennika DocumentActivity.</summary>
+public class DriveFileVersionDto
+{
+    [Required]
+    [MaxLength(CalendarEventDto.MaxTextLength, ErrorMessage = "Identyfikator wersji jest za długi.")]
+    public required string VersionId { get; set; }
+
+    public DateTime LastModifiedDateTime { get; set; }
+
+    [Range(0, long.MaxValue, ErrorMessage = "Rozmiar wersji nie może być ujemny.")]
+    public long Size { get; set; }
 }
 
 /// <summary>
@@ -187,6 +223,13 @@ public record SyncFilteredOutCounts(
 public record SyncMatchedCounts(int Single, int None, int Ambiguous);
 
 /// <summary>
+/// Liczniki historii wersji z jednego syncu — pomiar gęstości wersji (etap 0 silnika
+/// sesji): ile plików przyszło z historią, ile bez, ile pobrań padło po stronie klienta.
+/// Plik z nieudanym pobraniem liczy się i w WithoutHistory, i w FetchErrors.
+/// </summary>
+public record SyncVersionCounts(int FilesWithHistory, int FilesWithoutHistory, int FetchErrors, int NewActivities);
+
+/// <summary>
 /// Pełny raport synchronizacji. Aplikacja "pokazuje swoją pracę" — bez tego
 /// odfiltrowanie spotkań wygląda dla użytkownika jak zgubione dane.
 /// </summary>
@@ -207,4 +250,6 @@ public record SyncReport(
     SyncMatchedCounts Matched,
     // Faktycznie użyte okno w dniach (konfiguracja albo nadpisanie z żądania) —
     // UI pokazuje je w tekstach raportu zamiast zgadywać z własnej stałej.
-    int WindowDays);
+    int WindowDays,
+    // Liczniki historii wersji — zasilają pomiar gęstości wersji z etapu 0.
+    SyncVersionCounts Versions);

@@ -18,6 +18,13 @@ export const OUTLOOK_TIMEZONE = 'Central European Standard Time';
 export const SYNC_DAYS_BACK = 7;
 
 /**
+ * Limit równoczesnych żądań historii wersji (per plik). Wersje pobieramy osobnym
+ * żądaniem na każdy plik z okna — bez limitu duży sync odpaliłby dziesiątki
+ * równoległych wywołań i wpadł w throttling Graph (429).
+ */
+export const VERSIONS_FETCH_CONCURRENCY = 4;
+
+/**
  * Zapas dobierany do okna przy pobieraniu z Graph. Backend tnie okno po początku
  * dnia LOKALNEGO w strefie biznesowej, a tu odejmujemy godziny w UTC — przy zmianie
  * czasu doby lokalne i 24-godzinne interwały rozjeżdżają się o godzinę. Pobieramy

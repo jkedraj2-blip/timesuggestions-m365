@@ -25,6 +25,7 @@ import { GraphEvent } from '../models/graph.models';
 export type SyncStage =
   | { kind: 'calendar'; page: number }
   | { kind: 'files'; page: number }
+  | { kind: 'versions'; done: number; total: number }
   | { kind: 'processing' };
 
 /** Wydarzenia o tych poufnościach nie opuszczają przeglądarki (spójnie z filtrem backendu). */
@@ -76,8 +77,10 @@ export class ApiService {
       return true;
     });
 
-    const driveResult = await this.graphFiles.getRecentDocuments(days, (page) =>
-      onStage?.({ kind: 'files', page }),
+    const driveResult = await this.graphFiles.getRecentDocuments(
+      days,
+      (page) => onStage?.({ kind: 'files', page }),
+      ({ done, total }) => onStage?.({ kind: 'versions', done, total }),
     );
 
     onStage?.({ kind: 'processing' });
@@ -102,6 +105,7 @@ export class ApiService {
         documentsNotOfficeDocument: driveResult.documentsNotOfficeDocument,
       },
       defaultDocumentDurationMinutes,
+      driveFileVersionFetchErrors: driveResult.versionFetchErrors,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);

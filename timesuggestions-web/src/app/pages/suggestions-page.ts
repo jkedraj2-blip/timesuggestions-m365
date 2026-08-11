@@ -369,6 +369,8 @@ export class SuggestionsPage implements OnInit {
         return `Pobieram spotkania z kalendarza Outlook (strona ${stage.page})…`;
       case 'files':
         return `Przeglądam pliki na OneDrive (strona ${stage.page})…`;
+      case 'versions':
+        return `Pobieram historię wersji dokumentów (${stage.done}/${stage.total})…`;
       case 'processing':
         return 'Przetwarzam dane i tworzę sugestie…';
       default:

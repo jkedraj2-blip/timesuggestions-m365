@@ -13,6 +13,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
 
+    public DbSet<DocumentActivity> DocumentActivities => Set<DocumentActivity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Ochrona przed duplikatami: powtórna synchronizacja tego samego obiektu Graph
@@ -27,6 +29,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         // który serwis mapuje na 409, a nie duplikatem wpisu.
         modelBuilder.Entity<TimeEntry>()
             .HasIndex(entry => entry.SuggestionId)
+            .IsUnique();
+
+        // Dziennik wersji jest append-only: powtórny sync tych samych wersji nie może
+        // duplikować faktów, więc klucz naturalny (plik, wersja) domyka indeks unikalny.
+        modelBuilder.Entity<DocumentActivity>()
+            .HasIndex(activity => new { activity.ExternalId, activity.VersionId })
             .IsUnique();
 
         // Filtrowanie aktywne/archiwum (ArchivedAt == null / != null) to główna oś

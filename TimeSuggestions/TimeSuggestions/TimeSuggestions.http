@@ -20,9 +20,14 @@ Content-Type: application/json
       "id": "przykladowe-id-pliku-1",
       "name": "Umowa_NovaTech_v2.docx",
       "lastModifiedDateTime": "2026-07-24T14:12:00",
-      "lastModifiedByMe": true
+      "lastModifiedByMe": true,
+      "versions": [
+        { "versionId": "2.0", "lastModifiedDateTime": "2026-07-24T14:12:00", "size": 48230 },
+        { "versionId": "1.0", "lastModifiedDateTime": "2026-07-24T13:41:00", "size": 47101 }
+      ]
     }
-  ]
+  ],
+  "driveFileVersionFetchErrors": 0
 }
 
 ### Lista sugestii oczekujących (domyślnie status=pending)

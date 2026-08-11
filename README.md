@@ -177,7 +177,7 @@ i nie możesz jej uzyskać, utwórz własną rejestrację (platforma **SPA**, re
 `http://localhost:4200`, te same uprawnienia) i podmień `entraClientId`
 w `environment.ts`.
 
-**Testy** (212 testów backendu xUnit + 119 testów frontendu Vitest; bez sieci i logowania):
+**Testy** (268 testów backendu xUnit + 145 testów frontendu Vitest; bez sieci i logowania):
 
 ```bash
 cd TimeSuggestions

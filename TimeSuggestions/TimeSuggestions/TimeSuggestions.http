@@ -51,14 +51,6 @@ Content-Type: application/json
   "gapEndAt": "2026-07-24T10:20:00"
 }
 
-### Doliczenie wolnej luki do sąsiedniej pozycji (minuty liczy serwer)
-POST {{TimeSuggestions_HostAddress}}/api/time-entries/1/claim-gap
-Content-Type: application/json
-
-{
-  "direction": "before"
-}
-
 ### Szybka korekta czasu wpisu
 POST {{TimeSuggestions_HostAddress}}/api/time-entries/1/adjust
 Content-Type: application/json

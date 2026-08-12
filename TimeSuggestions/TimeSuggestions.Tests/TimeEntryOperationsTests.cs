@@ -367,59 +367,6 @@ public sealed class TimeEntryOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task ClaimGapAsync_DoliczaWolnaLukePrzedWpisem()
-    {
-        SeedDocumentEntry("file-2", At(8), 30, description: "Poprzednia praca"); // 08:00–08:30
-        var entry = SeedDocumentEntry("file-1", At(9), 60);                     // 09:00–10:00
-
-        var result = await operations.ClaimGapAsync(
-            entry.Id, GapDirection.Before, Now, CancellationToken.None);
-
-        Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
-        var updated = await db.TimeEntries.Include(e => e.Adjustments)
-            .SingleAsync(e => e.Id == entry.Id);
-        // Luka 30 min doliczona serwerowo, wpis rozszerzony do początku luki.
-        Assert.Equal(90, updated.DurationMinutes);
-        Assert.Equal(At(8, 30), updated.StartedAt);
-        var adjustment = Assert.Single(updated.Adjustments);
-        Assert.Equal(AdjustmentKind.GapAddition, adjustment.Kind);
-        Assert.Equal(30, adjustment.Minutes);
-    }
-
-    [Fact]
-    public async Task ClaimGapAsync_LukaZajetaPrzezWpisANieJestDostepnaDlaWpisuB()
-    {
-        // Niezmiennik wprost: przerwa 08:30–09:00 doliczona do wpisu A wchodzi w jego
-        // przedział, więc wpis B (10:00–10:30) nie może jej już doliczyć "przed sobą" —
-        // jego sąsiadem staje się rozszerzony wpis A i luka między nimi jest inna.
-        SeedDocumentEntry("file-2", At(8), 30);                  // 08:00–08:30
-        var entryA = SeedDocumentEntry("file-1", At(9), 60);     // 09:00–10:00
-        var entryB = SeedDocumentEntry("file-3", At(10, 30), 30); // 10:30–11:00
-
-        await operations.ClaimGapAsync(entryA.Id, GapDirection.Before, Now, CancellationToken.None);
-        var resultB = await operations.ClaimGapAsync(entryB.Id, GapDirection.Before, Now, CancellationToken.None);
-
-        Assert.Equal(TimeEntryOperationStatus.Success, resultB.Status);
-        var updatedB = await db.TimeEntries.SingleAsync(e => e.Id == entryB.Id);
-        // B dostał wyłącznie lukę 10:00–10:30 — minuty 08:30–09:00 należą już do A.
-        Assert.Equal(At(10), updatedB.StartedAt);
-        Assert.Equal(60, updatedB.DurationMinutes);
-        var updatedA = await db.TimeEntries.SingleAsync(e => e.Id == entryA.Id);
-        Assert.Equal(At(8, 30), updatedA.StartedAt);
-    }
-
-    [Fact]
-    public async Task ClaimGapAsync_409GdyBrakSasiada()
-    {
-        var entry = SeedDocumentEntry("file-1", At(9), 60);
-
-        var result = await operations.ClaimGapAsync(
-            entry.Id, GapDirection.Before, Now, CancellationToken.None);
-
-        Assert.Equal(TimeEntryOperationStatus.Conflict, result.Status);
-    }
-
-    [Fact]
     public async Task AdjustAsync_KorektaZmieniaCzasIZapisujeDziennik()
     {
         var entry = SeedDocumentEntry("file-1", At(9), 60);

@@ -204,7 +204,6 @@ realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
 | `POST /api/time-entries/{id}/subtract-gap` | Wyłącza przerwę z rozliczanego czasu (`{gapStartAt, gapEndAt}` z listy przerw wpisu); przerwa już nieliczona → 409 |
 | `POST /api/time-entries/{id}/add-gap` | Dolicza przerwę leżącą w godzinach wpisu (ten sam kształt żądania); przerwa już liczona → 409 |
 | `POST /api/time-entries/{id}/round` | Zaokrągla czas wpisu do jednostki rozliczeniowej z konfiguracji; czas już będący wielokrotnością → 400 |
-| `POST /api/time-entries/{id}/claim-gap` | Dolicza wolną lukę do sąsiedniej pozycji na osi dnia (`{direction: before\|after}`); minuty liczy serwer, tylko jeśli luka wolna |
 | `POST /api/time-entries/{id}/adjust` | Szybka korekta `{minutes: ±N}`; wynik w przedziale (0, 480] min |
 | `POST /api/time-entries/archive` | Rozlicza (archiwizuje) aktywne wpisy z domkniętego zakresu dat (maks. 366 dni); idempotentne, zwraca liczbę wpisów i sumę minut |
 | `POST /api/time-entries/{id}/archive` | Rozlicza pojedynczy wpis i zwraca go; wpis już rozliczony → 409 (data rozliczenia jest wartością audytową i nie przesuwa się przy drugiej próbie) |

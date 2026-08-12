@@ -241,11 +241,6 @@ export class ApiService {
     return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/round`);
   }
 
-  /** Dolicza wolną lukę do sąsiedniej pozycji — minuty liczy serwer. */
-  claimGap(timeEntryId: number, direction: 'before' | 'after'): Promise<TimeEntry> {
-    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/claim-gap`, { direction });
-  }
-
   /** Szybka korekta czasu wpisu o ±N minut. */
   adjustTimeEntry(timeEntryId: number, minutes: number): Promise<TimeEntry> {
     return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/adjust`, { minutes });

@@ -366,13 +366,6 @@ public class SubtractGapRequest
     public DateTime? GapEndAt { get; set; }
 }
 
-/// <summary>Żądanie doliczenia przerwy do sąsiedniej pozycji — minuty liczy serwer, nie klient.</summary>
-public class ClaimGapRequest
-{
-    [Required(ErrorMessage = "Kierunek doliczenia przerwy jest wymagany.")]
-    public Services.GapDirection? Direction { get; set; }
-}
-
 /// <summary>Szybka korekta czasu wpisu o ±N minut.</summary>
 public class AdjustTimeEntryRequest : IValidatableObject
 {

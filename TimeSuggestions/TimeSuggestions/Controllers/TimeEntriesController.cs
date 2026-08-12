@@ -115,15 +115,6 @@ public class TimeEntriesController(
         => await ToResponseAsync(
             await operationsService.RoundAsync(id, DateTime.UtcNow, cancellationToken), cancellationToken);
 
-    /// <summary>Dolicza wolną lukę do sąsiedniej pozycji na osi dnia — minuty liczy serwer.</summary>
-    [HttpPost("{id:int}/claim-gap")]
-    public async Task<ActionResult<TimeEntryDto>> ClaimGap(
-        int id,
-        ClaimGapRequest request,
-        CancellationToken cancellationToken)
-        => await ToResponseAsync(await operationsService.ClaimGapAsync(
-            id, request.Direction!.Value, DateTime.UtcNow, cancellationToken), cancellationToken);
-
     /// <summary>Szybka korekta ±N minut.</summary>
     [HttpPost("{id:int}/adjust")]
     public async Task<ActionResult<TimeEntryDto>> Adjust(

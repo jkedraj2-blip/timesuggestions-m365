@@ -401,105 +401,11 @@ public class TimeEntryOperationsService(
         return Math.Max(1, units) * incrementMinutes;
     }
 
-    /// <summary>
-    /// Dolicza wolną lukę między wpisem a sąsiednią pozycją na globalnej osi dnia.
-    /// Luka liczona SERWEROWO (klient nie przysyła minut) i tylko jeśli wolna —
-    /// sąsiadem jest najbliższa pozycja (wpis dowolnego źródła albo oczekująca
-    /// sugestia) tego samego dnia. Doliczona luka wchodzi w przedział wpisu,
-    /// więc z mocy niezmiennika przestaje być dostępna dla innych wpisów.
-    /// </summary>
-    public async Task<TimeEntryOperationResult> ClaimGapAsync(
-        int timeEntryId,
-        GapDirection direction,
-        DateTime nowUtc,
-        CancellationToken cancellationToken)
-    {
-        var entry = await db.TimeEntries
-            .Include(e => e.Case)
-            .Include(e => e.Suggestions)
-            .Include(e => e.Adjustments)
-            .FirstOrDefaultAsync(e => e.Id == timeEntryId, cancellationToken);
-        if (entry is null)
-        {
-            return new(TimeEntryOperationStatus.NotFound, "Wpis czasu nie istnieje.");
-        }
-
-        if (entry.ArchivedAt is not null)
-        {
-            return new(TimeEntryOperationStatus.Archived, "Wpis rozliczony nie podlega korektom.");
-        }
-
-        var items = await LoadDayItemsAsync(entry.EntryDate, excludeEntryIds: [entry.Id], cancellationToken);
-
-        DateTime gapStartAt;
-        DateTime gapEndAt;
-        if (direction == GapDirection.Before)
-        {
-            var neighborEnd = items
-                .Where(item => item.End <= entry.StartedAt)
-                .Select(item => (DateTime?)item.End)
-                .Max();
-            if (neighborEnd is null)
-            {
-                return new(TimeEntryOperationStatus.Conflict, "Brak sąsiedniej pozycji przed wpisem — nie ma przerwy do doliczenia.");
-            }
-
-            gapStartAt = neighborEnd.Value;
-            gapEndAt = entry.StartedAt;
-        }
-        else
-        {
-            var neighborStart = items
-                .Where(item => item.Start >= entry.EndedAt)
-                .Select(item => (DateTime?)item.Start)
-                .Min();
-            if (neighborStart is null)
-            {
-                return new(TimeEntryOperationStatus.Conflict, "Brak sąsiedniej pozycji po wpisie — nie ma przerwy do doliczenia.");
-            }
-
-            gapStartAt = entry.EndedAt;
-            gapEndAt = neighborStart.Value;
-        }
-
-        var gapMinutes = FreeGapMinutes(gapStartAt, gapEndAt) ?? 0;
-        if (gapMinutes <= 0)
-        {
-            return new(TimeEntryOperationStatus.Conflict, "Między pozycjami nie ma wolnej przerwy.");
-        }
-
-        // Wybór najbliższego sąsiada gwarantuje pustkę przedziału, ale niezmiennik
-        // weryfikujemy wprost — zastane dane (sprzed walidacji nakładania) mogłyby
-        // zawierać pozycje zachodzące na siebie.
-        var blocker = FindBlockerInItems(items, gapStartAt, gapEndAt);
-        if (blocker is not null)
-        {
-            return new(TimeEntryOperationStatus.Conflict, $"Przerwa nie jest wolna — blokuje ją pozycja: {blocker}.");
-        }
-
-        if (direction == GapDirection.Before)
-        {
-            entry.StartedAt = gapStartAt;
-        }
-        else
-        {
-            entry.EndedAt = gapEndAt;
-        }
-
-        db.TimeEntryAdjustments.Add(new TimeEntryAdjustment
-        {
-            TimeEntry = entry,
-            Minutes = gapMinutes,
-            Kind = AdjustmentKind.GapAddition,
-            GapStartAt = gapStartAt,
-            GapEndAt = gapEndAt,
-            CreatedAt = nowUtc,
-        });
-        entry.DurationMinutes += gapMinutes;
-
-        await db.SaveChangesAsync(cancellationToken);
-        return new(TimeEntryOperationStatus.Success, Entries: [entry]);
-    }
+    // Dawny ClaimGapAsync (doliczanie wolnej luki do WPISU) usunięty świadomie: endpoint
+    // nie miał żadnego wywołania w UI, a jako jedyna operacja nie sprawdzał ani
+    // MaxClaimableGapMinutes, ani limitu czasu. Doliczanie luk odbywa się o krok
+    // wcześniej, na sugestiach (SuggestionOperationsService), a po zatwierdzeniu
+    // zostaje scalanie „z przerwami" i przełączanie wykrytych przerw.
 
     /// <summary>Szybka korekta ±N minut. Wynik musi zostać w przedziale (0, MaxDocumentDurationMinutes].</summary>
     public async Task<TimeEntryOperationResult> AdjustAsync(

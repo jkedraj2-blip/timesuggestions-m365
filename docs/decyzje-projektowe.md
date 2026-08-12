@@ -190,9 +190,7 @@ wie, po której stronie przerwy naprawdę pracował.
 Kluczowa reguła: luka jest oferowana tylko wtedy, gdy naprawdę jest wolna na globalnej
 osi dnia. Jeśli prawnik w tym czasie pracował nad innym dokumentem, ta "przerwa" jest już
 rozliczona w historii tamtego pliku i przycisku nie ma; czas nie może zostać policzony
-dwa razy. Luki dłuższe niż `MaxClaimableGapMinutes` (120 min) też nie są oferowane:
-kilkugodzinna dziura to nie przerwa w pracy, tylko inna część dnia. Scalanie celowo nie
-dolicza luki (to osobna, świadoma decyzja).
+dwa razy. Scalanie celowo nie dolicza luki (to osobna, świadoma decyzja).
 
 Przycisk "Scal w jedną sesję" pojawia się wyłącznie przy fladze `canMerge` liczonej przez
 backend (ta sama sugestia oczekująca, ten sam plik, ten sam dzień): przycisk kończący się
@@ -200,6 +198,39 @@ odmową "tylko z tego samego dnia" był obietnicą odrzucaną przez tę samą wa
 złożyła. Każda taka poprawka ustawia `IsUserAdjusted`: od tej chwili sync nie przelicza
 sugestii ani nie odtwarza sesji z jej zasięgu, bo inaczej najbliższa synchronizacja
 cofnęłaby decyzję człowieka.
+
+## Limit przerwy dotyczy doliczania, nie scalania
+
+`MaxClaimableGapMinutes` to 480 minut, czyli dzień pracy. Wcześniej były to dwie godziny
+i wartość okazała się zła w obie strony. Po pierwsze odcinała normalne przerwy w dniu
+(rozprawa, dojazd, obiad), a to prawnik wie, czy w tej dziurze pracował nad sprawą poza
+dokumentem, i to on ją rozdziela; limit nie jest od oceniania, co jest przerwą, tylko
+zaporą przed doliczeniem całej doby jednym kliknięciem. Po drugie przekroczenie limitu
+kasowało z odpowiedzi CAŁEGO sąsiada, a nie samo doliczanie.
+
+Skutek uboczny był poważniejszy niż sam limit: dwie sesje tego samego pliku z tego samego
+dnia, odległe o więcej niż limit, nie dostawały ŻADNEJ akcji, choć `MergeAsync` przyjmuje
+taką parę bez zastrzeżeń. Limit doliczania działał przy okazji jako limit scalania.
+Teraz sąsiad niesie dwie osobne flagi: `canClaim` (przerwa mieści się w limicie) i
+`canMerge` (scalenie na pewno przejdzie). Sąsiad znika z odpowiedzi dopiero wtedy, gdy
+obie są fałszywe, bo wiersz bez jednego przycisku to sam szum. Sam limit sprawdza też
+`ClaimGapAsync`, bo istnienie sąsiada przestało go gwarantować.
+
+## Zdanie o wolnej przerwie podaje godziny
+
+Karta pisała "Nierozliczone 30 min przed tą sesją (dalej: „X")" i myliło to na trzy
+sposoby naraz. Dwie karty stojące po obu stronach tej samej dziury pisały co do znaku to
+samo, więc wyglądało to na zdublowaną pozycję, a liczbę minut przerwy czytano jako czas
+pracy sesji (sesja trwała 5 minut, a zdanie mówiło 30). Skrót "dalej:" nie znaczy nic dla
+kogoś, kto nie pisał tego kodu. Wspólny szablon dla obu stron dawał do tego niepoprawne
+"po tą sesją".
+
+Teraz zdanie brzmi "Od 18:00 do 18:30 nic nie jest rozliczone (30 min). Wcześniej kończy
+się „X"." Godziny przychodzą z serwera (`gapStartAt`, `gapEndAt`), bo klient nie odtworzy
+ich z minut: minuty są podłogą z sekund, więc odjęte od startu wskazywały początek wolnego
+czasu o minutę za późno. Gdy sąsiadem jest druga sesja tego samego pliku, zdanie mówi to
+wprost zamiast powtarzać nazwę karty, bo "dalej: why" na karcie „why" czytało się jak
+odwołanie pozycji do samej siebie.
 
 ## Luka przez lokalną północ nie jest oferowana ani przyjmowana
 

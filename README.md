@@ -104,6 +104,8 @@ Pełne uzasadnienia: [docs/decyzje-projektowe.md](docs/decyzje-projektowe.md).
 | [Kolejność po ostatniej modyfikacji](docs/decyzje-projektowe.md#kolejność-sugestii-po-ostatniej-modyfikacji) | Świeżo zapisany dokument jest na górze listy |
 | [Praca po zatwierdzeniu daje nową sugestię](docs/decyzje-projektowe.md#praca-po-zatwierdzeniu-daje-nową-sugestię) | Silnik dostaje tylko aktywność niepokrytą przez rozstrzygnięte zakresy |
 | [Scalanie sugestii i wolne przerwy](docs/decyzje-projektowe.md#scalanie-sugestii-i-doliczanie-wolnych-przerw) | Luka oferowana tylko, gdy naprawdę wolna; podział jawny, nie po połowie |
+| [Limit przerwy tylko dla doliczania](docs/decyzje-projektowe.md#limit-przerwy-dotyczy-doliczania-nie-scalania) | 8 godzin na doliczenie jednym ruchem; scalanie sesji tego samego pliku bez limitu |
+| [Zdanie o przerwie z godzinami](docs/decyzje-projektowe.md#zdanie-o-wolnej-przerwie-podaje-godziny) | „Od 18:00 do 18:30 nic nie jest rozliczone", zamiast samych minut i skrótu „dalej:" |
 | [Luka przez północ odmawiana](docs/decyzje-projektowe.md#luka-przez-lokalną-północ-nie-jest-oferowana-ani-przyjmowana) | Sesje nie przekraczają granicy dnia; `EntryDate` zostaje spójne z godzinami |
 | [Sąsiedztwo na przerwach](docs/decyzje-projektowe.md#sąsiedztwo-sprawdzane-na-przerwach-nie-na-całym-przedziale-scalenia) | Scalenie blokuje tylko obca pozycja w przerwie między składowymi |
 | [Przerwa liczona podłogą](docs/decyzje-projektowe.md#przerwa-liczona-podłogą-nie-zaokrągleniem) | Zaokrąglenie w górę tworzyło trwałe nakładania sekundowe |
@@ -183,7 +185,7 @@ uprawnienia **Calendars.Read** i **Files.Read**); konfiguracja w
 administratora, utwórz własną rejestrację (SPA, redirect `http://localhost:4200`)
 i podmień `entraClientId`.
 
-**Testy** (339 backend xUnit + 227 frontend Vitest; bez sieci i logowania):
+**Testy** (344 backend xUnit + 230 frontend Vitest; bez sieci i logowania):
 
 ```bash
 cd TimeSuggestions && dotnet test

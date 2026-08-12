@@ -6,9 +6,9 @@ Przykładowe wywołania wszystkich endpointów:
 | Metoda i ścieżka | Opis |
 |---|---|
 | `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalnie: tombstone'y usuniętych plików, historia wersji per plik `versions`, liczniki filtrów klienckich, nadpisanie okna synchronizacji `syncDaysBack`, maks. 90 dni), zwraca pełny raport z faktycznie użytym oknem (`windowDays`) i licznikami wersji (`versions`); 409 przy kolizji z równoległą synchronizacją. Długości list w żądaniu są ograniczone walidacją |
-| `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące), posortowana malejąco po ostatniej modyfikacji; niesie też `lastActivityAt`, `isUserAdjusted` i wolne luki `gaps` wokół pozycji |
+| `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące), posortowana malejąco po ostatniej modyfikacji; niesie też `lastActivityAt`, `isUserAdjusted` i wolne luki `gaps` wokół pozycji (godziny przerwy, `canClaim` dla doliczania i `canMerge` dla scalania) |
 | `POST /api/suggestions/merge` | Scala sesje tego samego dokumentu z tego samego dnia w jedną sugestię (`{suggestionIds, includeGaps}`); odpowiedź niesie pełne DTO (z lukami i numerem sesji) |
-| `POST /api/suggestions/{id}/claim-gap` | Rozdziela wolną lukę (`{direction: before\|after, minutes?, neighborMinutes?}`): `minutes` bierze ta sugestia, `neighborMinutes` sąsiednia, reszta zostaje wolna; bez obu wartości cała luka trafia tutaj. Rozmiar luki liczy serwer i tylko jeśli jest wolna, mieści się w limicie i nie przechodzi przez lokalną północ |
+| `POST /api/suggestions/{id}/claim-gap` | Rozdziela wolną lukę (`{direction: before\|after, minutes?, neighborMinutes?}`): `minutes` bierze ta sugestia, `neighborMinutes` sąsiednia, reszta zostaje wolna; bez obu wartości cała luka trafia tutaj. Rozmiar luki liczy serwer i tylko jeśli jest wolna, mieści się w limicie doliczania (8 godzin) i nie przechodzi przez lokalną północ |
 | `POST /api/suggestions/{id}/approve` | Tworzy wpis czasu, zamyka sugestię; zasięg wpisu jest przycinany do najbliższej pozycji (wpisu albo oczekującej sugestii), a pozostałe pokrycie opisuje `notice` |
 | `POST /api/suggestions/{id}/reject` | Odrzuca (status, bez usuwania) |
 | `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą do oczekujących (409 dla zarchiwizowanej: archiwum jest terminalne) |

@@ -8,8 +8,17 @@ namespace TimeSuggestions.Contracts;
 /// </summary>
 public class SyncRequest : IValidatableObject
 {
+    /// <summary>
+    /// Górna granica liczności list w żądaniu. Kestrel i tak tnie żądanie na 30 MB,
+    /// ale w tych 30 MB mieszczą się dziesiątki tysięcy obiektów budujących słowniki
+    /// w pamięci — okno synchronizacji (maks. 90 dni) nie ma prawa ich wygenerować.
+    /// </summary>
+    public const int MaxListItems = 20_000;
+
+    [MaxLength(MaxListItems, ErrorMessage = "Lista wydarzeń kalendarza jest za długa.")]
     public List<CalendarEventDto> CalendarEvents { get; set; } = [];
 
+    [MaxLength(MaxListItems, ErrorMessage = "Lista plików jest za długa.")]
     public List<DriveFileDto> DriveFiles { get; set; } = [];
 
     /// <summary>
@@ -17,6 +26,7 @@ public class SyncRequest : IValidatableObject
     /// backend usuwa ich OCZEKUJĄCE sugestie. Pole opcjonalne: starszy frontend
     /// go nie wysyła, a pusta lista nie zmienia zachowania.
     /// </summary>
+    [MaxLength(MaxListItems, ErrorMessage = "Lista usuniętych plików jest za długa.")]
     public List<string> DeletedDriveFileIds { get; set; } = [];
 
     /// <summary>
@@ -156,6 +166,9 @@ public class DriveFileDto
     [Range(0, long.MaxValue, ErrorMessage = "Rozmiar pliku nie może być ujemny.")]
     public long Size { get; set; }
 
+    /// <summary>Więcej wersji jednego pliku nie zwraca Graph w oknie synchronizacji.</summary>
+    public const int MaxVersions = 5_000;
+
     /// <summary>
     /// Historia wersji pliku (GET /me/drive/items/{id}/versions) pobrana przez frontend.
     /// null = wersje niepobrane (starszy klient albo błąd Graph dla tego pliku) —
@@ -163,6 +176,7 @@ public class DriveFileDto
     /// „czas do uzupełnienia". Pusta lista to co innego niż null: Graph odpowiedział,
     /// ale bez historii.
     /// </summary>
+    [MaxLength(MaxVersions, ErrorMessage = "Lista wersji pliku jest za długa.")]
     public List<DriveFileVersionDto>? Versions { get; set; }
 }
 

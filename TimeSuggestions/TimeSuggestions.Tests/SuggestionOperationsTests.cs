@@ -287,12 +287,89 @@ public sealed class SuggestionOperationsTests : IDisposable
     [Fact]
     public async Task LoadGaps_NieOferujeLukiDluzszejNizLimitZKonfiguracji()
     {
-        AddSuggestion(9, 0, 30);
-        var later = AddSuggestion(14, 0, 20); // 4,5 godziny dziury — to nie jest przerwa w pracy
+        AddSuggestion(6, 0, 30);
+        // 13,5 godziny dziury i inny plik: ani nie ma czego doliczyć, ani czego scalić.
+        var later = AddSuggestion(20, 0, 20, externalId: "file-2", title: "Pozew.docx");
 
         var gaps = await operations.LoadGapsAsync(await db.Suggestions.ToListAsync(), CancellationToken.None);
 
         Assert.False(gaps.TryGetValue(later.Id, out var forLater) && forLater.Before is not null);
+    }
+
+    /// <summary>
+    /// Limit doliczania podniesiony do 8 godzin: to prawnik wie, czy w tej dziurze
+    /// pracował, a nie konfiguracja. Kilkugodzinna przerwa była wcześniej odcinana
+    /// razem z całym wierszem, więc nie dało się jej nawet rozdzielić.
+    /// </summary>
+    [Fact]
+    public async Task LoadGaps_KilkugodzinnaPrzerwaMiesciSieWLimicie()
+    {
+        AddSuggestion(9, 0, 30);
+        var later = AddSuggestion(14, 0, 20);
+
+        var gaps = await operations.LoadGapsAsync(await db.Suggestions.ToListAsync(), CancellationToken.None);
+
+        var before = gaps[later.Id].Before;
+        Assert.NotNull(before);
+        Assert.True(before.CanClaim);
+        Assert.Equal(270, before.GapMinutes);
+    }
+
+    /// <summary>
+    /// Zgłoszone z użycia: dwie sesje TEGO SAMEGO pliku z tego samego dnia, odległe
+    /// o kilkanaście godzin, nie dawały żadnego przycisku — ani doliczenia, ani scalenia.
+    /// MergeAsync przyjmuje taką parę bez zastrzeżeń, ale sąsiad ponad limitem luki
+    /// w ogóle nie wracał z serwera, więc limit DOLICZANIA działał przy okazji jako
+    /// limit SCALANIA. To dwie różne decyzje i mają być rozłączne.
+    /// </summary>
+    [Fact]
+    public async Task LoadGaps_SesjeTegoSamegoPlikuZaLimitemNadalDaSieScalic()
+    {
+        AddSuggestion(9, 0, 30);
+        var later = AddSuggestion(20, 0, 20); // 10,5 godziny dziury, ten sam plik
+
+        var gaps = await operations.LoadGapsAsync(await db.Suggestions.ToListAsync(), CancellationToken.None);
+
+        var before = gaps[later.Id].Before;
+        Assert.NotNull(before);
+        Assert.True(before.CanMerge);
+        Assert.False(before.CanClaim);
+    }
+
+    /// <summary>
+    /// Godziny luki liczy serwer i podaje je wprost. Klient nie może ich odtworzyć
+    /// z samych minut, bo minuty są PODŁOGĄ z sekund: odjęte od startu wskazywały
+    /// początek wolnego czasu o minutę za późno. Karta pisze zakres od-do, więc
+    /// ta różnica byłaby widoczna wprost w zdaniu.
+    /// </summary>
+    [Fact]
+    public async Task LoadGaps_PodajeGodzinyWolnejPrzerwy()
+    {
+        AddSuggestion(9, 0, 30);
+        var later = AddSuggestion(10, 0, 20, startSecond: 23);
+
+        var gaps = await operations.LoadGapsAsync(await db.Suggestions.ToListAsync(), CancellationToken.None);
+
+        var before = gaps[later.Id].Before;
+        Assert.NotNull(before);
+        Assert.Equal(new DateTime(2026, 7, 24, 9, 30, 0), before.GapStartAt);
+        Assert.Equal(new DateTime(2026, 7, 24, 10, 0, 23), before.GapEndAt);
+        Assert.Equal(30, before.GapMinutes);
+    }
+
+    /// <summary>Doliczenie ponad limit odmawia z podaniem limitu — klientowi nie ufamy.</summary>
+    [Fact]
+    public async Task ClaimGap_OdmawiaLukiPonadLimit()
+    {
+        AddSuggestion(9, 0, 30);
+        var later = AddSuggestion(20, 0, 20);
+
+        var result = await operations.ClaimGapAsync(
+            later.Id, GapDirection.Before, minutes: null, neighborMinutes: null, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Conflict, result.Status);
+        Assert.Contains("480", result.Message);
+        Assert.Equal(20, (await db.Suggestions.SingleAsync(s => s.Id == later.Id)).DurationMinutes);
     }
 
     [Fact]

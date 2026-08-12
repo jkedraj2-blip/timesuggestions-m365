@@ -23,12 +23,14 @@ public class SuggestionOptions
     public int MinimumEventDurationMinutes { get; set; } = 5;
 
     /// <summary>
-    /// Najdłuższa luka, którą wolno jednym kliknięciem doliczyć do sąsiedniej pozycji.
-    /// Wolna godzina między sesjami bywa pracą nad tą samą sprawą poza dokumentem,
-    /// ale kilkugodzinna dziura to już nie „przerwa" tylko inna część dnia — oferowanie
-    /// jej do doliczenia zachęcałoby do zawyżania rozliczenia.
+    /// Najdłuższa luka, którą wolno jednym ruchem doliczyć do sąsiedniej pozycji.
+    /// Osiem godzin, czyli dzień pracy: to prawnik wie, czy w tej dziurze pracował nad
+    /// sprawą poza dokumentem, i on ją rozdziela. Dwie godziny odcinały normalne
+    /// przerwy w dniu (obiad, rozprawa, dojazd) razem z całym wierszem sąsiada, więc
+    /// czasu nie dało się nawet podzielić. Limit został jako zapora przed doliczeniem
+    /// całej doby jednym kliknięciem, a nie jako ocena, co jest przerwą.
     /// </summary>
-    public int MaxClaimableGapMinutes { get; set; } = 120;
+    public int MaxClaimableGapMinutes { get; set; } = 480;
 
     /// <summary>
     /// Okno synchronizacji wstecz w dniach. Frontend ma własny odpowiednik

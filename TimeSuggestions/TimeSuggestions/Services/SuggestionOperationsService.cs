@@ -10,6 +10,17 @@ namespace TimeSuggestions.Services;
 /// <param name="SuggestionId">Id sąsiada, jeśli jest sugestią oczekującą; null dla wpisu czasu (podziału z nim nie ma).</param>
 /// <param name="Title">Nazwa sąsiada — UI mówi, komu ta luka zostanie odebrana albo z kim podzielona.</param>
 /// <param name="GapMinutes">Minuty wolnej luki (0, gdy pozycje przylegają).</param>
+/// <param name="GapStartAt">Początek wolnej przerwy — UI pisze zakres godzin, a nie same minuty.</param>
+/// <param name="GapEndAt">
+/// Koniec wolnej przerwy. Godziny idą z serwera, bo minut nie da się na nie zamienić:
+/// są PODŁOGĄ z sekund, więc odjęte od startu wskazywały początek wolnego czasu o minutę
+/// za późno.
+/// </param>
+/// <param name="CanClaim">
+/// Czy przerwę wolno doliczyć jednym ruchem (mieści się w MaxClaimableGapMinutes i nie jest
+/// zerowa). Fałsz NIE ukrywa sąsiada: przerwa ponad limitem odbierała wcześniej cały wiersz,
+/// przez co dwie sesje tego samego pliku traciły też przycisk scalania.
+/// </param>
 /// <param name="CanMerge">
 /// Czy scalenie z tym sąsiadem NAPRAWDĘ przejdzie: ta sama sugestia oczekująca, ten sam plik
 /// i ten sam dzień rozliczeniowy. Sąsiad bywa znaleziony za północą (luka szuka o dobę w obie
@@ -17,7 +28,14 @@ namespace TimeSuggestions.Services;
 /// takiego sąsiada kończył się błędem „tylko z tego samego dnia", czyli obiecywał operację
 /// odrzucaną przez tę samą warstwę, która go zaproponowała.
 /// </param>
-public record SuggestionNeighbor(int? SuggestionId, string Title, int GapMinutes, bool CanMerge);
+public record SuggestionNeighbor(
+    int? SuggestionId,
+    string Title,
+    int GapMinutes,
+    DateTime GapStartAt,
+    DateTime GapEndAt,
+    bool CanClaim,
+    bool CanMerge);
 
 /// <summary>Wolne luki wokół sugestii; null po którejś stronie = nie ma czego doliczać.</summary>
 public record SuggestionGaps(SuggestionNeighbor? Before, SuggestionNeighbor? After);
@@ -39,8 +57,9 @@ public record SuggestionOperationResult(
 /// chodziło najbardziej: luka jest do doliczenia TYLKO wtedy, gdy jest naprawdę wolna.
 /// Jeśli prawnik w tym czasie pracował nad innym dokumentem, ta „przerwa" jest już
 /// rozliczona w historii tamtego pliku — i wtedy nie ma czego doliczać, a UI nie
-/// pokazuje przycisku. Górny limit (MaxClaimableGapMinutes) odcina dziury, które nie
-/// są przerwą w pracy, tylko inną częścią dnia.
+/// pokazuje przycisku. Górny limit (MaxClaimableGapMinutes) jest zaporą przed
+/// doliczeniem całej doby jednym ruchem i dotyczy WYŁĄCZNIE doliczania: scalanie sesji
+/// tego samego pliku nie ma z nim nic wspólnego.
 ///
 /// Każda taka poprawka ustawia IsUserAdjusted: od tego momentu sync nie przelicza
 /// sugestii ani nie odtwarza sesji z jej zasięgu.
@@ -192,6 +211,15 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
         if (neighbor is null || neighbor.GapMinutes == 0)
         {
             return new(TimeEntryOperationStatus.Conflict, "Nie ma wolnej przerwy po tej stronie sugestii.");
+        }
+
+        // Sąsiad wraca teraz także ponad limitem (żeby dało się scalić sesje tego samego
+        // pliku), więc limit doliczania musi być sprawdzony tu wprost — samo istnienie
+        // sąsiada przestało go gwarantować.
+        if (!neighbor.CanClaim)
+        {
+            return new(TimeEntryOperationStatus.Conflict,
+                $"Wolna przerwa ma {neighbor.GapMinutes} min — to więcej niż limit {options.MaxClaimableGapMinutes} min do doliczenia.");
         }
 
         var claimedMinutes = minutes ?? neighbor.GapMinutes;
@@ -377,7 +405,7 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
         // doliczać, ale sesje tego samego pliku wolno wtedy scalić — UI potrzebuje
         // wiedzieć, że sąsiad w ogóle jest.
         var gapMinutes = FreeGapMinutes(gapStartAt, gapEndAt);
-        if (gapMinutes is null || gapMinutes > options.MaxClaimableGapMinutes)
+        if (gapMinutes is null)
         {
             return null;
         }
@@ -389,19 +417,33 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
             return null;
         }
 
+        // Warunki scalenia sprawdzane TU, komplet — dokładnie te same, które weryfikuje
+        // MergeAsync. UI nie ma prawa pokazać przycisku, po którym przychodzi odmowa.
+        var canMerge = neighbor.SuggestionId is not null
+            && neighbor.ExternalId is not null
+            && suggestion.Source == SuggestionSource.Document
+            && neighbor.ExternalId == suggestion.ExternalId
+            && neighbor.EntryDate == suggestion.EntryDate;
+
+        // Limit dotyczy WYŁĄCZNIE doliczania, nie scalania. Wcześniej przerwa ponad
+        // limitem zwracała null, więc razem z przyciskiem doliczania znikał przycisk
+        // scalania: dwie sesje tego samego pliku odległe o kilka godzin nie miały
+        // żadnej akcji, choć MergeAsync przyjmuje je bez zastrzeżeń. To dwie osobne
+        // decyzje — „jest co doliczyć" i „jest co scalić".
+        var canClaim = gapMinutes > 0 && gapMinutes <= options.MaxClaimableGapMinutes;
+        if (!canClaim && !canMerge)
+        {
+            return null; // pusty wiersz bez jednego przycisku to sam szum
+        }
+
         return new SuggestionNeighbor(
             neighbor.SuggestionId,
             neighbor.Title,
             gapMinutes.Value,
-            // Warunki scalenia sprawdzane TU, komplet — dokładnie te same, które
-            // weryfikuje MergeAsync. UI nie ma prawa pokazać przycisku, po którym
-            // przychodzi odmowa; jeśli scalić się nie da, sąsiad zostaje w danych
-            // wyłącznie po to, żeby dało się rozdzielić dzielącą ich przerwę.
-            CanMerge: neighbor.SuggestionId is not null
-                && neighbor.ExternalId is not null
-                && suggestion.Source == SuggestionSource.Document
-                && neighbor.ExternalId == suggestion.ExternalId
-                && neighbor.EntryDate == suggestion.EntryDate);
+            gapStartAt,
+            gapEndAt,
+            canClaim,
+            canMerge);
     }
 
     /// <summary>Pozycja na osi dnia: wpis czasu albo oczekująca sugestia.</summary>

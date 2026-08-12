@@ -1,4 +1,4 @@
-using TimeSuggestions.Configuration;
+﻿using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
 using TimeSuggestions.Models;
 using TimeSuggestions.Services;
@@ -10,8 +10,8 @@ public class SuggestionBuilderTests
     private static readonly DateTime Now = new(2026, 7, 25, 12, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime WindowStart = Now.AddDays(-7);
 
-    private static SuggestionBuilder CreateBuilder(int defaultDocumentMinutes = 30)
-        => new(new SuggestionOptions { DefaultDocumentDurationMinutes = defaultDocumentMinutes });
+    private static SuggestionBuilder CreateBuilder(int minimumSessionMinutes = 5)
+        => new(new SuggestionOptions { MinimumSessionMinutes = minimumSessionMinutes });
 
     private static DriveFileDto CreateFile(string id, string name, DateTime modifiedAt, bool byMe = true)
         => new() { Id = id, Name = name, LastModifiedDateTime = modifiedAt, LastModifiedByMe = byMe };
@@ -35,17 +35,23 @@ public class SuggestionBuilderTests
         Assert.Equal("Spotkanie z Kowalski", suggestion.ProposedDescription);
     }
 
+    /// <summary>
+    /// Plik bez historii wersji: żadnego wymyślonego czasu. Graph mówi tylko KIEDY
+    /// plik zmieniono, więc sugestia dostaje minimum sesji (wartość z konfiguracji,
+    /// celowo inna niż domyślne 5 — test wykryje zahardcodowaną liczbę) i prośbę
+    /// o uzupełnienie czasu.
+    /// </summary>
     [Fact]
-    public void BuildFromDocuments_UzywaDomyslnegoCzasuZKonfiguracji()
+    public void BuildFromDocuments_BezHistoriiDajeMinimumSesjiIProsbeOUzupelnienieCzasu()
     {
-        // Wartość celowo inna niż domyślne 30 — test wykryje zahardcodowaną liczbę.
-        var builder = CreateBuilder(defaultDocumentMinutes: 45);
+        var builder = CreateBuilder(minimumSessionMinutes: 7);
         var file = CreateFile("file-1", "Umowa_NovaTech_v2.docx", Now.AddDays(-1));
 
         var suggestions = builder.BuildFromDocuments([file], TestHelpers.CreateTestCases(), WindowStart, Now, Now).Suggestions;
 
         var suggestion = Assert.Single(suggestions);
-        Assert.Equal(45, suggestion.DurationMinutes);
+        Assert.Equal(7, suggestion.DurationMinutes);
+        Assert.True(suggestion.NeedsTimeReview);
         Assert.Equal(SuggestionSource.Document, suggestion.Source);
     }
 
@@ -162,14 +168,13 @@ public class SuggestionBuilderTests
             CreateFile("file-1", "Umowa_NovaTech.docx", Now.AddDays(-1)),                 // przechodzi
             CreateFile("file-1", "Umowa_NovaTech.docx", Now.AddDays(-1).AddHours(3)),     // zagregowane (ten sam dzień)
             CreateFile("file-2", "zdjecie.png", Now.AddDays(-1)),                         // nie-dokument
-            CreateFile("file-3", "Stara_umowa.docx", Now.AddDays(-30)),                   // poza oknem
+            CreateFile("file-3", "Stara_umowa.docx", Now.AddDays(-30)),                   // poza oknem: odpada bez licznika
             CreateFile("file-4", "Cudzy_plik.docx", Now.AddDays(-1), byMe: false),        // cudza modyfikacja
         };
 
         var result = CreateBuilder().BuildFromDocuments(files, TestHelpers.CreateTestCases(), WindowStart, Now, Now);
 
         Assert.Equal(1, result.NotOfficeDocumentCount);
-        Assert.Equal(1, result.OutsideWindowCount);
         Assert.Equal(1, result.NotModifiedByUserCount);
         Assert.Equal(1, result.AggregatedCount);
         Assert.Single(result.Suggestions);

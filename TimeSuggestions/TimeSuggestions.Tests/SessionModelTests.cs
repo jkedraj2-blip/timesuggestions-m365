@@ -84,7 +84,7 @@ public sealed class SessionModelTests : IDisposable
         db.Suggestions.Add(suggestion);
         await db.SaveChangesAsync();
 
-        var result = await new ApprovalService(db).ApproveAsync(
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
             suggestion.Id,
             new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 45, Description = "Praca" },
             Now,
@@ -122,7 +122,7 @@ public sealed class SessionModelTests : IDisposable
         db.TimeEntries.Add(entry);
         await db.SaveChangesAsync();
 
-        var result = await new ApprovalService(db).DeleteTimeEntryAsync(entry.Id, CancellationToken.None);
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).DeleteTimeEntryAsync(entry.Id, CancellationToken.None);
 
         Assert.Equal(ApprovalOutcome.Success, result.Outcome);
         Assert.Equal(0, await db.TimeEntries.CountAsync());

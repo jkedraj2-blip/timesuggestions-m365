@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using TimeSuggestions.Configuration;
 using TimeSuggestions.Models;
 using TimeSuggestions.Services;
@@ -9,7 +9,8 @@ namespace TimeSuggestions.Tests;
 /// Testy tabelaryczne silnika sesji na fixture JSON (TestData/document-session-cases.json):
 /// pojedyncza wersja, seria gęsta, luki 20/40 min, domknięcie przedziałów (dokładnie
 /// 15/30 min), odwrotna kolejność, duplikaty, przejście przez północ i obie zmiany czasu.
-/// Oczekiwane czasy lokalne w strefie Europe/Warsaw (domyślna konfiguracja).
+/// Oczekiwane czasy lokalne w strefie Europe/Warsaw. Sesja to dokładnie odcinek
+/// od pierwszego do ostatniego zapisu — nic nie jest doliczane z góry.
 /// </summary>
 public class DocumentSessionEngineTests
 {
@@ -22,7 +23,10 @@ public class DocumentSessionEngineTests
         DateTime EndAtLocal,
         int GrossMinutes,
         int VersionCount,
-        List<ExpectedGap> Gaps);
+        List<ExpectedGap> Gaps,
+        // Brak pola w fixture = false: "czas do uzupełnienia" dotyczy tylko sesji
+        // zbudowanych z jednego zapisu.
+        bool NeedsTimeReview = false);
 
     private sealed record SessionCase(
         string Name,
@@ -73,6 +77,7 @@ public class DocumentSessionEngineTests
             Assert.Equal(expected.EndAtLocal, actual.EndAt);
             Assert.Equal(expected.GrossMinutes, actual.GrossMinutes);
             Assert.Equal(expected.VersionCount, actual.VersionCount);
+            Assert.Equal(expected.NeedsTimeReview, actual.NeedsTimeReview);
             Assert.Equal(expected.Gaps.Count, actual.DetectedGaps.Count);
             foreach (var (expectedGap, actualGap) in expected.Gaps.Zip(actual.DetectedGaps))
             {

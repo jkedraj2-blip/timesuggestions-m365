@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
@@ -38,9 +38,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         var effectiveOptions = new SuggestionOptions
         {
             MinimumEventDurationMinutes = options.MinimumEventDurationMinutes,
-            DefaultDocumentDurationMinutes = request.DefaultDocumentDurationMinutes ?? options.DefaultDocumentDurationMinutes,
             SyncDaysBack = request.SyncDaysBack ?? options.SyncDaysBack,
             BusinessTimeZoneId = options.BusinessTimeZoneId,
+            SessionContinuationGapMinutes = options.SessionContinuationGapMinutes,
+            SessionFlaggedGapMinutes = options.SessionFlaggedGapMinutes,
+            MinimumSessionMinutes = options.MinimumSessionMinutes,
         };
         var builder = new SuggestionBuilder(effectiveOptions);
 
@@ -73,6 +75,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         // zapisu niżej) — dopiero razem dają pełną znaną historię pliku.
         var activitiesByFile = await LoadActivitiesUnionAsync(request.DriveFiles, nowUtc, cancellationToken);
 
+        // Praca już rozliczona nie może wrócić jako ta sama sesja — a praca PO niej
+        // musi dać nową sugestię. Jedno i drugie załatwia wycięcie rozstrzygniętych
+        // przedziałów z wejścia silnika sesji.
+        var settledRangesByFile = await LoadSettledRangesAsync(request.DriveFiles, cancellationToken);
+
         // To samo okno dla dokumentów — granica lokalna przeliczona na instant UTC,
         // bo czasy modyfikacji plików z Graph są w UTC.
         var documentResult = builder.BuildFromDocuments(
@@ -81,7 +88,8 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             BusinessTime.ToUtcInstant(windowStartLocal, businessTimeZone),
             nowUtc,
             nowUtc,
-            activitiesByFile);
+            activitiesByFile,
+            settledRangesByFile);
 
         var rawCandidates = builder
             .BuildFromCalendar(eventFilterResult.Accepted, activeCases, nowUtc)
@@ -164,14 +172,15 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         var clientCounts = request.ClientFilteredCounts;
 
         return new SyncReport(
-            // "Pobrano" = dane faktycznie pobrane z Graph: pozycje przekazane do backendu
-            // PLUS odfiltrowane już w przeglądarce (per źródło). Bez tego raport był
-            // arytmetycznie niespójny ("Pobrano 1, odfiltrowano 3"); teraz zachodzi
-            // pobrano = zaakceptowane + odfiltrowane + zagregowane.
+            // "Pobrano" = kandydaci do rozliczenia: pozycje przekazane do backendu
+            // PLUS odfiltrowane już w przeglądarce (per źródło), MINUS te spoza okna.
+            // Zapas pobierany ponad okno nie jest ani kandydatem, ani pominiętą pracą —
+            // odjęcie go po obu stronach zachowuje niezmiennik sumy raportu.
             new SyncFetchedCounts(
-                request.CalendarEvents.Count + clientCounts.Private + clientCounts.Cancelled,
-                request.DriveFiles.Count + clientCounts.DocumentsOutsideWindow
-                    + clientCounts.DocumentsNotOfficeDocument),
+                request.CalendarEvents.Count + clientCounts.Private + clientCounts.Cancelled
+                    - eventFilterResult.OutsideWindowCount,
+                request.DriveFiles.Count + clientCounts.DocumentsNotOfficeDocument
+                    - documentResult.OutsideWindowCount),
             new SyncFilteredOutCounts(
                 Private: eventFilterResult.PrivateCount + clientCounts.Private,
                 TooShort: eventFilterResult.TooShortCount,
@@ -179,8 +188,6 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 Cancelled: eventFilterResult.CancelledCount + clientCounts.Cancelled,
                 InvalidDates: eventFilterResult.InvalidDatesCount,
                 NotOfficeDocument: documentResult.NotOfficeDocumentCount + clientCounts.DocumentsNotOfficeDocument,
-                OutsideWindow: documentResult.OutsideWindowCount + eventFilterResult.OutsideWindowCount
-                    + clientCounts.DocumentsOutsideWindow,
                 NotModifiedByUser: documentResult.NotModifiedByUserCount),
             Aggregated: documentResult.AggregatedCount,
             Deduplicated: deduplicatedCount,
@@ -198,10 +205,16 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     }
 
     /// <summary>
-    /// Dopisuje do append-only dziennika DocumentActivity fakty wersji, których jeszcze
-    /// nie ma (klucz naturalny: plik + wersja). Fakty rejestrujemy dla WSZYSTKICH plików
+    /// Dopisuje do append-only dziennika DocumentActivity fakty, których jeszcze nie ma
+    /// (klucz naturalny: plik + wersja + moment). Fakty rejestrujemy dla WSZYSTKICH plików
     /// z payloadu, także tych, które filtry sugestii odrzucą — dziennik jest źródłem
     /// prawdy o historii, nie pochodną reguł sugestii. Rekordów nigdy nie modyfikujemy.
+    ///
+    /// Oprócz wersji zapisujemy PRÓBKĘ z samego pliku (lastModifiedDateTime elementu).
+    /// To jedyny ślad pracy trwającej wewnątrz wersji, której Word online jeszcze nie
+    /// zapieczętował: przy ciągłej edycji lista wersji stoi w miejscu godzinami,
+    /// a znacznik pliku idzie do przodu. Każdy sync jest więc pomiarem — im częściej
+    /// prawnik synchronizuje, tym gęstsza historia (uzasadnienie przy DocumentActivity).
     /// </summary>
     private async Task<int> RecordDocumentActivitiesAsync(
         IReadOnlyList<DriveFileDto> files,
@@ -210,12 +223,43 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
     {
         // Dedup w obrębie żądania (Graph może powtórzyć wersję między stronami) —
         // wygrywa pierwsze wystąpienie klucza, bo fakt jest niezmienny.
-        var incoming = new Dictionary<(string ExternalId, string VersionId), DriveFileVersionDto>();
+        var incoming = new Dictionary<ActivityKey, DocumentActivity>();
         foreach (var file in files)
         {
+            var versionInstants = new HashSet<DateTime>();
             foreach (var version in file.Versions ?? [])
             {
-                incoming.TryAdd((file.Id, version.VersionId), version);
+                var occurredAt = AsUtc(version.LastModifiedDateTime);
+                versionInstants.Add(occurredAt);
+                incoming.TryAdd(
+                    new ActivityKey(file.Id, version.VersionId, occurredAt),
+                    new DocumentActivity
+                    {
+                        ExternalId = file.Id,
+                        VersionId = version.VersionId,
+                        OccurredAt = occurredAt,
+                        Size = version.Size,
+                        RecordedAt = nowUtc,
+                    });
+            }
+
+            // Próbkę z pliku bierzemy tylko wtedy, gdy klient FAKTYCZNIE odpytał o wersje
+            // (Versions != null) i gdy wnosi moment, którego nie ma żadna wersja. Przy
+            // nieudanym pobraniu historii nie wiemy, czy próbka nie dubluje wersji,
+            // której nie zobaczyliśmy — plik zostaje wtedy na torze fallbackowym.
+            var fileModifiedAt = AsUtc(file.LastModifiedDateTime);
+            if (file.Versions is not null && !versionInstants.Contains(fileModifiedAt))
+            {
+                incoming.TryAdd(
+                    new ActivityKey(file.Id, DocumentActivity.ItemObservationLabel, fileModifiedAt),
+                    new DocumentActivity
+                    {
+                        ExternalId = file.Id,
+                        VersionId = DocumentActivity.ItemObservationLabel,
+                        OccurredAt = fileModifiedAt,
+                        Size = file.Size,
+                        RecordedAt = nowUtc,
+                    });
             }
         }
 
@@ -227,26 +271,22 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         var fileIds = incoming.Keys.Select(key => key.ExternalId).Distinct().ToList();
         var existingKeys = (await db.DocumentActivities
                 .Where(activity => fileIds.Contains(activity.ExternalId))
-                .Select(activity => new { activity.ExternalId, activity.VersionId })
+                .Select(activity => new { activity.ExternalId, activity.VersionId, activity.OccurredAt })
                 .ToListAsync(cancellationToken))
-            .Select(existing => (existing.ExternalId, existing.VersionId))
+            .Select(existing => new ActivityKey(existing.ExternalId, existing.VersionId, AsUtc(existing.OccurredAt)))
             .ToHashSet();
 
         var newActivities = incoming
             .Where(pair => !existingKeys.Contains(pair.Key))
-            .Select(pair => new DocumentActivity
-            {
-                ExternalId = pair.Key.ExternalId,
-                VersionId = pair.Key.VersionId,
-                OccurredAt = AsUtc(pair.Value.LastModifiedDateTime),
-                Size = pair.Value.Size,
-                RecordedAt = nowUtc,
-            })
+            .Select(pair => pair.Value)
             .ToList();
 
         db.DocumentActivities.AddRange(newActivities);
         return newActivities.Count;
     }
+
+    /// <summary>Klucz naturalny faktu w dzienniku — moment jest jego częścią, patrz DocumentActivity.</summary>
+    private readonly record struct ActivityKey(string ExternalId, string VersionId, DateTime OccurredAt);
 
     /// <summary>
     /// lastModifiedDateTime wersji z Graph jest w UTC, ale po deserializacji Kind bywa
@@ -347,7 +387,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 }
 
                 // Licznik rośnie tylko przy faktycznej zmianie — raport nie może kłamać.
-                if (target.Status == SuggestionStatus.Pending && RefreshFromSource(target, candidate))
+                // Sugestii poprawionej ręcznie nie przeliczamy: decyzja prawnika o czasie
+                // jest ważniejsza niż nasze wyliczenie z historii wersji.
+                if (target.Status == SuggestionStatus.Pending
+                    && !target.IsUserAdjusted
+                    && RefreshFromSource(target, candidate))
                 {
                     updatedCount++;
                 }
@@ -453,9 +497,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         var changed = existing.Title != fromSource.Title
             || existing.StartedAt != fromSource.StartedAt
             || existing.SessionAnchor != fromSource.SessionAnchor
+            || existing.LastActivityAt != fromSource.LastActivityAt
             || existing.EntryDate != fromSource.EntryDate
             || existing.DurationMinutes != fromSource.DurationMinutes
             || existing.DetectedGapsJson != fromSource.DetectedGapsJson
+            || existing.NeedsTimeReview != fromSource.NeedsTimeReview
             || existing.CaseId != fromSource.CaseId
             || existing.IsAmbiguous != fromSource.IsAmbiguous
             || existing.ProposedDescription != fromSource.ProposedDescription;
@@ -468,9 +514,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
         existing.Title = fromSource.Title;
         existing.StartedAt = fromSource.StartedAt;
         existing.SessionAnchor = fromSource.SessionAnchor;
+        existing.LastActivityAt = fromSource.LastActivityAt;
         existing.EntryDate = fromSource.EntryDate;
         existing.DurationMinutes = fromSource.DurationMinutes;
         existing.DetectedGapsJson = fromSource.DetectedGapsJson;
+        existing.NeedsTimeReview = fromSource.NeedsTimeReview;
         existing.CaseId = fromSource.CaseId;
         existing.IsAmbiguous = fromSource.IsAmbiguous;
         existing.ProposedDescription = fromSource.ProposedDescription;
@@ -488,9 +536,11 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             && DateOnly.FromDateTime(suggestion.SessionAnchor) == suggestion.EntryDate;
 
     /// <summary>
-    /// Unia historii wersji: fakty już zapisane w dzienniku + fakty z bieżącego payloadu
+    /// Unia historii: fakty już zapisane w dzienniku + fakty z bieżącego payloadu
     /// (jeszcze niezapisane — INSERT dzieje się w pętli zapisu). Dziennik pamięta wersje,
-    /// które OneDrive mógł już wyciąć z historii (retencja), payload niesie najnowsze.
+    /// które OneDrive mógł już wyciąć z historii (retencja), payload niesie najnowsze —
+    /// łącznie z próbką z samego pliku, dzięki której trwająca edycja liczy się już
+    /// w tym przebiegu, a nie dopiero po zapieczętowaniu wersji przez Worda.
     /// </summary>
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<DocumentActivity>>> LoadActivitiesUnionAsync(
         IReadOnlyList<DriveFileDto> files,
@@ -507,21 +557,40 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
                 .AsNoTracking()
                 .Where(activity => fileIds.Contains(activity.ExternalId))
                 .ToListAsync(cancellationToken))
-            .ToDictionary(activity => (activity.ExternalId, activity.VersionId));
+            .ToDictionary(activity =>
+                new ActivityKey(activity.ExternalId, activity.VersionId, AsUtc(activity.OccurredAt)));
 
         foreach (var file in files)
         {
             foreach (var version in file.Versions ?? [])
             {
-                union.TryAdd((file.Id, version.VersionId), new DocumentActivity
+                var occurredAt = AsUtc(version.LastModifiedDateTime);
+                union.TryAdd(new ActivityKey(file.Id, version.VersionId, occurredAt), new DocumentActivity
                 {
                     ExternalId = file.Id,
                     VersionId = version.VersionId,
-                    OccurredAt = AsUtc(version.LastModifiedDateTime),
+                    OccurredAt = occurredAt,
                     Size = version.Size,
                     RecordedAt = nowUtc,
                 });
             }
+
+            if (file.Versions is null)
+            {
+                continue;
+            }
+
+            var fileModifiedAt = AsUtc(file.LastModifiedDateTime);
+            union.TryAdd(
+                new ActivityKey(file.Id, DocumentActivity.ItemObservationLabel, fileModifiedAt),
+                new DocumentActivity
+                {
+                    ExternalId = file.Id,
+                    VersionId = DocumentActivity.ItemObservationLabel,
+                    OccurredAt = fileModifiedAt,
+                    Size = file.Size,
+                    RecordedAt = nowUtc,
+                });
         }
 
         return union.Values
@@ -529,6 +598,52 @@ public class SyncService(AppDbContext db, IOptions<SuggestionOptions> optionsAcc
             .ToDictionary(
                 group => group.Key,
                 group => (IReadOnlyList<DocumentActivity>)group.ToList());
+    }
+
+    /// <summary>
+    /// Przedziały pracy, których nie wolno budować od nowa, per plik. Są dwa powody:
+    /// sugestia została ZATWIERDZONA (praca jest już rozliczona wpisem, a dalsza edycja
+    /// pliku ma dać NOWĄ sugestię, nie ginąć na kluczu dedupu istniejącej), albo prawnik
+    /// POPRAWIŁ ją ręcznie (scalenie sesji, doliczona luka — odtworzenie sesji składowych
+    /// cofnęłoby jego decyzję).
+    ///
+    /// Odrzuconych i zarchiwizowanych tu NIE MA celowo: one nie mówią „to już rozliczone",
+    /// tylko „tej pracy nie rozliczam". Ich lepkość — także wobec zaległej wersji
+    /// przesuwającej kotwicę — załatwia reguła w scalaniu, która nie odtwarza sesji
+    /// obejmującej rozstrzygniętą sugestię.
+    ///
+    /// Bierzemy wyłącznie sugestie sesyjne: kotwica fallbackowa (północ dnia) opisuje
+    /// cały dzień, więc jako przedział wycięłaby z historii wszystko, co tego dnia
+    /// zrobiono.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<SettledRange>>> LoadSettledRangesAsync(
+        IReadOnlyList<DriveFileDto> files,
+        CancellationToken cancellationToken)
+    {
+        var fileIds = files.Select(file => file.Id).Distinct().ToList();
+        if (fileIds.Count == 0)
+        {
+            return new Dictionary<string, IReadOnlyList<SettledRange>>();
+        }
+
+        var settled = await db.Suggestions
+            .AsNoTracking()
+            .Where(suggestion => suggestion.Source == SuggestionSource.Document
+                && (suggestion.Status == SuggestionStatus.Approved
+                    || (suggestion.Status == SuggestionStatus.Pending && suggestion.IsUserAdjusted))
+                && fileIds.Contains(suggestion.ExternalId))
+            .ToListAsync(cancellationToken);
+
+        return settled
+            .Where(suggestion => !IsFallbackAnchor(suggestion))
+            .GroupBy(suggestion => suggestion.ExternalId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<SettledRange>)group
+                    .Select(suggestion => new SettledRange(
+                        AsUtc(suggestion.SessionAnchor),
+                        AsUtc(suggestion.LastActivityAt)))
+                    .ToList());
     }
 
     private static SyncMatchedCounts CountMatches(IReadOnlyList<Suggestion> suggestions) => new(

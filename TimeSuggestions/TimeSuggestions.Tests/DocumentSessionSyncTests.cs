@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TimeSuggestions.Configuration;
@@ -78,9 +78,9 @@ public sealed class DocumentSessionSyncTests : IDisposable
         var suggestions = await db.Suggestions.OrderBy(s => s.SessionAnchor).ToListAsync();
         Assert.Equal(2, suggestions.Count);
         Assert.All(suggestions, s => Assert.Equal("file-1", s.ExternalId));
-        // Czas z sesji (10 i 20 min wersji + 10 min rozbiegu), nie sztywne 30 min.
-        Assert.Equal(20, suggestions[0].DurationMinutes);
-        Assert.Equal(30, suggestions[1].DurationMinutes);
+        // Czas z sesji (10 i 20 min miedzy zapisami), nie sztywne 30 min.
+        Assert.Equal(10, suggestions[0].DurationMinutes);
+        Assert.Equal(20, suggestions[1].DurationMinutes);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed class DocumentSessionSyncTests : IDisposable
         Assert.Equal(1, rerun.Updated);
         var suggestion = await db.Suggestions.SingleAsync();
         Assert.Equal(Now.AddMinutes(-60), suggestion.SessionAnchor);
-        Assert.Equal(30, suggestion.DurationMinutes); // 20 min wersji + 10 rozbiegu
+        Assert.Equal(20, suggestion.DurationMinutes); // 20 min miedzy zapisami
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public sealed class DocumentSessionSyncTests : IDisposable
         var suggestion = await db.Suggestions.SingleAsync();
         Assert.Equal(Now.AddMinutes(-70), suggestion.SessionAnchor);
         Assert.True(suggestion.SessionAnchor < originalAnchor);
-        Assert.Equal(30, suggestion.DurationMinutes);
+        Assert.Equal(20, suggestion.DurationMinutes);
     }
 
     [Fact]
@@ -141,14 +141,14 @@ public sealed class DocumentSessionSyncTests : IDisposable
         var suggestion = await db.Suggestions.SingleAsync();
         Assert.Equal(Now.AddMinutes(-80), suggestion.SessionAnchor);
         // 50 min wersji + 10 rozbiegu; dwie wykryte przerwy po 25 min.
-        Assert.Equal(60, suggestion.DurationMinutes);
+        Assert.Equal(50, suggestion.DurationMinutes);
         Assert.Equal(2, DetectedGaps.Deserialize(suggestion.DetectedGapsJson).Count);
     }
 
     [Fact]
     public async Task Sync_SugestiaFallbackowaJestPrzejmowanaGdyPlikZyskaHistorie()
     {
-        // Pierwszy sync bez wersji (np. błąd Graph) → sugestia fallbackowa 30 min.
+        // Pierwszy sync bez wersji (np. błąd Graph) → sugestia fallbackowa: samo minimum.
         var withoutVersions = new SyncRequest
         {
             DriveFiles =
@@ -164,7 +164,8 @@ public sealed class DocumentSessionSyncTests : IDisposable
         };
         await syncService.SyncAsync(withoutVersions, Now, CancellationToken.None);
         var fallback = await db.Suggestions.SingleAsync();
-        Assert.Equal(30, fallback.DurationMinutes);
+        Assert.Equal(new SuggestionOptions().MinimumSessionMinutes, fallback.DurationMinutes);
+        Assert.True(fallback.NeedsTimeReview);
 
         // Drugi sync z historią: sugestia sesyjna przejmuje fallbackową w miejscu
         // (bez duplikatu), kotwica przechodzi na czas pierwszej wersji.
@@ -175,7 +176,7 @@ public sealed class DocumentSessionSyncTests : IDisposable
         Assert.Equal(1, rerun.Updated);
         var suggestion = await db.Suggestions.SingleAsync();
         Assert.Equal(Now.AddMinutes(-60), suggestion.SessionAnchor);
-        Assert.Equal(30, suggestion.DurationMinutes); // 20 min wersji + 10 rozbiegu
+        Assert.Equal(20, suggestion.DurationMinutes); // 20 min miedzy zapisami
         Assert.Single(DetectedGaps.Deserialize(suggestion.DetectedGapsJson)); // luka 20 min
     }
 
@@ -199,6 +200,61 @@ public sealed class DocumentSessionSyncTests : IDisposable
         Assert.Equal(SuggestionStatus.Rejected, survivor.Status);
     }
 
+    /// <summary>
+    /// Po zatwierdzeniu sugestii praca nad tym samym plikiem trwa dalej.    /// <summary>
+    /// Po zatwierdzeniu sugestii praca nad tym samym plikiem trwa dalej. Zatwierdzony
+    /// przedział jest rozliczony wpisem, więc kolejne zapisy muszą dać NOWĄ sugestię —
+    /// wcześniej ginęły, bo sesja odtwarzała się pod kotwicą zajętą przez zatwierdzoną
+    /// sugestię i merge ją pomijał.
+    /// </summary>
+    [Fact]
+    public async Task Sync_DalszaEdycjaPoZatwierdzeniuTworzyNowaSugestie()
+    {
+        await syncService.SyncAsync(
+            RequestWithVersions(Now.AddMinutes(-120), Now.AddMinutes(-110)), Now, CancellationToken.None);
+
+        var approved = await db.Suggestions.SingleAsync();
+        approved.Status = SuggestionStatus.Approved;
+        await db.SaveChangesAsync();
+
+        // Praca wraca po godzinie — nowa sesja, poza zasięgiem zatwierdzonej.
+        var rerun = await syncService.SyncAsync(
+            RequestWithVersions(
+                Now.AddMinutes(-120), Now.AddMinutes(-110), Now.AddMinutes(-40), Now.AddMinutes(-30)),
+            Now,
+            CancellationToken.None);
+
+        Assert.Equal(1, rerun.Created);
+        var fresh = await db.Suggestions.SingleAsync(suggestion => suggestion.Status == SuggestionStatus.Pending);
+        Assert.Equal(Now.AddMinutes(-40), fresh.SessionAnchor);
+        Assert.Equal(Now.AddMinutes(-30), fresh.LastActivityAt);
+        // Zatwierdzona zostaje nietknięta — czasu rozliczonego nie przeliczamy.
+        Assert.Equal(10, (await db.Suggestions.SingleAsync(s => s.Status == SuggestionStatus.Approved)).DurationMinutes);
+    }
+
+    /// <summary>
+    /// Ręczna poprawka czasu (scalenie, doliczona luka) zamraża sugestię: sync nie
+    /// przelicza jej z historii wersji i nie odtwarza sesji z jej zasięgu.
+    /// </summary>
+    [Fact]
+    public async Task Sync_NiePrzeliczaSugestiiPoprawionejRecznie()
+    {
+        await syncService.SyncAsync(
+            RequestWithVersions(Now.AddMinutes(-60), Now.AddMinutes(-50)), Now, CancellationToken.None);
+
+        var suggestion = await db.Suggestions.SingleAsync();
+        suggestion.DurationMinutes = 90;
+        suggestion.IsUserAdjusted = true;
+        await db.SaveChangesAsync();
+
+        var rerun = await syncService.SyncAsync(
+            RequestWithVersions(Now.AddMinutes(-60), Now.AddMinutes(-50)), Now, CancellationToken.None);
+
+        Assert.Equal(0, rerun.Created);
+        Assert.Equal(0, rerun.Updated);
+        Assert.Equal(90, (await db.Suggestions.SingleAsync()).DurationMinutes);
+    }
+
     [Fact]
     public async Task Sync_DziennikPamietaWersjeWycieteZRetencjiOneDrive()
     {
@@ -214,6 +270,6 @@ public sealed class DocumentSessionSyncTests : IDisposable
         Assert.Equal(0, rerun.Created);
         var suggestion = await db.Suggestions.SingleAsync();
         Assert.Equal(Now.AddMinutes(-60), suggestion.SessionAnchor);
-        Assert.Equal(30, suggestion.DurationMinutes); // pełna sesja 20 min wersji + rozbieg
+        Assert.Equal(20, suggestion.DurationMinutes); // pelna sesja: 20 min miedzy zapisami
     }
 }

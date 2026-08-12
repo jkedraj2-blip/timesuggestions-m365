@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TimeSuggestions.Configuration;
@@ -9,9 +9,9 @@ using TimeSuggestions.Services;
 namespace TimeSuggestions.Tests;
 
 /// <summary>
-/// Append-only dziennik historii wersji (DocumentActivity) na bazie SQLite in-memory —
-/// dedup faktów opiera się na indeksie unikalnym (ExternalId, VersionId), więc testy
-/// muszą przejść przez prawdziwy zapis, nie przez atrapę kontekstu.
+/// Append-only dziennik historii (DocumentActivity) na bazie SQLite in-memory —
+/// dedup faktów opiera się na indeksie unikalnym (ExternalId, VersionId, OccurredAt),
+/// więc testy muszą przejść przez prawdziwy zapis, nie przez atrapę kontekstu.
 /// </summary>
 public sealed class DocumentActivityTests : IDisposable
 {
@@ -40,13 +40,21 @@ public sealed class DocumentActivityTests : IDisposable
         connection.Dispose();
     }
 
+    /// <summary>
+    /// Domyślnie znacznik pliku pokrywa się z najnowszą wersją — tak wygląda plik,
+    /// nad którym nikt akurat nie pracuje. Testy próbkowania podają go jawnie
+    /// (modifiedAt), bo to właśnie ROZJAZD obu wartości oznacza trwającą edycję.
+    /// </summary>
     private static DriveFileDto CreateFile(
         string id = "file-1",
-        List<DriveFileVersionDto>? versions = null) => new()
+        List<DriveFileVersionDto>? versions = null,
+        DateTime? modifiedAt = null) => new()
     {
         Id = id,
         Name = "Umowa_NovaTech.docx",
-        LastModifiedDateTime = Now.AddHours(-2),
+        LastModifiedDateTime = modifiedAt
+            ?? versions?.Max(version => version.LastModifiedDateTime)
+            ?? Now.AddHours(-2),
         LastModifiedByMe = true,
         Versions = versions,
     };
@@ -151,7 +159,7 @@ public sealed class DocumentActivityTests : IDisposable
         var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
 
         var suggestion = await db.Suggestions.SingleAsync();
-        Assert.Equal(new SuggestionOptions().DefaultDocumentDurationMinutes, suggestion.DurationMinutes);
+        Assert.Equal(new SuggestionOptions().MinimumSessionMinutes, suggestion.DurationMinutes);
         Assert.Equal(0, await db.DocumentActivities.CountAsync());
         Assert.Equal(0, report.Versions.FilesWithHistory);
         Assert.Equal(1, report.Versions.FilesWithoutHistory);

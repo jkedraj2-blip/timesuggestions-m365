@@ -249,6 +249,34 @@ public sealed class CalendarReconciliationTests : IDisposable
         Assert.Equal("event-old", survivor.ExternalId);
     }
 
+    /// <summary>
+    /// Frontend pobiera z Graph z zapasem ponad okno rozliczenia — przy kalendarzu jest
+    /// to ponad dwie doby spotkań, bo okno backendu zaczyna się od POCZĄTKU doby lokalnej,
+    /// a pobieranie liczy się w godzinach od „teraz". Ten zapas nie może meldować się
+    /// przy każdej synchronizacji jako „Pominięto N pozycji": nie jest ani pominiętą
+    /// pracą, ani pobranym kandydatem. Raport ma o nim milczeć i nadal się sumować.
+    /// </summary>
+    [Fact]
+    public async Task SyncAsync_ZapasPobieraniaPonadOknoNieJestRaportowany()
+    {
+        var request = CalendarRequest(
+            CreateEvent("event-w-oknie", daysAgo: 2),
+            CreateEvent("event-zapas-1", daysAgo: 8),
+            CreateEvent("event-zapas-2", daysAgo: 8),
+            CreateEvent("event-zapas-3", daysAgo: 9));
+
+        var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(1, report.Created);
+        Assert.Equal(0, report.FilteredOut.Total);
+        // Pobrano liczy kandydatów z okna, nie wszystko, co przyszło w payloadzie.
+        Assert.Equal(1, report.Fetched.CalendarEvents);
+        Assert.Equal(
+            report.Fetched.CalendarEvents + report.Fetched.DriveFiles,
+            report.Created + report.Updated + report.SkippedExisting
+                + report.FilteredOut.Total + report.Aggregated + report.Deduplicated);
+    }
+
     [Fact]
     public async Task SyncAsync_NadpisanieOknaZZadaniaPoszerzaZakres()
     {
@@ -258,7 +286,10 @@ public sealed class CalendarReconciliationTests : IDisposable
         var defaultWindowReport = await syncService.SyncAsync(
             CalendarRequest(oldEvent), Now, CancellationToken.None);
         Assert.Equal(0, defaultWindowReport.Created);
-        Assert.Equal(1, defaultWindowReport.FilteredOut.OutsideWindow);
+        // Spotkanie spoza okna nie jest ani odfiltrowane, ani pobrane: okno to zakres
+        // rozliczenia, a nie powód odrzucenia pracy. Raport ma o nim milczeć.
+        Assert.Equal(0, defaultWindowReport.FilteredOut.Total);
+        Assert.Equal(0, defaultWindowReport.Fetched.CalendarEvents);
         Assert.Equal(7, defaultWindowReport.WindowDays);
 
         var request = CalendarRequest(oldEvent);

@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TimeSuggestions.Configuration;
@@ -132,12 +132,15 @@ public sealed class SyncDeduplicationTests : IDisposable
         Assert.Equal(1, rerun.SkippedExisting);
     }
 
+    /// <summary>
+    /// Plik bez historii wersji nie dostaje wymyslonego czasu: minimum sesji
+    /// i jawne "czas do uzupelnienia" zamiast dawnych 30 minut z konfiguracji.
+    /// </summary>
     [Fact]
-    public async Task SyncAsync_UzywaCzasuDokumentuZZadaniaZamiastKonfiguracji()
+    public async Task SyncAsync_PlikBezHistoriiDostajeMinimumIProsbeOUzupelnienieCzasu()
     {
         var request = new SyncRequest
         {
-            DefaultDocumentDurationMinutes = 90,
             DriveFiles =
             [
                 new DriveFileDto { Id = "file-1", Name = "Umowa_NovaTech.docx", LastModifiedDateTime = Now.AddDays(-1), LastModifiedByMe = true },
@@ -146,19 +149,9 @@ public sealed class SyncDeduplicationTests : IDisposable
 
         await syncService.SyncAsync(request, Now, CancellationToken.None);
 
-        Assert.Equal(90, (await db.Suggestions.SingleAsync()).DurationMinutes);
-    }
-
-    [Fact]
-    public void SyncRequest_OdrzucaCzasDokumentuPozaZakresem()
-    {
-        var request = new SyncRequest { DefaultDocumentDurationMinutes = 0 };
-
-        var validationResults = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
-        var isValid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
-            request, new System.ComponentModel.DataAnnotations.ValidationContext(request), validationResults, validateAllProperties: true);
-
-        Assert.False(isValid);
+        var suggestion = await db.Suggestions.SingleAsync();
+        Assert.Equal(new SuggestionOptions().MinimumSessionMinutes, suggestion.DurationMinutes);
+        Assert.True(suggestion.NeedsTimeReview);
     }
 
     [Fact]
@@ -262,7 +255,6 @@ public sealed class SyncDeduplicationTests : IDisposable
             {
                 Private = 2,
                 Cancelled = 1,
-                DocumentsOutsideWindow = 3,
                 DocumentsNotOfficeDocument = 4,
             },
         };
@@ -271,12 +263,11 @@ public sealed class SyncDeduplicationTests : IDisposable
 
         Assert.Equal(2, report.FilteredOut.Private);
         Assert.Equal(1, report.FilteredOut.Cancelled);
-        Assert.Equal(3, report.FilteredOut.OutsideWindow);
         Assert.Equal(4, report.FilteredOut.NotOfficeDocument);
-        Assert.Equal(10, report.FilteredOut.Total);
+        Assert.Equal(7, report.FilteredOut.Total);
         // Pozycje odfiltrowane w przeglądarce liczą się też jako pobrane (per źródło).
         Assert.Equal(3, report.Fetched.CalendarEvents);
-        Assert.Equal(7, report.Fetched.DriveFiles);
+        Assert.Equal(4, report.Fetched.DriveFiles);
         AssertReportSumInvariant(report);
     }
 
@@ -320,9 +311,10 @@ public sealed class SyncDeduplicationTests : IDisposable
     [Fact]
     public async Task SyncAsync_PobranoObejmujePlikiOdfiltrowaneWPrzegladarce()
     {
-        // Pliki analogicznie: 1 prawidłowy w payloadzie + 2 odfiltrowane w przeglądarce
-        // = pobrano 3. Tombstone to sygnał usunięcia, nie pobrany plik — nie liczy się
-        // ani do pobranych, ani do odfiltrowanych.
+        // Pliki analogicznie: 1 prawidłowy w payloadzie + 1 odfiltrowany w przeglądarce
+        // = pobrano 2. Tombstone to sygnał usunięcia, nie pobrany plik — nie liczy się
+        // ani do pobranych, ani do odfiltrowanych. Pliki spoza okna rozliczenia nie są
+        // w ogóle raportowane: to reszta dysku, a nie praca, którą coś pominęło.
         await syncService.SyncAsync(new SyncRequest
         {
             DriveFiles =
@@ -340,15 +332,14 @@ public sealed class SyncDeduplicationTests : IDisposable
             DeletedDriveFileIds = ["file-old"],
             ClientFilteredCounts = new ClientFilteredCounts
             {
-                DocumentsOutsideWindow = 1,
                 DocumentsNotOfficeDocument = 1,
             },
         };
 
         var report = await syncService.SyncAsync(request, Now, CancellationToken.None);
 
-        Assert.Equal(3, report.Fetched.DriveFiles);
-        Assert.Equal(2, report.FilteredOut.Total);
+        Assert.Equal(2, report.Fetched.DriveFiles);
+        Assert.Equal(1, report.FilteredOut.Total);
         Assert.Equal(1, report.Created);
         Assert.Equal(1, report.Removed); // tombstone usunął oczekującą sugestię
         AssertReportSumInvariant(report);

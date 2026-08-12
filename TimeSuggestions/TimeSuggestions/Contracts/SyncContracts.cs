@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace TimeSuggestions.Contracts;
 
@@ -56,14 +56,6 @@ public class SyncRequest : IValidatableObject
     [Range(1, Configuration.SuggestionOptions.MaxSyncDaysBack,
         ErrorMessage = "Okno synchronizacji musi mieścić się w zakresie 1–90 dni.")]
     public int? SyncDaysBack { get; set; }
-
-    /// <summary>
-    /// Opcjonalne nadpisanie domyślnego czasu dokumentu (preferencja użytkownika).
-    /// Brak wartości = obowiązuje konfiguracja backendu (appsettings.json).
-    /// </summary>
-    [Range(1, Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
-        ErrorMessage = "Domyślny czas dokumentu musi mieścić się w zakresie 1–480 minut.")]
-    public int? DefaultDocumentDurationMinutes { get; set; }
 
     /// <summary>
     /// Ile pobrań historii wersji nie powiodło się po stronie klienta (per plik).
@@ -157,10 +149,19 @@ public class DriveFileDto
     public bool LastModifiedByMe { get; set; }
 
     /// <summary>
+    /// Rozmiar pliku w bajtach — trafia do dziennika razem z próbką z elementu
+    /// (DocumentActivity.ItemObservationLabel) jako pomocniczy sygnał skali zmiany.
+    /// Starszy klient nie przysyła nic; zero jest wtedy poprawną wartością „nie wiem".
+    /// </summary>
+    [Range(0, long.MaxValue, ErrorMessage = "Rozmiar pliku nie może być ujemny.")]
+    public long Size { get; set; }
+
+    /// <summary>
     /// Historia wersji pliku (GET /me/drive/items/{id}/versions) pobrana przez frontend.
     /// null = wersje niepobrane (starszy klient albo błąd Graph dla tego pliku) —
-    /// backend zachowuje wtedy dotychczasowy fallback z domyślnym czasem dokumentu.
-    /// Pusta lista to co innego niż null: Graph odpowiedział, ale bez historii.
+    /// backend buduje wtedy sugestię fallbackową z minimum czasu i oznaczeniem
+    /// „czas do uzupełnienia". Pusta lista to co innego niż null: Graph odpowiedział,
+    /// ale bez historii.
     /// </summary>
     public List<DriveFileVersionDto>? Versions { get; set; }
 }
@@ -196,15 +197,30 @@ public class ClientFilteredCounts
     public int Cancelled { get; set; }
 
     [Range(0, MaxCount, ErrorMessage = RangeMessage)]
-    public int DocumentsOutsideWindow { get; set; }
-
-    [Range(0, MaxCount, ErrorMessage = RangeMessage)]
     public int DocumentsNotOfficeDocument { get; set; }
 }
 
+/// <summary>
+/// Ile pozycji weszło do rozliczenia jako kandydaci — pobrane z Graph MINUS te spoza
+/// okna rozliczenia. Zapas pobierany ponad okno (patrz SyncFilteredOutCounts) nie jest
+/// ani pobrany w tym sensie, ani pominięty; dzięki temu nadal zachodzi niezmiennik
+/// raportu: pobrano = utworzone + zaktualizowane + pominięte (już istniały)
+/// + odfiltrowane + zagregowane + zdeduplikowane.
+/// </summary>
 public record SyncFetchedCounts(int CalendarEvents, int DriveFiles);
 
-/// <summary>Liczniki odrzuceń per reguła — UI tłumaczy użytkownikowi, czemu pozycje odpadły.</summary>
+/// <summary>
+/// Liczniki odrzuceń per reguła — UI tłumaczy użytkownikowi, czemu pozycje odpadły.
+///
+/// Pozycji spoza okna rozliczenia NIE MA tu w ogóle — ani spotkań, ani dokumentów.
+/// Okno jest zakresem rozliczenia, a nie regułą odrzucającą pracę: poza nim leży cała
+/// reszta kalendarza i cała reszta dysku. Frontend pobiera z Graph z zapasem (doba
+/// ponad okno przy dokumentach, a przy kalendarzu — bo okno backendu liczy się od
+/// POCZĄTKU doby lokalnej — ponad dwie doby spotkań), więc licznik meldował przy każdej
+/// synchronizacji ten sam, stały zapas jako „pominięte pozycje". Zamiast tego pozycje
+/// spoza okna nie liczą się także jako pobrane (patrz SyncFetchedCounts) — nigdy nie
+/// były kandydatami, więc nie ma czego pomijać.
+/// </summary>
 public record SyncFilteredOutCounts(
     int Private,
     int TooShort,
@@ -212,11 +228,10 @@ public record SyncFilteredOutCounts(
     int Cancelled,
     int InvalidDates,
     int NotOfficeDocument,
-    int OutsideWindow,
     int NotModifiedByUser)
 {
     public int Total => Private + TooShort + AllDay + Cancelled + InvalidDates
-        + NotOfficeDocument + OutsideWindow + NotModifiedByUser;
+        + NotOfficeDocument + NotModifiedByUser;
 }
 
 /// <summary>Wyniki dopasowania nowo utworzonych sugestii do spraw.</summary>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertTrustedGraphUrl, fetchGraphPage } from './graph-http';
+import { assertTrustedGraphUrl, fetchGraphBinary, fetchGraphPage } from './graph-http';
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -158,5 +158,80 @@ describe('fetchGraphPage', () => {
     const expectation = expect(pending).rejects.toThrow('limit czasu');
     await vi.advanceTimersByTimeAsync(30_000);
     await expectation;
+  });
+});
+
+describe('fetchGraphBinary', () => {
+  const contentUrl = 'https://graph.microsoft.com/v1.0/me/drive/items/1/content';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('zwraca bajty odpowiedzi', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]))));
+
+    const result = await fetchGraphBinary(contentUrl, () => Promise.resolve('token'));
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && Array.from(result.bytes)).toEqual([1, 2, 3]);
+  });
+
+  it('czyta kod błędu z ciała odpowiedzi — sam status nie mówi, co Graph odrzucił', async () => {
+    const body = JSON.stringify({ error: { code: 'invalidRequest', message: 'Bad version id' } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 400 })));
+
+    const result = await fetchGraphBinary(contentUrl, () => Promise.resolve('token'));
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.status).toBe(400);
+    expect(result.ok === false && result.errorCode).toBe('invalidRequest');
+  });
+
+  it('ciało bez JSON-a to brak kodu, nie wyjątek', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>', { status: 500 })));
+
+    const result = await fetchGraphBinary(contentUrl, () => Promise.resolve('token'));
+
+    expect(result.ok === false && result.errorCode).toBeNull();
+  });
+
+  it('ponawia po 429 zamiast padać na pierwszym throttlingu', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '2' } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7])));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = fetchGraphBinary(contentUrl, () => Promise.resolve('token'));
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('anulowanie przez użytkownika kończy się rozpoznawalnym błędem, bez żądania', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      fetchGraphBinary(contentUrl, () => Promise.resolve('token'), controller.signal),
+    ).rejects.toThrow('anulowane');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('nie wykonuje żądania pod niezaufany adres', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      fetchGraphBinary('https://evil.example.com/content', () => Promise.resolve('token')),
+    ).rejects.toThrow('graph.microsoft.com');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

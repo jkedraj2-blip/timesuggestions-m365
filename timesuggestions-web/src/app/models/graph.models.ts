@@ -31,6 +31,7 @@ export interface GraphDriveItem {
   file?: { mimeType: string };
   deleted?: { state?: string };
   lastModifiedDateTime?: string;
+  size?: number;
   lastModifiedBy?: {
     user?: { displayName?: string; email?: string; id?: string };
   };

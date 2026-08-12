@@ -65,8 +65,11 @@ describe('GraphFilesService', () => {
 
     expect(result.files.map((file) => file.id)).toEqual(['file-ok']);
     expect(result.deletedDriveFileIds).toEqual(['file-deleted']);
-    expect(result.documentsOutsideWindow).toBe(1);
+    // Stary plik po prostu nie jest kandydatem — poza oknem leży cały dysk, więc
+    // meldowanie go jako "pominięty" opisywało zasięg delty, nie pracę użytkownika.
     expect(result.documentsNotOfficeDocument).toBe(1);
+    // Nazwa trafia do raportu w przeglądarce — sam licznik nie mówi, co zostało pominięte.
+    expect(result.notOfficeDocumentNames).toHaveLength(1);
   });
 
   it('dla powtórzonego id obowiązuje ostatnie wystąpienie w feedzie (semantyka delta)', async () => {

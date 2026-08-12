@@ -7,6 +7,15 @@ import { assertTrustedGraphUrl, fetchGraphPage, GraphPageResult } from './graph-
 
 const ALLOWED_EXTENSIONS = ['.docx', '.doc', '.xlsx', '.xls'];
 
+/**
+ * Ile nazw pominiętych plików pokazać w raporcie. Sam licznik („pominięto 1 pozycję")
+ * wygląda jak magia, bo delta OneDrive melduje KAŻDĄ zmianę na dysku, także w plikach,
+ * których użytkownik nigdy nie otwierał w tej aplikacji — bez nazwy nie da się
+ * sprawdzić, czy to zdjęcie z kopii zapasowej, czy zgubiony dokument. Nazwy zostają
+ * w przeglądarce: backend ich nie potrzebuje i celowo nie dostaje.
+ */
+const NOT_OFFICE_NAMES_IN_REPORT = 5;
+
 /** Graph zwraca 410 Gone, gdy zapamiętany deltaLink wygasł — trzeba zacząć pełny przebieg od nowa. */
 const HTTP_GONE = 410;
 
@@ -16,8 +25,9 @@ export interface DriveDeltaResult {
   /** Identyfikatory usuniętych plików (facet `deleted`) — backend czyści ich oczekujące sugestie. */
   deletedDriveFileIds: string[];
   /** Odrzucenia po stronie klienta — raport syncu ma pokazywać prawdę, nie zera. */
-  documentsOutsideWindow: number;
   documentsNotOfficeDocument: number;
+  /** Nazwy kilku pierwszych pominiętych plików — wyłącznie do raportu w przeglądarce. */
+  notOfficeDocumentNames: string[];
   /** Ile pobrań historii wersji padło (per plik) — plik zostaje w payloadzie z versions=null. */
   versionFetchErrors: number;
 }
@@ -68,8 +78,8 @@ export class GraphFilesService {
 
     const files: DriveFilePayload[] = [];
     const deletedDriveFileIds: string[] = [];
-    let documentsOutsideWindow = 0;
     let documentsNotOfficeDocument = 0;
+    const notOfficeDocumentNames: string[] = [];
 
     for (const item of latestById.values()) {
       if (item.deleted) {
@@ -83,10 +93,17 @@ export class GraphFilesService {
       const name = item.name ?? '';
       if (!ALLOWED_EXTENSIONS.some((extension) => name.toLowerCase().endsWith(extension))) {
         documentsNotOfficeDocument++;
+        if (notOfficeDocumentNames.length < NOT_OFFICE_NAMES_IN_REPORT) {
+          notOfficeDocumentNames.push(name);
+        }
         continue;
       }
+      // Plik spoza okna po prostu nie jest kandydatem — i NIE trafia do raportu jako
+      // „pominięty". Delta melduje element przy każdej zmianie jego metadanych, a po
+      // wygaśnięciu deltaLinku przechodzi cały dysk od nowa: licznik pokazywał wtedy
+      // kilkanaście „pominiętych" dokumentów, które dawno są w sugestiach albo we
+      // wpisach. Mierzył zasięg przebiegu delty, nie pracę użytkownika.
       if (!item.lastModifiedDateTime || new Date(item.lastModifiedDateTime) < since) {
-        documentsOutsideWindow++;
         continue;
       }
       files.push(this.toPayload(item, name, item.lastModifiedDateTime));
@@ -100,8 +117,8 @@ export class GraphFilesService {
     return {
       files,
       deletedDriveFileIds,
-      documentsOutsideWindow,
       documentsNotOfficeDocument,
+      notOfficeDocumentNames,
       versionFetchErrors,
     };
   }
@@ -183,7 +200,7 @@ export class GraphFilesService {
 
   /** Delta stronicuje wyniki — podążamy za @odata.nextLink aż do końca, raportując postęp do UI. */
   private async fetchChangedDriveItems(onPage?: (page: number) => void): Promise<GraphDriveItem[]> {
-    const select = '$select=id,name,file,deleted,lastModifiedDateTime,lastModifiedBy';
+    const select = '$select=id,name,file,deleted,lastModifiedDateTime,lastModifiedBy,size';
     const fullCrawlUrl = `${GRAPH_BASE_URL}/me/drive/root/delta?${select}`;
 
     // Zapisany deltaLink to dane z localStorage — mógł zostać podmieniony.
@@ -196,7 +213,7 @@ export class GraphFilesService {
       } catch {
         localStorage.removeItem(this.deltaLinkStorageKey());
         throw new Error(
-          'Zapisany wskaźnik synchronizacji OneDrive był nieprawidłowy i został wyczyszczony — spróbuj ponownie.',
+          'Zapisany wskaźnik synchronizacji OneDrive był nieprawidłowy i został wyczyszczony. Spróbuj ponownie.',
         );
       }
     }
@@ -254,6 +271,9 @@ export class GraphFilesService {
       id: item.id,
       name,
       lastModifiedDateTime,
+      // Rozmiar leci razem ze znacznikiem modyfikacji pliku: backend zapisuje z nich
+      // próbkę aktywności dla pracy, której Word jeszcze nie zamknął w nowej wersji.
+      size: item.size ?? 0,
       lastModifiedByMe: this.isModifiedByCurrentUser(item),
     };
   }

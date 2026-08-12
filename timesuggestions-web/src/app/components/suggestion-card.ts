@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { formatCaseMeta } from '../services/case-label';
+import { toUserMessage } from '../services/user-message';
 import {
   ApprovePayload,
   CaseInfo,
@@ -755,7 +756,8 @@ export class SuggestionCard {
     try {
       await action();
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Nieznany błąd.');
+      // Ten sam kształt komunikatu co w całej aplikacji (fallback + treść błędu).
+      this.error.set(toUserMessage(error, 'Operacja nie powiodła się.'));
     } finally {
       this.busy.set(false);
     }

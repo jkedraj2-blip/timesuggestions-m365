@@ -39,6 +39,7 @@ function createEntry(overrides: Partial<TimeEntry> = {}): TimeEntry {
     roundedDurationMinutes: 60,
     roundingMinutes: 0,
     notice: null,
+    adjustmentCount: 0,
     ...overrides,
   };
 }

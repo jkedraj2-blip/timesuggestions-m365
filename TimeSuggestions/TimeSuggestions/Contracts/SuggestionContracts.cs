@@ -424,7 +424,11 @@ public record TimeEntryDto(
     int RoundingMinutes = 0,
     // Zdanie o tym, co stało się z godzinami wpisu przy zatwierdzaniu (przycięcie do
     // sąsiada, pozostałe pokrycie). Wypełniane tylko w odpowiedzi na zatwierdzenie.
-    string? Notice = null)
+    string? Notice = null,
+    // Liczba korekt w dzienniku wpisu. Rozdzielenie scalonego wpisu kasuje jego korekty
+    // (dotyczyły bytu, który przestaje istnieć), więc potwierdzenie przycisku „Rozdziel"
+    // mówi, ile ich przepadnie — do tego UI potrzebuje liczby z góry.
+    int AdjustmentCount = 0)
 {
     /// <summary>
     /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
@@ -466,6 +470,7 @@ public record TimeEntryDto(
             entry.Adjustments
                 .Where(adjustment => adjustment.Kind == AdjustmentKind.Rounding)
                 .Sum(adjustment => adjustment.Minutes),
-            notice);
+            notice,
+            entry.Adjustments.Count);
     }
 }

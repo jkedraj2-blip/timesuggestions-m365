@@ -397,9 +397,15 @@ export function gapButtonLabel(gap: DetectedGap): string {
                           {{ settleEntryLabel(entry) }}
                         </button>
                         @if (entry.suggestionIds.length > 1) {
-                          <button class="btn btn-compact" (click)="unmerge(entry)"
-                            [disabled]="busyId() === entry.id">
-                            Rozdziel
+                          <!-- Rozdzielenie kasuje dziennik korekt scalonego wpisu (dotyczyły
+                               bytu, który przestaje istnieć) — stąd dwustopniowe potwierdzenie
+                               jak przy rozliczaniu, z liczbą korekt do przepadnięcia. -->
+                          <button class="btn btn-compact"
+                            [class.btn-danger]="confirm.isArmed('unmerge:' + entry.id)"
+                            (click)="unmerge(entry, $event)"
+                            [disabled]="busyId() === entry.id"
+                            [title]="unmergeHint(entry)">
+                            {{ unmergeLabel(entry) }}
                           </button>
                         }
                         <button class="btn btn-danger btn-compact" (click)="undoApproval(entry)"
@@ -685,10 +691,39 @@ export class TimeEntriesPage implements OnInit {
     }
   }
 
-  protected async unmerge(entry: TimeEntry): Promise<void> {
+  /** Etykieta „Rozdziel": uzbrojony przycisk mówi, ile korekt przepadnie. */
+  protected unmergeLabel(entry: TimeEntry): string {
+    if (!this.confirm.isArmed(`unmerge:${entry.id}`)) {
+      return 'Rozdziel';
+    }
+    const count = entry.adjustmentCount;
+    return count > 0
+      ? `Na pewno? Przepadnie ${count} ${polishPlural(count, 'korekta', 'korekty', 'korekt')}`
+      : 'Na pewno? Rozdzielisz wpis na sesje';
+  }
+
+  protected unmergeHint(entry: TimeEntry): string {
+    const count = entry.adjustmentCount;
+    const lost = count > 0
+      ? ` Dziennik korekt tego wpisu (${count} ${polishPlural(count, 'pozycja', 'pozycje', 'pozycji')})`
+        + ' przepadnie — korekty dotyczyły scalonego wpisu, który przestanie istnieć.'
+      : '';
+    return `Rozdzieli wpis z powrotem na wpisy z sesji, z których powstał.${lost}`;
+  }
+
+  /** Rozdzielenie scalonego wpisu — dwustopniowe, bo kasuje dziennik korekt. */
+  protected async unmerge(entry: TimeEntry, event: Event): Promise<void> {
+    // Klik nie może dolecieć do document — rozbroiłby potwierdzenie, które właśnie uzbrajamy.
+    event.stopPropagation();
+    if (!this.confirm.confirm(`unmerge:${entry.id}`)) {
+      return;
+    }
+
     await this.runEntryOperation(entry, async () => {
       const restored = await this.api.unmergeTimeEntry(entry.id);
-      this.toasts.show(`Rozdzielono na ${restored.length} wpisy z sesji.`);
+      this.toasts.show(
+        `Rozdzielono na ${restored.length} ${polishPlural(restored.length, 'wpis', 'wpisy', 'wpisów')} z sesji.`,
+      );
     }, 'Nie udało się rozdzielić wpisu.');
   }
 

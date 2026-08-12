@@ -195,6 +195,12 @@ export interface TimeEntry {
    * sąsiada, pozostałe pokrycie). Wypełniane tylko w odpowiedzi na zatwierdzenie.
    */
   notice: string | null;
+  /**
+   * Liczba korekt w dzienniku wpisu. Rozdzielenie scalonego wpisu kasuje jego korekty
+   * (dotyczyły bytu, który przestaje istnieć) — potwierdzenie „Rozdziel" mówi,
+   * ile ich przepadnie.
+   */
+  adjustmentCount: number;
 }
 
 /** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */

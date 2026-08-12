@@ -44,6 +44,9 @@ public class ApprovalService(AppDbContext db, IOptions<SuggestionOptions> option
     private readonly TimeZoneInfo businessTimeZone =
         TimeZoneInfo.FindSystemTimeZoneById(optionsAccessor.Value.BusinessTimeZoneId);
 
+    /// <summary>Sąsiad na osi dnia: wpis albo oczekująca sugestia; Label w narzędniku do zdania Notice.</summary>
+    private sealed record NeighborItem(DateTime StartedAt, DateTime EndedAt, string Label);
+
     public async Task<ApprovalResult> ApproveAsync(
         int suggestionId,
         ApproveSuggestionRequest request,
@@ -81,13 +84,42 @@ public class ApprovalService(AppDbContext db, IOptions<SuggestionOptions> option
         // W rozliczaniu czasu odmowa jest najgorszym możliwym wyjściem — zostawia pracę,
         // której nie da się rozliczyć. Przycięcie nie rusza rozliczanych minut (zasięg to
         // teren, czas to rachunek) i jest nazwane w komunikacie.
+        // W niezmienniku uczestniczą wpisy KAŻDEGO źródła oraz OCZEKUJĄCE sugestie
+        // (rezerwacje minut do rozstrzygnięcia) — dokładnie ten sam zbiór sąsiadów,
+        // który ładują serwisy operacji (LoadDayItemsAsync). Zatwierdzenie widzące
+        // wyłącznie wpisy nakrywało oczekującą sugestię bez przycięcia i bez Notice,
+        // a ona dostawała później odmowę „Scalenie blokuje pozycja: wpis …" za blokadę,
+        // o której nikt nie uprzedził.
         var neighborFrom = suggestion.EntryDate.AddDays(-1);
         var neighborTo = suggestion.EntryDate.AddDays(1);
-        var neighbors = await db.TimeEntries
+        var entryNeighbors = await db.TimeEntries
             .AsNoTracking()
             .Where(entry => entry.EntryDate >= neighborFrom && entry.EntryDate <= neighborTo)
             .Select(entry => new { entry.StartedAt, entry.EndedAt, entry.Description })
             .ToListAsync(cancellationToken);
+
+        var pendingNeighbors = await db.Suggestions
+            .AsNoTracking()
+            .Where(candidate => candidate.Status == SuggestionStatus.Pending
+                && candidate.Id != suggestion.Id
+                && candidate.EntryDate >= neighborFrom && candidate.EntryDate <= neighborTo)
+            .Select(candidate => new
+            {
+                candidate.StartedAt,
+                candidate.DurationMinutes,
+                candidate.LastActivityAt,
+                candidate.Title,
+            })
+            .ToListAsync(cancellationToken);
+
+        var neighbors = entryNeighbors
+            .Select(entry => new NeighborItem(entry.StartedAt, entry.EndedAt, $"wpisem „{entry.Description}\""))
+            .Concat(pendingNeighbors.Select(candidate => new NeighborItem(
+                candidate.StartedAt,
+                SuggestionSpan.EndOf(
+                    candidate.StartedAt, candidate.DurationMinutes, candidate.LastActivityAt, businessTimeZone),
+                $"oczekującą sugestią „{candidate.Title}\"")))
+            .ToList();
 
         var newStart = suggestion.StartedAt;
         // Koniec wpisu = koniec ZASIĘGU sugestii, a nie koniec liczonego czasu. Po
@@ -121,7 +153,7 @@ public class ApprovalService(AppDbContext db, IOptions<SuggestionOptions> option
         string? notice = null;
         if (overlapping is not null)
         {
-            notice = $"Uwaga: ten czas pokrywa się z wpisem „{overlapping.Description}\" "
+            notice = $"Uwaga: ten czas pokrywa się z {overlapping.Label} "
                 + $"({BusinessMoment.Format(overlapping.StartedAt)}–{BusinessMoment.Format(overlapping.EndedAt)}). "
                 + "Wpis powstał, ale sprawdź, czy tych minut nie liczysz dwa razy.";
         }

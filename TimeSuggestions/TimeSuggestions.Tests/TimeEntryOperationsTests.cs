@@ -549,6 +549,49 @@ public sealed class TimeEntryOperationsTests : IDisposable
         Assert.Contains("10:00:10", result.Notice);
     }
 
+    /// <summary>
+    /// A5: w niezmienniku nakładania uczestniczą też OCZEKUJĄCE sugestie (rezerwacje
+    /// minut) — tak mówi komentarz klasowy operacji i README, i tak liczą sąsiadów oba
+    /// serwisy operacji. Zatwierdzenie musi je widzieć tak samo: zasięg wpisu przycina
+    /// się do początku oczekującej sugestii, zamiast po cichu ją nakryć i zostawić jej
+    /// późniejszą odmowę „Scalenie blokuje pozycja: wpis …" bez ostrzeżenia.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_PrzycinaZasiegDoOczekujacejSugestii()
+    {
+        SeedPendingSuggestion(At(10), 30, title: "Telefon do klienta"); // 10:00–10:30
+        var suggestion = SeedPendingSuggestion(At(9), 60);
+
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
+            suggestion.Id,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 90, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.Success, result.Outcome);
+        // Zasięg przycięty do początku oczekującej sugestii; rozliczany czas bez zmian.
+        Assert.Equal(At(10), result.CreatedEntry!.EndedAt);
+        Assert.Equal(90, result.CreatedEntry.DurationMinutes);
+        Assert.Contains("10:00", result.Notice);
+    }
+
+    /// <summary>A5: pokrycie z oczekującą sugestią „od tyłu" daje Notice z jej nazwą, jak przy wpisie.</summary>
+    [Fact]
+    public async Task ApproveAsync_PokrycieZOczekujacaSugestiaDajeNotice()
+    {
+        SeedPendingSuggestion(At(8, 30), 60, title: "Poranne spotkanie"); // 08:30–09:30
+        var suggestion = SeedPendingSuggestion(At(9), 30);
+
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
+            suggestion.Id,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 30, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.Success, result.Outcome);
+        Assert.Contains("Poranne spotkanie", result.Notice);
+    }
+
     [Fact]
     public async Task ApproveAsync_SasiadujaceWpisyNieKoliduja()
     {

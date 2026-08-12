@@ -19,6 +19,12 @@ public class TimelineService(
     SessionLabelService sessionLabels)
 {
     private readonly SuggestionOptions options = optionsAccessor.Value;
+
+    // Raz w polu, jak w każdym innym serwisie — trzy osobne FindSystemTimeZoneById
+    // w metodach to była jedyna odmienność tej klasy.
+    private readonly TimeZoneInfo businessTimeZone =
+        TimeZoneInfo.FindSystemTimeZoneById(optionsAccessor.Value.BusinessTimeZoneId);
+
     public async Task<List<TimelineDayDto>> GetRangeAsync(
         DateOnly from,
         DateOnly to,
@@ -73,8 +79,6 @@ public class TimelineService(
         // Koniec pozycji to koniec ZASIĘGU sugestii: po scaleniu sesji czas (suma) jest
         // krótszy niż odcinek, który sugestia realnie zajmuje, a oś czasu ma pokazywać
         // zajęty teren — inaczej scalona sesja wyglądałaby na krótszą, niż jest.
-        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
-
         return pendingSuggestions
             .Select(suggestion => new TimelineItemDto(
                 Type: "suggestion",
@@ -212,8 +216,6 @@ public class TimelineService(
         string externalId,
         CancellationToken cancellationToken)
     {
-        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
-
         var activities = (await db.DocumentActivities
                 .AsNoTracking()
                 .Where(activity => activity.ExternalId == externalId)

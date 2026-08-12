@@ -116,7 +116,11 @@ public class TimeEntryOperationsService(
         }
 
         var ordered = entries.OrderBy(entry => entry.StartedAt).ToList();
-        var spanEnd = ordered[^1].EndedAt;
+        // Najpóźniejszy KONIEC, nie koniec ostatniego po starcie: wpis z podniesionym
+        // czasem potrafi zawierać w sobie następny (pole „Czas" przy zatwierdzaniu nie ma
+        // górnej granicy), a wynik kończący się wcześniej niż składowa wypuszczałby jej
+        // minuty z zasięgu — stawałyby się „wolne" na osi dnia, choć są rozliczone.
+        var spanEnd = ordered.Max(entry => entry.EndedAt);
 
         // Sąsiedztwo sprawdzane na PRZERWACH MIĘDZY scalanymi wpisami, a nie na całym
         // przedziale: przerwy to jedyny teren, który wynik zajmuje dodatkowo. Badanie

@@ -107,6 +107,27 @@ public sealed class TimeEntryOperationsTests : IDisposable
 
     private static DateTime At(int hour, int minute = 0) => new(2026, 7, 24, hour, minute, 0);
 
+    /// <summary>Oczekująca sugestia dokumentowa — stan sprzed zatwierdzenia, jak po syncu.</summary>
+    private Suggestion SeedPendingDocumentSuggestion(string externalId, DateTime startedAt, int minutes)
+    {
+        var suggestion = new Suggestion
+        {
+            Source = SuggestionSource.Document,
+            ExternalId = externalId,
+            Title = "Umowa_NovaTech.docx",
+            StartedAt = startedAt,
+            SessionAnchor = startedAt,
+            EntryDate = DateOnly.FromDateTime(startedAt),
+            DurationMinutes = minutes,
+            ProposedDescription = "Praca nad dokumentem",
+            Status = SuggestionStatus.Pending,
+            CreatedAt = Now,
+        };
+        db.Suggestions.Add(suggestion);
+        db.SaveChanges();
+        return suggestion;
+    }
+
     [Fact]
     public async Task MergeAsync_LaczyDwaWpisyTegoSamegoDokumentuBezPrzerw()
     {
@@ -141,6 +162,79 @@ public sealed class TimeEntryOperationsTests : IDisposable
         Assert.Equal(30, adjustment.Minutes);
         Assert.Equal(At(9, 30), adjustment.GapStartAt);
         Assert.Equal(At(10), adjustment.GapEndAt);
+    }
+
+    /// <summary>
+    /// A1: wpis zawarty w drugim nie może skracać wyniku scalenia. Układ jest osiągalny
+    /// przez UI: pole „Czas" przy zatwierdzaniu nie ma górnego ograniczenia, więc
+    /// podniesienie czasu pierwszej sesji tworzy wpis obejmujący sesję drugą (której
+    /// zatwierdzenie i tak przechodzi — pokrycie „od tyłu" daje Notice, nie odmowę).
+    /// Koniec wyniku to NAJPÓŹNIEJSZY koniec składowych, nie koniec ostatniej po starcie.
+    /// </summary>
+    [Fact]
+    public async Task MergeAsync_WpisZawartyWDrugimNieSkracaWyniku()
+    {
+        var approvals = new ApprovalService(db, TestHelpers.DefaultOptions());
+
+        // Pierwsza sesja zatwierdzona z czasem podniesionym do 600 min → wpis 10:00–20:00.
+        var first = SeedPendingDocumentSuggestion("file-1", At(10), 30);
+        var firstApproved = await approvals.ApproveAsync(
+            first.Id,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 600, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+        Assert.Equal(ApprovalOutcome.Success, firstApproved.Outcome);
+        Assert.Equal(At(20), firstApproved.CreatedEntry!.EndedAt);
+
+        // Druga sesja tego samego pliku pojawia się później (praca 11:00–11:30 nie leży
+        // w rozliczonym zakresie [kotwica, ostatnia zmiana] pierwszej sugestii).
+        var second = SeedPendingDocumentSuggestion("file-1", At(11), 30);
+        var secondApproved = await approvals.ApproveAsync(
+            second.Id,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 30, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+        Assert.Equal(ApprovalOutcome.Success, secondApproved.Outcome);
+
+        var result = await operations.MergeAsync(
+            [firstApproved.CreatedEntry!.Id, secondApproved.CreatedEntry!.Id],
+            includeGaps: false, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
+        var merged = await db.TimeEntries.SingleAsync();
+        Assert.Equal(At(10), merged.StartedAt);
+        // Bez tej reguły wynik kończył się o 11:30 (koniec ostatniego PO STARCIE wpisu)
+        // i odcinek 11:30–20:00 wypadał z zasięgu — jego minuty stawały się „wolne".
+        Assert.Equal(At(20), merged.EndedAt);
+        Assert.Equal(630, merged.DurationMinutes);
+    }
+
+    /// <summary>
+    /// B2: składowe, które już się nakładały (zastane dane, np. po zatwierdzeniu
+    /// z podniesionym czasem), wolno scalić — a rozdzielenie przywraca je w pierwotnej
+    /// postaci, łącznie z tym nakładaniem. To świadome zachowanie: unmerge odtwarza stan
+    /// sprzed scalenia z sesji, nie naprawia zastanych danych. Operacje na osi dnia i tak
+    /// bronią się przed zachodzeniem (FreeGapMinutes zwraca null, FindBlocker odmawia).
+    /// </summary>
+    [Fact]
+    public async Task UnmergeAsync_PrzywracaSkladoweTakzeGdyJuzSieNakladaly()
+    {
+        var first = SeedDocumentEntry("file-1", At(9), 60);       // 09:00–10:00
+        var second = SeedDocumentEntry("file-1", At(9, 30), 60);  // 09:30–10:30 — zachodzi na pierwszy
+
+        var merge = await operations.MergeAsync(
+            [first.Id, second.Id], includeGaps: false, Now, CancellationToken.None);
+        Assert.Equal(TimeEntryOperationStatus.Success, merge.Status);
+
+        var unmerge = await operations.UnmergeAsync(merge.Entries![0].Id, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Success, unmerge.Status);
+        var restored = await db.TimeEntries.OrderBy(e => e.StartedAt).ToListAsync();
+        Assert.Equal(2, restored.Count);
+        Assert.Equal(At(9), restored[0].StartedAt);
+        Assert.Equal(At(10), restored[0].EndedAt);
+        Assert.Equal(At(9, 30), restored[1].StartedAt);
+        Assert.Equal(At(10, 30), restored[1].EndedAt);
     }
 
     [Fact]

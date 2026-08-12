@@ -22,11 +22,15 @@ public class TimeEntriesController(
     {
         // Domyślnie widok aktywnych — istniejący klient bez parametru dostaje
         // dotychczasowe zachowanie. TotalMinutes dotyczy zwróconego widoku.
+        // AsSplitQuery: dwa Include kolekcji w jednym zapytaniu mnożą wiersze
+        // (iloczyn kartezjański sugestii × korekt per wpis) — osobne zapytania
+        // per kolekcja zwracają każdy wiersz raz.
         var entries = await db.TimeEntries
             .Where(entry => archived ? entry.ArchivedAt != null : entry.ArchivedAt == null)
             .Include(entry => entry.Case)
             .Include(entry => entry.Suggestions)
             .Include(entry => entry.Adjustments)
+            .AsSplitQuery()
             .OrderByDescending(entry => entry.EntryDate)
             .ThenByDescending(entry => entry.Id)
             .ToListAsync(cancellationToken);

@@ -154,17 +154,17 @@ public class TimelineService(
         string externalId,
         CancellationToken cancellationToken)
     {
-        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(options.BusinessTimeZoneId);
-
         var suggestions = await db.Suggestions
             .Where(suggestion => suggestion.Source == SuggestionSource.Document
                 && suggestion.ExternalId == externalId)
             .ToListAsync(cancellationToken);
 
+        // AsSplitQuery: dwa Include kolekcji naraz mnożą wiersze (sugestie × korekty).
         var entries = await db.TimeEntries
             .Where(entry => entry.Suggestions.Any(suggestion => suggestion.ExternalId == externalId))
             .Include(entry => entry.Suggestions)
             .Include(entry => entry.Adjustments)
+            .AsSplitQuery()
             .ToListAsync(cancellationToken);
 
         var labels = await sessionLabels.LoadAsync(suggestions, cancellationToken);

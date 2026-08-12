@@ -9,8 +9,11 @@ import {
   mergePreview,
   settledToastMessage,
   toIsoDate,
+  uncountedMinutes,
+  signedMinutes,
+  gapButtonLabel,
 } from './time-entries-page';
-import { TimeEntry } from '../models/api.models';
+import { DetectedGap, TimeEntry } from '../models/api.models';
 
 function createEntry(overrides: Partial<TimeEntry> = {}): TimeEntry {
   return {
@@ -32,6 +35,10 @@ function createEntry(overrides: Partial<TimeEntry> = {}): TimeEntry {
     sourceExternalId: 'file-1',
     archivedAt: null,
     detectedGaps: [],
+    sessionLabel: null,
+    roundedDurationMinutes: 60,
+    roundingMinutes: 0,
+    notice: null,
     ...overrides,
   };
 }
@@ -166,5 +173,85 @@ describe('mergePreview', () => {
     ]);
 
     expect(preview.withGapsMinutes).toBe(60);
+  });
+});
+
+/**
+ * Wpis po scaleniu sesji obejmuje cały odcinek pracy, a rozlicza tylko sesje.
+ * Bez nazwania tej różnicy godziny i czas obok siebie wyglądają jak błąd rachunku —
+ * dokładnie tak wyglądał wpis, w którym „brakowało" krótszej ze scalonych sesji.
+ */
+describe('uncountedMinutes', () => {
+  const gap = (minutes: number, counted: boolean): DetectedGap => ({
+    startAt: '2026-08-06T09:30:00',
+    endAt: '2026-08-06T10:20:00',
+    minutes,
+    counted,
+  });
+
+  it('sumuje minuty przerw, których nikt nie rozlicza', () => {
+    const merged = createEntry({
+      startedAt: '2026-08-06T09:00:00',
+      endedAt: '2026-08-06T10:20:00',
+      durationMinutes: 50,
+      detectedGaps: [gap(30, false)],
+    });
+
+    expect(uncountedMinutes(merged)).toBe(30);
+  });
+
+  it('przerwa wliczona w czas nie jest minutą nieliczoną', () => {
+    expect(uncountedMinutes(createEntry({ detectedGaps: [gap(20, true)] }))).toBe(0);
+  });
+
+  it('zwykły wpis nie ma nieliczonych minut', () => {
+    expect(uncountedMinutes(createEntry())).toBe(0);
+  });
+
+  /**
+   * Sedno poprawki: zaokrąglenie w dół powiększa różnicę „godziny minus czas", ale nie
+   * jest przerwą. Liczone razem z przerwami meldowało minuty, których w historii wersji
+   * nie było i których nie dało się kliknąć.
+   */
+  it('zaokrąglenie w dół nie udaje przerwy', () => {
+    const rounded = createEntry({
+      startedAt: '2026-08-06T09:00:00',
+      endedAt: '2026-08-06T10:00:00',
+      durationMinutes: 30,
+      roundingMinutes: -30,
+    });
+
+    expect(uncountedMinutes(rounded)).toBe(0);
+  });
+});
+
+describe('signedMinutes', () => {
+  it('pokazuje kierunek korekty bez liczenia w głowie', () => {
+    expect(signedMinutes(10)).toBe('+10 min');
+    expect(signedMinutes(-20)).toBe('−20 min');
+  });
+});
+
+/**
+ * Kierunek akcji na przerwie wynika z jej STANU, nie z pochodzenia: przerwa wewnątrz
+ * sesji jest wliczona (da się odjąć), przerwa między scalonymi sesjami nie jest (da się
+ * doliczyć). Wcześniej istniało tylko „Odejmij", więc minut po scaleniu nie dało się
+ * odzyskać jednym kliknięciem.
+ */
+describe('gapButtonLabel', () => {
+  const gap = (overrides: Partial<DetectedGap> = {}): DetectedGap => ({
+    startAt: '2026-08-06T09:30:00',
+    endAt: '2026-08-06T10:20:00',
+    minutes: 50,
+    counted: true,
+    ...overrides,
+  });
+
+  it('wliczoną przerwę proponuje odjąć', () => {
+    expect(gapButtonLabel(gap())).toBe('Odejmij przerwę 09:30 (50 min)');
+  });
+
+  it('nieliczoną przerwę proponuje doliczyć', () => {
+    expect(gapButtonLabel(gap({ counted: false }))).toBe('Dolicz przerwę 09:30 (50 min)');
   });
 });

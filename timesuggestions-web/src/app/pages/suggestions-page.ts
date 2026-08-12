@@ -1,5 +1,6 @@
 import { Component, OnInit, computed, effect, inject, signal, untracked } from '@angular/core';
 import { ApiService, SyncStage } from '../services/api.service';
+import { AutoSyncService } from '../services/auto-sync.service';
 import { DataRefreshService } from '../services/data-refresh.service';
 import { SummaryStore } from '../services/summary-store';
 import { ToastService } from '../services/toast.service';
@@ -18,34 +19,16 @@ import { FormsModule } from '@angular/forms';
 import { SuggestionCard, SuggestionResolved } from '../components/suggestion-card';
 import { formatDuration } from '../pipes/duration.pipe';
 import { polishPlural } from '../pipes/polish-plural';
-import { SYNC_DAYS_BACK } from '../services/graph-config';
+import {
+  SYNC_DAYS_OPTIONS,
+  SYNC_DAYS_STORAGE_KEY,
+  loadSyncDays,
+  normalizedSyncDays,
+} from '../services/sync-preferences';
 
-/** Klucz localStorage z preferencją użytkownika dla czasu dokumentów. */
-const DOCUMENT_MINUTES_STORAGE_KEY = 'timesuggestions.defaultDocumentMinutes';
-const DOCUMENT_MINUTES_MIN = 1;
-const DOCUMENT_MINUTES_MAX = 480;
-/** Wartość startowa pola — odpowiednik Suggestions:DefaultDocumentDurationMinutes w backendzie. */
-const DOCUMENT_MINUTES_DEFAULT = 30;
-
-/** Klucz localStorage z preferencją zakresu synchronizacji. */
-const SYNC_DAYS_STORAGE_KEY = 'timesuggestions.syncDaysBack';
-/** Zakresy do wyboru w UI — szerzej niż 30 dni rośnie tylko czas pobierania kalendarza. */
-export const SYNC_DAYS_OPTIONS = [7, 14, 30] as const;
-
-/** Wartość spoza zakresu traktujemy jak brak preferencji — backend użyje swojej konfiguracji. */
-export function normalizedDocumentMinutes(raw: unknown): number | undefined {
-  const value = Number(raw);
-  const isValid = Number.isInteger(value)
-    && value >= DOCUMENT_MINUTES_MIN
-    && value <= DOCUMENT_MINUTES_MAX;
-  return isValid ? value : undefined;
-}
-
-/** Zakres spoza listy (ręcznie zmieniony localStorage) wraca do domyślnego okna. */
-export function normalizedSyncDays(raw: unknown): number {
-  const value = Number(raw);
-  return (SYNC_DAYS_OPTIONS as readonly number[]).includes(value) ? value : SYNC_DAYS_BACK;
-}
+// Preferencje synchronizacji mieszkają we wspólnym module; re-eksport zostawiamy,
+// bo to nadal naturalne miejsce, żeby ich szukać.
+export { SYNC_DAYS_OPTIONS, normalizedSyncDays };
 
 type SourceFilter = 'all' | SuggestionSource;
 type StatusFilter = Extract<SuggestionStatus, 'pending' | 'rejected' | 'archived'>;
@@ -66,7 +49,7 @@ export function syncReportHeadline(report: Pick<SyncReport, 'created' | 'updated
     parts.push(`${report.removed} usunięto`);
   }
   if (parts.length === 0) {
-    return 'Synchronizacja zakończona — bez zmian. Wszystkie sugestie są aktualne.';
+    return 'Synchronizacja zakończona bez zmian. Wszystkie sugestie są aktualne.';
   }
   return `Synchronizacja zakończona: ${parts.join(', ')}.`;
 }
@@ -112,7 +95,6 @@ export function syncSkippedLine(count: number): string {
  */
 function filteredOutParts(
   filtered: SyncFilteredOutCounts,
-  windowDays: number,
 ): Array<{ count: number; label: string }> {
   const parts: Array<{ count: number; label: string }> = [];
   if (filtered.private > 0) {
@@ -150,12 +132,11 @@ function filteredOutParts(
         filtered.notOfficeDocument, 'plik inny niż Word/Excel', 'pliki inne niż Word/Excel', 'plików innych niż Word/Excel'),
     });
   }
-  if (filtered.outsideWindow > 0) {
-    parts.push({
-      count: filtered.outsideWindow,
-      label: `sprzed rozliczanego zakresu ostatnich ${windowDays} dni`,
-    });
-  }
+  // Pozycji spoza rozliczanego zakresu nie ma tu wcale — ani spotkań, ani dokumentów.
+  // Backend pobiera z Graph z zapasem ponad okno (przy kalendarzu ponad dwie doby, bo
+  // okno liczy się od POCZĄTKU doby lokalnej), więc ten licznik meldował przy każdej
+  // synchronizacji ten sam stały zapas jako „pominięte pozycje" — liczba nie mówiła
+  // nic o pracy użytkownika. Pozycje spoza okna nie liczą się też jako pobrane.
   if (filtered.notModifiedByUser > 0) {
     parts.push({
       count: filtered.notModifiedByUser,
@@ -173,9 +154,9 @@ function filteredOutParts(
  * "Pominięto 1 pozycję: sprzed rozliczanego zakresu…" zamiast dublowania
  * "1 … 1 …", po którym nie wiadomo, ile pozycji naprawdę pominięto.
  */
-export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: number): string {
+export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
   const subject = polishPlural(filtered.total, 'pozycję', 'pozycje', 'pozycji');
-  const parts = filteredOutParts(filtered, windowDays);
+  const parts = filteredOutParts(filtered);
   const breakdown = parts.length === 1
     ? parts[0].label
     : parts.map((part) => `${part.count} ${part.label}`).join(' · ');
@@ -193,12 +174,7 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
         {{ syncing() ? 'Synchronizuję…' : 'Synchronizuj' }}
       </button>
 
-      <label class="field doc-minutes" title="Ile minut przyjąć dla sugestii z dokumentu — Graph nie mierzy czasu edycji. Możesz to potem poprawić na każdej karcie.">
-        Domyślny czas dokumentu (min)
-        <input type="number" min="1" max="480" [(ngModel)]="documentMinutesDraft" (change)="saveDocumentMinutes()" />
-      </label>
-
-      <label class="field sync-days" title="Z ilu ostatnich dni pobierać spotkania i dokumenty. Szerszy zakres przydaje się np. po urlopie — synchronizacja potrwa wtedy dłużej.">
+      <label class="field sync-days" title="Z ilu ostatnich dni pobierać spotkania i dokumenty. Szerszy zakres przydaje się np. po urlopie, ale synchronizacja potrwa wtedy dłużej.">
         Zakres (dni)
         <select [(ngModel)]="syncDaysDraft" (change)="saveSyncDays()">
           @for (option of syncDaysOptions; track option) {
@@ -206,6 +182,29 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
           }
         </select>
       </label>
+
+      <!-- Wyjaśnienie NIE mieści się w atrybucie title: to nie jedno zdanie, tylko cztery
+           akapity o tym, skąd w ogóle biorą się liczby na liście — a podpowiedź pod
+           kursorem i tak nie istnieje na dotyku. Stąd rozwijany panel pod paskiem. -->
+      <div class="auto-sync-group">
+        <label class="field auto-sync" title="Aplikacja sama sprawdza kalendarz i OneDrive, dopóki ta karta jest otwarta.">
+          <input type="checkbox" [checked]="autoSync.enabled()" (change)="toggleAutoSync($event)" />
+          Sprawdzaj co {{ autoSync.intervalMinutes }} min
+        </label>
+        <!-- Nazwany odnośnik POD polem wyboru, nie obok: samo „?" nie mówiło, CZEGO
+             dotyczy wyjaśnienie, a ustawione w tym samym wierszu czytało się jak druga,
+             niezależna kontrolka. Pod spodem widać, że należy do tego przełącznika. -->
+        <div class="auto-sync-sub">
+          <button
+            class="btn btn-ghost auto-sync-help"
+            (click)="showAutoSyncHelp.set(!showAutoSyncHelp())"
+            [attr.aria-expanded]="showAutoSyncHelp()"
+          >{{ showAutoSyncHelp() ? 'Ukryj wyjaśnienie' : 'Co to daje?' }}</button>
+          @if (autoSync.enabled()) {
+            <span class="text-muted auto-sync-status">· {{ autoSyncStatus() }}</span>
+          }
+        </div>
+      </div>
 
       <div class="filter-group">
         <span class="text-muted">Źródło:</span>
@@ -236,13 +235,88 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
       }
     </div>
 
+    <!-- Zachęta zamiast domyślnego włączenia: decyzja zostaje przy użytkowniku, ale nie
+         zależy od tego, czy sam zauważy pole wyboru w pasku. Pytamy RAZ — „Nie teraz"
+         zamyka temat na stałe, tak samo jak włączenie. -->
+    @if (autoSync.suggestsEnabling()) {
+      <div class="info-box auto-sync-nudge">
+        <div class="nudge-text">
+          <strong>Zacznij od włączenia sprawdzania w tle.</strong>
+          <p>
+            Aplikacja liczy czas z tego, kiedy Word zapisuje kolejne wersje dokumentu.
+            Bywa, że zapisów jest dużo i czas wychodzi dobrze sam z siebie. Bywa też, że
+            z kilku godzin pracy zostaje jeden zapis: wtedy nie ma z czego liczyć, sugestia
+            dostaje minimum przewidziane w ustawieniach oraz etykietę „czas do uzupełnienia",
+            a godziny musisz wpisać z pamięci. Sprawdzanie w tle dokłada własne punkty
+            pomiaru, więc rzadziej trafisz na taki przypadek. Działa, dopóki karta
+            z aplikacją jest otwarta.
+          </p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" (click)="autoSync.setEnabled(true)">
+            Włącz sprawdzanie co {{ autoSync.intervalMinutes }} min
+          </button>
+          <button class="btn" (click)="autoSync.dismissSuggestion()">Nie teraz</button>
+        </div>
+      </div>
+    }
+
+    @if (showAutoSyncHelp()) {
+      <!-- Tekst pisany dla kogoś, kto nie wie i nie chce wiedzieć, czym jest „wersja pliku".
+           Celowo NIE obiecuje, że długa praca zawsze rozbije się na sesje: to zależy od
+           tego, kiedy Word zapisze wersję, a tego aplikacja nie kontroluje. Obietnicą jest
+           WIĘKSZA SZANSA i mniejsza dziura w danych — i tak trzeba to nazwać. -->
+      <div class="info-box auto-sync-help-panel">
+        <h3>Sprawdzanie w tle, czyli skąd biorą się godziny na liście</h3>
+        <p>
+          Aplikacja nie widzi, że piszesz. Widzi tylko to, kiedy Word zapisał kolejną wersję
+          dokumentu. Takie zapisy powstają nieregularnie: czasem co kilka minut, a czasem
+          dopiero wtedy, gdy zamkniesz plik albo odejdziesz od niego na dłużej. Z ich godzin
+          aplikacja odtwarza sesję pracy: pierwszy zapis wyznacza początek, ostatni koniec.
+        </p>
+        <p>
+          <strong>Co się dzieje, gdy zapisów jest mało.</strong> Czas sugestii liczy się
+          z tego, co widać, a nie z tego, ile praca trwała naprawdę. Dwa zapisy oddalone
+          o kilka minut dadzą sesję długą na te kilka minut, choćbyś pisał znacznie dłużej.
+          Skrajny przypadek to jeden jedyny zapis: nie ma wtedy czego zmierzyć, więc sugestia
+          dostaje minimum przewidziane w ustawieniach i etykietę „czas do uzupełnienia".
+          Poprawianie takich pozycji ręcznie to dokładnie ta robota, której aplikacja ma
+          oszczędzać.
+        </p>
+        <p>
+          <strong>Czego to nie gwarantuje.</strong> Niczego na pewno. O tym, kiedy powstaje
+          zapis, decyduje Word, nie ta aplikacja. Bywa, że historia wersji sama w sobie jest
+          gęsta i sprawdzanie w tle niczego nie poprawi, bo nie ma czego poprawiać. Jego
+          przewaga polega na czym innym: przy każdym przebiegu odnotowuje, że plik był
+          modyfikowany, niezależnie od tego, kiedy Word domknie wersję. Pomaga więc najbardziej
+          tam, gdzie wersji jest mało. Pracy sprzed włączenia nie odtworzy.
+        </p>
+        <p>
+          <strong>Warunek.</strong> Karta z aplikacją musi być otwarta, może leżeć w tle na
+          innej zakładce, byle przeglądarka działała. Po jej zamknięciu nic się nie dzieje:
+          dostęp do Microsoft 365 żyje wyłącznie w przeglądarce, więc nie ma czym pobrać danych.
+        </p>
+        <p class="text-muted">
+          Jedno sprawdzenie to kilka zapytań: pliki pobierane są przyrostowo, czyli tylko to,
+          co się zmieniło, a historia wersji tylko dla zmienionych plików. Gdy nic się nie
+          działo, przebieg jest praktycznie pusty i niczego nie zobaczysz. Powiadomienie
+          pojawia się tylko wtedy, gdy coś naprawdę przybyło albo się zmieniło.
+        </p>
+        <div class="actions">
+          <button class="btn" (click)="showAutoSyncHelp.set(false)">Zamknij</button>
+        </div>
+      </div>
+    }
+
     @if (statusFilter() === 'archived') {
       <p class="info-box">
         Zarchiwizowane sugestie nadal chronią przed ponownym utworzeniem tej samej pozycji przy synchronizacji.
       </p>
     }
 
-    @if (syncing()) {
+    <!-- Pasek etapów tylko dla synchronizacji uruchomionej przyciskiem. Przebieg
+         automatu ma być niewidoczny; jego stan mieści się w statusie w toolbarze. -->
+    @if (manualSync()) {
       <div class="info-box sync-progress">
         <span class="spinner"></span>
         <span>{{ stageLabel() }}</span>
@@ -260,7 +334,17 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
             <li>{{ skippedLine(report.skippedExisting) }}</li>
           }
           @if (report.filteredOut.total > 0) {
-            <li>{{ filteredLine(report.filteredOut, report.windowDays) }}</li>
+            <li>
+              {{ filteredLine(report.filteredOut) }}
+              @if (report.skippedNotOfficeNames; as names) {
+                <!-- Nazwa zamiast samego licznika: delta OneDrive melduje każdą zmianę
+                     na dysku, także w plikach spoza tej aplikacji, więc bez nazwy
+                     „pominięto 1 pozycję" wygląda jak wzięte z powietrza. -->
+                @if (names.length > 0) {
+                  <span class="text-muted">Pominięte pliki: {{ names.join(', ') }}.</span>
+                }
+              }
+            </li>
           }
           @if (report.aggregated > 0) {
             <li>Zwinięto {{ report.aggregated }} {{ plural(report.aggregated, 'dodatkową edycję', 'dodatkowe edycje', 'dodatkowych edycji') }} tego samego pliku w jedną sugestię dziennie.</li>
@@ -302,12 +386,13 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
           [suggestion]="suggestion"
           [cases]="cases()"
           (resolved)="onResolved($event)"
+          (adjusted)="onAdjusted($event)"
         />
       } @empty {
         @if (statusFilter() === 'rejected') {
           <p class="empty-state">Brak odrzuconych sugestii.</p>
         } @else if (statusFilter() === 'archived') {
-          <p class="empty-state">Archiwum jest puste — zarchiwizowane sugestie pojawią się tutaj.</p>
+          <p class="empty-state">Archiwum jest puste. Zarchiwizowane sugestie pojawią się tutaj.</p>
         } @else {
           <div class="empty-state">
             <p><strong>Brak oczekujących sugestii.</strong></p>
@@ -322,6 +407,24 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts, windowDays: num
   `,
   styles: `
     .toolbar { display: flex; align-items: center; gap: var(--space-5); margin-bottom: var(--space-4); flex-wrap: wrap; }
+    /* Kolumna: przełącznik, a POD nim jego podpis i status. Ustawione w jednym wierszu
+       gubiły przynależność — odstęp paska narzędzi (--space-5) odsuwał je na tyle, że
+       wyglądały jak osobne kontrolki. */
+    .auto-sync-group { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+    .auto-sync { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
+    .auto-sync-sub { display: inline-flex; align-items: baseline; gap: var(--space-1); }
+    .auto-sync-status { font-size: var(--font-size-sm); }
+    /* Odnośnik pomocniczy: ma się czytać jak podpis pod polem wyboru, nie jak
+       kolejny przycisk akcji — stąd brak ramki i mniejszy stopień pisma. */
+    .auto-sync-help { padding: 0; height: auto; font-size: var(--font-size-sm); text-decoration: underline; }
+    .auto-sync-nudge { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-4); }
+    .auto-sync-nudge .nudge-text { flex: 1; min-width: 20rem; }
+    .auto-sync-nudge p { margin: var(--space-1) 0 0; }
+    .auto-sync-nudge .actions { margin-top: 0; }
+    .auto-sync-help-panel { margin-bottom: var(--space-4); }
+    .auto-sync-help-panel h3 { font-size: var(--font-size-base); margin: 0 0 var(--space-2); }
+    .auto-sync-help-panel p { margin: 0 0 var(--space-2); max-width: 70ch; }
+    .auto-sync-help-panel .actions { margin-top: var(--space-2); }
     .filter-group { display: flex; align-items: center; gap: var(--space-1); }
     .sync-progress { display: flex; align-items: center; gap: var(--space-3); }
     .spinner {
@@ -340,14 +443,20 @@ export class SuggestionsPage implements OnInit {
   private toasts = inject(ToastService);
   private dataRefresh = inject(DataRefreshService);
 
+  /** Publiczny, bo szablon czyta stan automatu wprost (przełącznik, status, blokada przycisku). */
+  protected autoSync = inject(AutoSyncService);
+
   constructor() {
     // Przeładowanie po operacjach spoza tego widoku (np. "Cofnij" z toastu,
-    // który mógł zostać kliknięty już po zmianie zakładki).
+    // który mógł zostać kliknięty już po zmianie zakładki). Własnych powiadomień
+    // nie obsługujemy — po swojej operacji ta strona odświeżyła się już sama.
     let lastSeen: number | null = null;
     effect(() => {
       const version = this.dataRefresh.changes();
-      if (lastSeen !== null && version !== lastSeen) {
-        untracked(() => void this.loadData());
+      if (lastSeen !== null && version !== lastSeen && !this.dataRefresh.isOwn(this)) {
+        // Cicho: sprawdzenie w tle chodzi co kilka minut, a podmiana całej listy na
+        // „Ładowanie sugestii…" byłaby migotaniem ekranu bez powodu.
+        untracked(() => void this.loadData({ quiet: true }));
       }
       lastSeen = version;
     });
@@ -358,7 +467,15 @@ export class SuggestionsPage implements OnInit {
   protected sourceFilter = signal<SourceFilter>('all');
   protected statusFilter = signal<StatusFilter>('pending');
   protected loading = signal(false);
-  protected syncing = signal(false);
+
+  /**
+   * Trwa JAKAKOLWIEK synchronizacja — także przebieg automatu. Przycisk musi być wtedy
+   * zablokowany, bo drugie równoległe pobieranie biłoby się o wskaźnik delty OneDrive.
+   */
+  protected syncing = computed(() => this.autoSync.busy());
+
+  /** Ta konkretna strona uruchomiła synchronizację — tylko wtedy pokazujemy pasek etapów. */
+  protected manualSync = signal(false);
   protected error = signal<string | null>(null);
   protected syncReport = signal<SyncReport | null>(null);
   protected syncStage = signal<SyncStage | null>(null);
@@ -400,11 +517,8 @@ export class SuggestionsPage implements OnInit {
   /** Dwustopniowe potwierdzenie hurtowej archiwizacji — operacja jest jednokierunkowa. */
   protected confirm = new TwoStepConfirm();
 
-  /** Preferencja czasu dokumentów — trzymana lokalnie, wysyłana z każdą synchronizacją. */
-  protected documentMinutesDraft = this.loadDocumentMinutes();
-
   /** Preferencja zakresu synchronizacji — trzymana lokalnie, wysyłana z każdą synchronizacją. */
-  protected syncDaysDraft = normalizedSyncDays(localStorage.getItem(SYNC_DAYS_STORAGE_KEY));
+  protected syncDaysDraft = loadSyncDays();
 
   /** Sugestie z jednoznacznie dopasowaną sprawą — te można zatwierdzić hurtem, bez zastanowienia. */
   protected autoMatchedCount = computed(() =>
@@ -447,6 +561,7 @@ export class SuggestionsPage implements OnInit {
       this.toasts.show(archivedSuggestionsToast(result.archivedCount));
       await this.loadData();
       await this.summaryStore.refresh();
+      this.dataRefresh.notify(this);
     } catch (error) {
       this.error.set(toUserMessage(error, 'Nie udało się zarchiwizować sugestii.'));
     } finally {
@@ -455,31 +570,74 @@ export class SuggestionsPage implements OnInit {
   }
 
   protected async sync(): Promise<void> {
-    this.syncing.set(true);
+    this.manualSync.set(true);
     this.error.set(null);
     this.syncReport.set(null);
     this.syncStage.set(null);
     try {
-      const report = await this.api.syncNow(
-        (stage) => this.syncStage.set(stage),
-        normalizedDocumentMinutes(this.documentMinutesDraft),
-        normalizedSyncDays(this.syncDaysDraft),
-      );
+      // Przez AutoSyncService, nie prosto do API: to on trzyma blokadę wspólną
+      // z przebiegiem w tle i znacznik ostatniego udanego sprawdzenia.
+      const report = await this.autoSync.sync((stage) => this.syncStage.set(stage));
+      if (report === null) {
+        this.error.set('Synchronizacja właśnie trwa (sprawdzenie w tle), poczekaj chwilę.');
+        return;
+      }
+
       this.syncReport.set(report);
       await this.loadData();
-      await this.summaryStore.refresh();
+      // Synchronizacja zmienia dane globalnie — oś czasu ma pokazać nowe pozycje
+      // od razu, bez przeładowania przeglądarki.
+      this.dataRefresh.notify(this);
     } catch (error) {
       this.error.set(toUserMessage(error, 'Synchronizacja nie powiodła się.'));
     } finally {
-      this.syncing.set(false);
+      this.manualSync.set(false);
       this.syncStage.set(null);
     }
+  }
+
+  /** Rozwinięte wyjaśnienie sprawdzania w tle — domyślnie zwinięte, pamiętane w sesji widoku. */
+  protected showAutoSyncHelp = signal(false);
+
+  protected toggleAutoSync(event: Event): void {
+    this.autoSync.setEnabled((event.target as HTMLInputElement).checked);
+  }
+
+  /** Status automatu w toolbarze — bez niego przełącznik nie mówi, czy cokolwiek się dzieje. */
+  protected autoSyncStatus(): string {
+    if (this.autoSync.busy()) {
+      return 'sprawdzam…';
+    }
+    const error = this.autoSync.lastError();
+    if (error !== null) {
+      return `ostatnia próba nieudana: ${error}`;
+    }
+    const last = this.autoSync.lastSyncAt();
+    return last === null
+      ? 'pierwsze sprawdzenie wkrótce'
+      : `ostatnio ${last.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`;
+  }
+
+
+  /**
+   * Scalenie albo doliczenie luki zmienia więcej niż jedną kartę (znika sugestia
+   * składowa, sąsiadowi ubywa wolnego czasu, przesuwa się kolejność) — dlatego pełne
+   * przeładowanie listy, a nie punktowa aktualizacja.
+   */
+  protected onAdjusted(message: string): void {
+    // Komunikat idzie z karty, bo tylko ona zna „przed" i „po" operacji — a sama karta
+    // znika przy przeładowaniu listy, więc potwierdzenie musi je przeżyć.
+    this.toasts.show(message);
+    void this.loadData();
+    void this.summaryStore.refresh();
+    this.dataRefresh.notify(this);
   }
 
   protected onResolved(event: SuggestionResolved): void {
     // Rozstrzygnięta sugestia znika z bieżącej listy bez ponownego pobierania.
     this.suggestions.update((current) => current.filter((s) => s.id !== event.suggestion.id));
     void this.summaryStore.refresh();
+    this.dataRefresh.notify(this);
     this.showResolvedToast(event);
   }
 
@@ -494,7 +652,7 @@ export class SuggestionsPage implements OnInit {
       case 'approved': {
         const entry = event.createdEntry;
         const details = entry
-          ? `${formatDuration(entry.durationMinutes)} — ${entry.caseName}`
+          ? `${formatDuration(entry.durationMinutes)}, ${entry.caseName}`
           : event.suggestion.title;
         this.toasts.show(`Zapisano wpis: ${details}. Zobacz zakładkę „Wpisy czasu".`, {
           undo: entry
@@ -505,6 +663,12 @@ export class SuggestionsPage implements OnInit {
               }
             : undefined,
         });
+        // Osobny komunikat, gdy backend musiał przyciąć godziny wpisu albo wykrył
+        // pokrycie z inną pozycją. Kiedyś było to odmową zatwierdzenia; dziś wpis
+        // powstaje, ale prawnik ma wiedzieć, czemu godziny wyglądają inaczej.
+        if (entry?.notice) {
+          this.toasts.show(entry.notice);
+        }
         break;
       }
       case 'rejected':
@@ -551,19 +715,20 @@ export class SuggestionsPage implements OnInit {
       this.toasts.show(
         failedCount === 0
           ? `Zapisano ${approvedCount} ${polishPlural(approvedCount, 'wpis', 'wpisy', 'wpisów')} czasu pracy.`
-          : `Zapisano ${approvedCount}, nie udało się ${failedCount} — spróbuj pojedynczo.`,
+          : `Zapisano ${approvedCount}, nie udało się ${failedCount}. Spróbuj pojedynczo.`,
         { kind: failedCount === 0 ? 'success' : 'error' },
       );
 
       await this.loadData();
       await this.summaryStore.refresh();
+      this.dataRefresh.notify(this);
     } finally {
       this.bulkApproving.set(false);
     }
   }
 
-  protected async loadData(): Promise<void> {
-    this.loading.set(true);
+  protected async loadData(options?: { quiet: boolean }): Promise<void> {
+    this.loading.set(options?.quiet !== true);
     this.error.set(null);
     try {
       const [suggestions, cases] = await Promise.all([
@@ -579,22 +744,8 @@ export class SuggestionsPage implements OnInit {
     }
   }
 
-  protected saveDocumentMinutes(): void {
-    const value = normalizedDocumentMinutes(this.documentMinutesDraft);
-    if (value !== undefined) {
-      localStorage.setItem(DOCUMENT_MINUTES_STORAGE_KEY, String(value));
-    }
-  }
-
   protected saveSyncDays(): void {
     this.syncDaysDraft = normalizedSyncDays(this.syncDaysDraft);
     localStorage.setItem(SYNC_DAYS_STORAGE_KEY, String(this.syncDaysDraft));
-  }
-
-  private loadDocumentMinutes(): number {
-    const stored = Number(localStorage.getItem(DOCUMENT_MINUTES_STORAGE_KEY));
-    return Number.isInteger(stored) && stored >= DOCUMENT_MINUTES_MIN && stored <= DOCUMENT_MINUTES_MAX
-      ? stored
-      : DOCUMENT_MINUTES_DEFAULT;
   }
 }

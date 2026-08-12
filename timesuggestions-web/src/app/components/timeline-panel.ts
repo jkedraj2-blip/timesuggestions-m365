@@ -54,6 +54,17 @@ export function weekdayShort(isoDate: string): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
+/**
+ * Dwuliterowy skrót do komórki paska: pełny miesiąc to 31 kolumn na szerokości
+ * strony, więc „Niedz" po prostu się nie mieści i etykiety wchodziły na sąsiadów.
+ * Dwie litery wystarczają, bo są różne dla wszystkich siedmiu dni (Po, Wt, Śr,
+ * Cz, Pt, So, Ni) — jednoliterowy skrót Intl myli poniedziałek z piątkiem.
+ * Pełna nazwa dnia zostaje w etykiecie dostępności komórki.
+ */
+export function weekdayInitials(isoDate: string): string {
+  return weekdayShort(isoDate).slice(0, 2);
+}
+
 /** Sobota/niedziela — wyróżnienie weekendu w pasku. */
 export function isWeekend(isoDate: string): boolean {
   const weekday = new Date(`${isoDate}T12:00:00`).getDay();
@@ -115,13 +126,15 @@ interface StoredTimelineState {
           </div>
         }
 
-        <!-- Komórki elastyczne (repeat(daysInMonth, 1fr)) — bez przewijania poziomego
-             na desktopie; scroll poziomy zostaje wyłącznie jako fallback mobilny. -->
+        <!-- minmax(0, 1fr) zamiast 1fr: samo 1fr ma minimum "min-content", więc przy 31
+             kolumnach etykiety rozpychały komórki i wchodziły na sąsiednie dni.
+             Zero jako minimum pozwala kolumnie zwęzić się poniżej swojej treści,
+             a przycinanie ogarnia już overflow komórki. -->
         <div
           class="month-grid"
           role="group"
           aria-label="Dni miesiąca"
-          [style.grid-template-columns]="'repeat(' + days().length + ', 1fr)'"
+          [style.grid-template-columns]="'repeat(' + days().length + ', minmax(0, 1fr))'"
         >
           @for (day of days(); track day.date) {
             <button
@@ -220,12 +233,15 @@ interface StoredTimelineState {
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       background: var(--surface);
-      padding: var(--space-1) 2px;
+      padding: var(--space-1) 1px;
       cursor: pointer;
       font-size: var(--font-size-sm);
       font-family: inherit;
       color: var(--text);
+      /* Komórka nigdy nie rozpycha kolumny: nadmiar treści (długa liczba pozycji)
+         jest przycinany, zamiast wchodzić na sąsiedni dzień. */
       min-width: 0;
+      overflow: hidden;
     }
     .day-cell:disabled { opacity: 0.45; cursor: default; }
     .day-cell:hover:not(:disabled) { background: var(--surface-alt); }
@@ -234,27 +250,32 @@ interface StoredTimelineState {
     .day-cell.today { border-color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
     .day-cell.selected { background: var(--accent-soft); border-color: var(--accent); }
     .day-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .day-name { font-size: 0.7rem; color: var(--text-muted); }
+    .day-name { font-size: 0.7rem; line-height: 1; color: var(--text-muted); }
     .day-badge {
       background: var(--accent);
       color: var(--accent-contrast);
       border-radius: 999px;
-      min-width: 1.2rem;
-      padding: 0 4px;
+      min-width: 1.1rem;
+      padding: 0 3px;
       font-size: 0.7rem;
-      line-height: 1.2rem;
+      line-height: 1.1rem;
       text-align: center;
     }
 
     .day-items { margin-top: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-3); }
     .day-items-title { font-size: var(--font-size-base); text-transform: capitalize; margin-bottom: var(--space-2); }
     .timeline-row { display: flex; align-items: center; gap: var(--space-2); }
-    .history-toggle { font-size: var(--font-size-sm); white-space: nowrap; }
+    /* Przycisk historii ma stałą szerokość i nie kurczy się do wielolinijkowego
+       napisu; miejsce oddaje mu pozycja obok (flex: 1 + min-width: 0). */
+    .history-toggle { flex: 0 0 auto; font-size: var(--font-size-sm); white-space: nowrap; }
     .timeline-item {
       display: flex;
       align-items: center;
       gap: var(--space-3);
-      width: 100%;
+      /* width: 100% wypychało przycisk historii poza kartę — pozycja ma zająć
+         RESZTĘ wiersza, a nie jego całą szerokość. */
+      flex: 1;
+      min-width: 0;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       background: var(--surface);
@@ -269,8 +290,10 @@ interface StoredTimelineState {
     .timeline-item:hover:not(:disabled) { background: var(--surface-alt); }
     .timeline-item.archived { opacity: 0.55; cursor: default; }
     .item-hours { font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .item-case { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* min-width: 0 dopuszcza skrócenie wielokropkiem — bez niego element flex nie
+       zejdzie poniżej szerokości swojej treści i to on rozpycha wiersz. */
+    .item-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .item-case { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .item-duration { margin-left: auto; white-space: nowrap; }
     /* Status kolorem + etykietą tekstową — nigdy samym kolorem. */
     .item-status { border-radius: 999px; padding: 0 var(--space-2); white-space: nowrap; }
@@ -306,15 +329,19 @@ export class TimelinePanel implements OnInit {
     return monthDays(this.month()).map((date) => {
       const day = counts.get(date);
       const total = day ? day.pendingCount + day.activeCount + day.archivedCount : 0;
-      const [, month, dayOfMonth] = date.split('-');
+      const [, , dayOfMonth] = date.split('-');
       return {
         date,
-        label: `${dayOfMonth}.${month}`,
-        weekday: weekdayShort(date),
+        // Sam dzień miesiąca: miesiąc i rok stoją w nagłówku paska, a powtarzanie
+        // ich w każdej z 31 komórek było jedynym powodem, dla którego się nie mieściły.
+        label: dayOfMonth,
+        weekday: weekdayInitials(date),
         weekend: isWeekend(date),
         today: date === todayIso,
         total,
-        ariaLabel: `${date}, ${total} pozycji`,
+        // Etykieta dostępności niesie pełną nazwę dnia — czytnik ekranu nie musi
+        // odgadywać skrótu z komórki.
+        ariaLabel: `${dayOfMonth} ${weekdayShort(date)}, ${total} pozycji`,
       };
     });
   });
@@ -428,7 +455,7 @@ export class TimelinePanel implements OnInit {
     const found = await scrollToAndHighlight(elementId);
     if (!found) {
       this.toasts.show(
-        'Pozycja nie jest widoczna na liście — może ją ukrywać filtr albo inny widok.',
+        'Pozycja nie jest widoczna na liście. Może ją ukrywać filtr albo inny widok.',
         { kind: 'error' },
       );
     }

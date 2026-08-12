@@ -18,7 +18,7 @@ import {
   SyncRequest,
   TimeEntriesResponse,
   TimeEntry,
-  DocumentActivityItem,
+  DocumentHistory,
   TimelineDay,
   TimelineItem,
 } from '../models/api.models';
@@ -52,7 +52,6 @@ export class ApiService {
    */
   async syncNow(
     onStage?: (stage: SyncStage) => void,
-    defaultDocumentDurationMinutes?: number,
     syncDaysBack?: number,
   ): Promise<SyncReport> {
     // Zakres wybrany w UI; brak wartości = domyślne okno (SYNC_DAYS_BACK).
@@ -104,14 +103,14 @@ export class ApiService {
       clientFilteredCounts: {
         private: privateCount,
         cancelled: cancelledCount,
-        documentsOutsideWindow: driveResult.documentsOutsideWindow,
         documentsNotOfficeDocument: driveResult.documentsNotOfficeDocument,
       },
-      defaultDocumentDurationMinutes,
       driveFileVersionFetchErrors: driveResult.versionFetchErrors,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);
+    // Nazwy pominiętych plików dopinamy lokalnie — nie były i nie będą wysyłane.
+    report.skippedNotOfficeNames = driveResult.notOfficeDocumentNames;
 
     // Wskaźnik delta przesuwamy dopiero po udanym zapisie (obejmującym też
     // tombstone'y) — nieudany sync nie gubi zmian.
@@ -129,6 +128,26 @@ export class ApiService {
     if (filter?.source) params.set('source', filter.source);
     const query = params.size > 0 ? `?${params}` : '';
     return this.requestJson<Suggestion[]>('GET', `/api/suggestions${query}`);
+  }
+
+  /** Scalenie sesji tego samego dokumentu w jedną sugestię (opcjonalnie z wolnymi lukami). */
+  mergeSuggestions(suggestionIds: number[], includeGaps: boolean): Promise<Suggestion[]> {
+    return this.requestJson<Suggestion[]>('POST', '/api/suggestions/merge', { suggestionIds, includeGaps });
+  }
+
+  /**
+   * Rozdziela wolną lukę: minutes trafia do tej sugestii, neighborMinutes do sąsiedniej,
+   * reszta zostaje wolna. Bez obu wartości — cała luka do tej sugestii. Rozmiar luki
+   * i tak przelicza serwer; stąd idzie wyłącznie decyzja użytkownika o podziale.
+   */
+  claimSuggestionGap(
+    suggestionId: number,
+    direction: 'before' | 'after',
+    minutes?: number,
+    neighborMinutes?: number,
+  ): Promise<Suggestion[]> {
+    return this.requestJson<Suggestion[]>(
+      'POST', `/api/suggestions/${suggestionId}/claim-gap`, { direction, minutes, neighborMinutes });
   }
 
   approve(suggestionId: number, payload: ApprovePayload): Promise<TimeEntry> {
@@ -180,6 +199,11 @@ export class ApiService {
     return this.requestJson<ArchiveTimeEntriesResult>('POST', '/api/time-entries/archive', { from, to });
   }
 
+  /** Rozliczenie POJEDYNCZEGO wpisu — gotowość do faktury jest cechą wpisu, nie dnia. */
+  archiveTimeEntry(timeEntryId: number): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/archive`);
+  }
+
   async deleteTimeEntry(timeEntryId: number): Promise<void> {
     await this.request('DELETE', `/api/time-entries/${timeEntryId}`);
   }
@@ -194,12 +218,27 @@ export class ApiService {
     return this.requestJson<TimeEntry[]>('POST', `/api/time-entries/${timeEntryId}/unmerge`);
   }
 
-  /** Odejmuje wykrytą przerwę — zakres musi pochodzić z listy detectedGaps wpisu. */
-  subtractGap(timeEntryId: number, gapStartAt: string, gapEndAt: string): Promise<TimeEntry> {
-    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/subtract-gap`, {
+  /**
+   * Włącza albo wyłącza przerwę z rozliczanego czasu wpisu. Zakres musi pochodzić
+   * z listy detectedGaps wpisu (backend liczy ją z historii wersji), a kierunek musi
+   * zgadzać się z jej obecnym stanem — inaczej odpowiedź to 409.
+   */
+  setGapCounted(
+    timeEntryId: number,
+    gapStartAt: string,
+    gapEndAt: string,
+    counted: boolean,
+  ): Promise<TimeEntry> {
+    const action = counted ? 'add-gap' : 'subtract-gap';
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/${action}`, {
       gapStartAt,
       gapEndAt,
     });
+  }
+
+  /** Zaokrągla czas wpisu do jednostki rozliczeniowej z konfiguracji backendu. */
+  roundTimeEntry(timeEntryId: number): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/round`);
   }
 
   /** Dolicza wolną lukę do sąsiedniej pozycji — minuty liczy serwer. */
@@ -226,9 +265,13 @@ export class ApiService {
     return this.requestJson<TimelineItem[]>('GET', `/api/timeline/${date}`);
   }
 
-  /** Chronologia modyfikacji dokumentu z dziennika DocumentActivity (poziom 3 osi). */
-  getDocumentActivity(externalId: string): Promise<DocumentActivityItem[]> {
-    return this.requestJson<DocumentActivityItem[]>(
+  /**
+   * Chronologia modyfikacji dokumentu razem z pozycjami, które z niej powstały.
+   * Jedno żądanie na obie rzeczy: stan pozycji jest częścią tej samej odpowiedzi,
+   * więc nie może rozjechać się z wersjami.
+   */
+  getDocumentHistory(externalId: string): Promise<DocumentHistory> {
+    return this.requestJson<DocumentHistory>(
       'GET',
       `/api/timeline/document-activity?externalId=${encodeURIComponent(externalId)}`,
     );

@@ -128,7 +128,7 @@ export function parseKeywords(text: string): string[] {
                 @for (keyword of caseInfo.keywords; track keyword) {
                   <span class="badge badge-accent">{{ keyword }}</span>
                 } @empty {
-                  <span class="text-muted">—</span>
+                  <span class="text-muted">brak</span>
                 }
               </td>
               <td class="row-actions">
@@ -287,7 +287,7 @@ export class CasesPage implements OnInit {
       this.toasts.show(
         isActive
           ? `Sprawa „${caseInfo.name}" jest znów aktywna.`
-          : `Zdezaktywowano sprawę „${caseInfo.name}" — nie będzie brana pod uwagę przy dopasowaniu.`,
+          : `Zdezaktywowano sprawę „${caseInfo.name}". Nie będzie brana pod uwagę przy dopasowaniu.`,
       );
       await this.loadData();
     } catch (error) {

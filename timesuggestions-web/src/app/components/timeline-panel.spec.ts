@@ -7,6 +7,7 @@ import {
   monthRangeLabel,
   shiftMonth,
   statusLabel,
+  weekdayInitials,
   weekdayShort,
 } from './timeline-panel';
 
@@ -52,6 +53,23 @@ describe('weekdayShort', () => {
     expect(weekdayShort('2026-08-03').toLowerCase()).toContain('pon');
     expect(weekdayShort('2026-08-03')).not.toContain('.');
     expect(weekdayShort('2026-08-09').toLowerCase()).toContain('niedz');
+  });
+});
+
+describe('weekdayInitials', () => {
+  it('skrót ma dwa znaki — inaczej etykiety nie mieszczą się w 31 kolumnach', () => {
+    // 3–9 sierpnia 2026 to pełny tydzień od poniedziałku.
+    const week = ['03', '04', '05', '06', '07', '08', '09']
+      .map((day) => weekdayInitials(`2026-08-${day}`));
+
+    expect(week.every((initials) => initials.length === 2)).toBe(true);
+  });
+
+  it('siedem dni daje siedem RÓŻNYCH skrótów (jednoliterowy mylił pon. z pt.)', () => {
+    const week = ['03', '04', '05', '06', '07', '08', '09']
+      .map((day) => weekdayInitials(`2026-08-${day}`));
+
+    expect(new Set(week).size).toBe(7);
   });
 });
 

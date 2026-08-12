@@ -310,7 +310,10 @@ public class TimeEntryOperationsService(
             return new(TimeEntryOperationStatus.Conflict, "Po odjęciu przerwy czas wpisu spadłby do zera.");
         }
 
-        if (newDuration > SuggestionOptions.MaxDocumentDurationMinutes)
+        // Limit blokuje wyłącznie WZROST: zatwierdzenie dopuszcza do 1440 min, więc wpis
+        // powyżej 480 istnieje legalnie — odmowa przy ZMNIEJSZANIU zamykałaby drogę
+        // w dół komunikatem o przekroczonym limicie (ta sama reguła w Round i Adjust).
+        if (newDuration > entry.DurationMinutes && newDuration > SuggestionOptions.MaxDocumentDurationMinutes)
         {
             return new(TimeEntryOperationStatus.Conflict,
                 $"Po doliczeniu przerwy czas wpisu przekroczyłby limit {SuggestionOptions.MaxDocumentDurationMinutes} minut.");
@@ -366,7 +369,8 @@ public class TimeEntryOperationsService(
                 $"Czas wpisu jest już wielokrotnością {options.BillingIncrementMinutes} min.");
         }
 
-        if (rounded > SuggestionOptions.MaxDocumentDurationMinutes)
+        // Tylko wzrost — zaokrąglenie W DÓŁ wpisu powyżej limitu jest zmniejszeniem.
+        if (rounded > entry.DurationMinutes && rounded > SuggestionOptions.MaxDocumentDurationMinutes)
         {
             return new(TimeEntryOperationStatus.Conflict,
                 $"Po zaokrągleniu czas wpisu przekroczyłby limit {SuggestionOptions.MaxDocumentDurationMinutes} minut.");
@@ -525,7 +529,8 @@ public class TimeEntryOperationsService(
             return new(TimeEntryOperationStatus.Conflict, "Po korekcie czas wpisu spadłby do zera.");
         }
 
-        if (newDuration > SuggestionOptions.MaxDocumentDurationMinutes)
+        // Tylko wzrost — korekta ujemna wpisu powyżej limitu musi przechodzić.
+        if (newDuration > entry.DurationMinutes && newDuration > SuggestionOptions.MaxDocumentDurationMinutes)
         {
             return new(TimeEntryOperationStatus.Conflict,
                 $"Po korekcie czas wpisu przekroczyłby limit {SuggestionOptions.MaxDocumentDurationMinutes} minut.");

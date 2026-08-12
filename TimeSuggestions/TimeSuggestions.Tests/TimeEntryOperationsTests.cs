@@ -447,6 +447,60 @@ public sealed class TimeEntryOperationsTests : IDisposable
     }
 
     /// <summary>
+    /// A3: limit 480 min blokuje wyłącznie WZROST czasu. Zatwierdzenie dopuszcza
+    /// 1–1440 min (pole „Czas" nie ma górnego ograniczenia w UI), więc wpis powyżej
+    /// limitu istnieje legalnie — a operacja, która czas ZMNIEJSZA, nie może być
+    /// odrzucana komunikatem „przekroczyłby limit".
+    /// </summary>
+    [Fact]
+    public async Task AdjustAsync_ZmniejszenieWpisuPowyzejLimituPrzechodzi()
+    {
+        var entry = SeedDocumentEntry("file-1", At(9), 600); // 600 min — legalne po zatwierdzeniu
+
+        var result = await operations.AdjustAsync(entry.Id, -15, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
+        Assert.Equal(585, (await db.TimeEntries.SingleAsync()).DurationMinutes);
+    }
+
+    [Fact]
+    public async Task AdjustAsync_ZwiekszenieWpisuPowyzejLimituNadalBlokowane()
+    {
+        var entry = SeedDocumentEntry("file-1", At(9), 600);
+
+        var result = await operations.AdjustAsync(entry.Id, 15, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Conflict, result.Status);
+        Assert.Equal(600, (await db.TimeEntries.SingleAsync()).DurationMinutes);
+    }
+
+    /// <summary>A3: zaokrąglenie W DÓŁ wpisu powyżej limitu też jest zmniejszeniem.</summary>
+    [Fact]
+    public async Task RoundAsync_ZaokraglenieWDolPowyzejLimituPrzechodzi()
+    {
+        var entry = SeedDocumentEntry("file-1", At(9), 605); // najbliższa wielokrotność 30 → 600
+
+        var result = await operations.RoundAsync(entry.Id, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
+        Assert.Equal(600, (await db.TimeEntries.SingleAsync()).DurationMinutes);
+    }
+
+    /// <summary>A3: odjęcie przerwy zawsze zmniejsza czas — limit nie ma tu nic do rzeczy.</summary>
+    [Fact]
+    public async Task SubtractGapAsync_OdejmowaniePowyzejLimituPrzechodzi()
+    {
+        var gaps = DetectedGaps.Serialize([new DetectedGap(At(9, 30), At(9, 50))]);
+        var entry = SeedDocumentEntry("file-1", At(9), 600, detectedGapsJson: gaps);
+
+        var result = await operations.SetGapCountedAsync(
+            entry.Id, At(9, 30), At(9, 50), counted: false, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
+        Assert.Equal(580, (await db.TimeEntries.SingleAsync()).DurationMinutes);
+    }
+
+    /// <summary>
     /// Nakładanie NIE odrzuca zatwierdzenia. Sugestia zaczynająca się w środku cudzego
     /// wpisu to realny przypadek (dokument zapisany w trakcie rozliczonego spotkania),
     /// a nie błąd danych — odmowa zostawiałaby prawnika z pracą, której nie da się

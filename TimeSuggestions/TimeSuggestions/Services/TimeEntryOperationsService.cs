@@ -49,9 +49,15 @@ public enum GapDirection
 /// po cichu zmieniać). DurationMinutes po każdej mutacji = suma sesji + suma korekt,
 /// przeliczana i zapisywana — korekty są dziennikiem audytowym.
 /// </summary>
-public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOptions> optionsAccessor)
+public class TimeEntryOperationsService(
+    AppDbContext db,
+    IOptions<SuggestionOptions> optionsAccessor,
+    EntryGapService entryGaps)
 {
     private readonly SuggestionOptions options = optionsAccessor.Value;
+
+    private readonly TimeZoneInfo businessTimeZone =
+        TimeZoneInfo.FindSystemTimeZoneById(optionsAccessor.Value.BusinessTimeZoneId);
 
     /// <summary>
     /// Scala wpisy tej samej sesji dokumentu w jeden. Warunki: ≥2 wpisy, ten sam
@@ -110,14 +116,26 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
         }
 
         var ordered = entries.OrderBy(entry => entry.StartedAt).ToList();
-        var spanStart = ordered[0].StartedAt;
         var spanEnd = ordered[^1].EndedAt;
 
-        // Sąsiedztwo globalne: przedział scalenia musi być wolny od innych pozycji.
-        var blocker = await FindBlocker(spanStart, spanEnd, ordered[0].EntryDate, ids, cancellationToken);
-        if (blocker is not null)
+        // Sąsiedztwo sprawdzane na PRZERWACH MIĘDZY scalanymi wpisami, a nie na całym
+        // przedziale: przerwy to jedyny teren, który wynik zajmuje dodatkowo. Badanie
+        // całego przedziału odrzucało scalenie także wtedy, gdy obca pozycja zachodziła
+        // na składową JUŻ WCZEŚNIEJ — scalenie tego nie pogarszało, a operacja była
+        // zablokowana na stałe (patrz ta sama poprawka w SuggestionOperationsService).
+        var dayItems = await LoadDayItemsAsync(ordered[0].EntryDate, ids, cancellationToken);
+        foreach (var (previous, next) in ordered.Zip(ordered.Skip(1)))
         {
-            return new(TimeEntryOperationStatus.Conflict, $"Scalenie blokuje pozycja: {blocker}.");
+            if (previous.EndedAt >= next.StartedAt)
+            {
+                continue; // wpisy przylegają albo już się nakładają — nie ma nowego terenu
+            }
+
+            var gapBlocker = FindBlockerInItems(dayItems, previous.EndedAt, next.StartedAt);
+            if (gapBlocker is not null)
+            {
+                return new(TimeEntryOperationStatus.Conflict, $"Scalenie blokuje pozycja: {gapBlocker}.");
+            }
         }
 
         var survivor = ordered[0];
@@ -128,7 +146,7 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
         {
             foreach (var (previous, next) in ordered.Zip(ordered.Skip(1)))
             {
-                var gapMinutes = (int)Math.Round((next.StartedAt - previous.EndedAt).TotalMinutes);
+                var gapMinutes = FreeGapMinutes(previous.EndedAt, next.StartedAt) ?? 0;
                 if (gapMinutes <= 0)
                 {
                     continue;
@@ -216,7 +234,7 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
                 Case = entry.Case,
                 EntryDate = suggestion.EntryDate,
                 StartedAt = suggestion.StartedAt,
-                EndedAt = suggestion.StartedAt.AddMinutes(suggestion.DurationMinutes),
+                EndedAt = SuggestionSpan.EndOf(suggestion, businessTimeZone),
                 DurationMinutes = suggestion.DurationMinutes,
                 Description = entry.Description,
                 CreatedFromSuggestion = true,
@@ -235,14 +253,21 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
     }
 
     /// <summary>
-    /// Odejmuje wykrytą przerwę. Przerwa musi pochodzić z listy wykrytych przerw
-    /// wpisu (danych sesji), nie z wartości wymyślonych przez klienta. Operacja
-    /// idempotentna przez dziennik korekt: druga próba na tę samą lukę → konflikt.
+    /// Przełącza przerwę leżącą w godzinach wpisu między „liczona" a „nieliczona".
+    /// Zakres musi pochodzić z <see cref="EntryGapService"/> (czyli z historii wersji),
+    /// nie z wartości wymyślonych przez klienta, a kierunek musi zgadzać się z jej
+    /// obecnym stanem — dzięki temu operacja jest idempotentna bez osobnej reguły
+    /// „już to robiłeś": drugie kliknięcie tego samego przycisku po prostu nie ma
+    /// przycisku, bo interfejs pokazuje wtedy ten przeciwny.
+    ///
+    /// Minuty przerwy leżą w zasięgu wpisu, więc ich doliczenie nie może zabrać czasu
+    /// żadnej innej pozycji — niezmiennik nakładania zostaje nietknięty.
     /// </summary>
-    public async Task<TimeEntryOperationResult> SubtractGapAsync(
+    public async Task<TimeEntryOperationResult> SetGapCountedAsync(
         int timeEntryId,
         DateTime gapStartAt,
         DateTime gapEndAt,
+        bool counted,
         DateTime nowUtc,
         CancellationToken cancellationToken)
     {
@@ -261,29 +286,36 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
             return new(TimeEntryOperationStatus.Archived, "Wpis rozliczony nie podlega korektom.");
         }
 
-        var gap = DetectedGaps.Deserialize(entry.DetectedGapsJson)
+        var gap = (await entryGaps.LoadForEntryAsync(entry, cancellationToken))
             .FirstOrDefault(candidate => candidate.StartAt == gapStartAt && candidate.EndAt == gapEndAt);
         if (gap is null)
         {
-            return new(TimeEntryOperationStatus.Invalid, "Ta przerwa nie pochodzi z wykrytych przerw wpisu.");
+            return new(TimeEntryOperationStatus.Invalid, "Ta przerwa nie pochodzi z historii tego wpisu.");
         }
 
-        if (entry.Adjustments.Any(adjustment => adjustment.Kind == AdjustmentKind.DetectedGapSubtraction
-                && adjustment.GapStartAt == gapStartAt && adjustment.GapEndAt == gapEndAt))
+        if (gap.Counted == counted)
         {
-            return new(TimeEntryOperationStatus.Conflict, "Ta przerwa została już odjęta.");
+            return new(TimeEntryOperationStatus.Conflict, counted
+                ? "Ta przerwa jest już wliczona w czas wpisu."
+                : "Ta przerwa nie jest wliczona w czas wpisu.");
         }
 
-        var newDuration = entry.DurationMinutes - gap.Minutes;
+        var newDuration = counted ? entry.DurationMinutes + gap.Minutes : entry.DurationMinutes - gap.Minutes;
         if (newDuration <= 0)
         {
             return new(TimeEntryOperationStatus.Conflict, "Po odjęciu przerwy czas wpisu spadłby do zera.");
         }
 
+        if (newDuration > SuggestionOptions.MaxDocumentDurationMinutes)
+        {
+            return new(TimeEntryOperationStatus.Conflict,
+                $"Po doliczeniu przerwy czas wpisu przekroczyłby limit {SuggestionOptions.MaxDocumentDurationMinutes} minut.");
+        }
+
         entry.Adjustments.Add(new TimeEntryAdjustment
         {
-            Minutes = -gap.Minutes,
-            Kind = AdjustmentKind.DetectedGapSubtraction,
+            Minutes = counted ? gap.Minutes : -gap.Minutes,
+            Kind = counted ? AdjustmentKind.GapAddition : AdjustmentKind.DetectedGapSubtraction,
             GapStartAt = gapStartAt,
             GapEndAt = gapEndAt,
             CreatedAt = nowUtc,
@@ -292,6 +324,73 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
 
         await db.SaveChangesAsync(cancellationToken);
         return new(TimeEntryOperationStatus.Success, Entries: [entry]);
+    }
+
+    /// <summary>
+    /// Zaokrągla czas wpisu do wielokrotności jednostki rozliczeniowej
+    /// (<c>BillingIncrementMinutes</c>). Do NAJBLIŻSZEJ wielokrotności, a przy dokładnej
+    /// połowie w DÓŁ: zaokrąglanie w górę „z automatu" powiększa rachunek klienta, a to
+    /// ta sama reguła, przez którą wyleciał domyślny czas dokumentu — gdy wybieramy za
+    /// użytkownika, mylimy się na niekorzyść kancelarii. Minimum to jedna jednostka,
+    /// bo wpis na zero minut nie istnieje. Etykieta przycisku podaje wynik z góry, więc
+    /// kierunek zaokrąglenia nie jest niespodzianką.
+    /// </summary>
+    public async Task<TimeEntryOperationResult> RoundAsync(
+        int timeEntryId,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var entry = await db.TimeEntries
+            .Include(e => e.Case)
+            .Include(e => e.Suggestions)
+            .Include(e => e.Adjustments)
+            .FirstOrDefaultAsync(e => e.Id == timeEntryId, cancellationToken);
+        if (entry is null)
+        {
+            return new(TimeEntryOperationStatus.NotFound, "Wpis czasu nie istnieje.");
+        }
+
+        if (entry.ArchivedAt is not null)
+        {
+            return new(TimeEntryOperationStatus.Archived, "Wpis rozliczony nie podlega korektom.");
+        }
+
+        var rounded = RoundToIncrement(entry.DurationMinutes, options.BillingIncrementMinutes);
+        if (rounded == entry.DurationMinutes)
+        {
+            return new(TimeEntryOperationStatus.Invalid,
+                $"Czas wpisu jest już wielokrotnością {options.BillingIncrementMinutes} min.");
+        }
+
+        if (rounded > SuggestionOptions.MaxDocumentDurationMinutes)
+        {
+            return new(TimeEntryOperationStatus.Conflict,
+                $"Po zaokrągleniu czas wpisu przekroczyłby limit {SuggestionOptions.MaxDocumentDurationMinutes} minut.");
+        }
+
+        db.TimeEntryAdjustments.Add(new TimeEntryAdjustment
+        {
+            TimeEntry = entry,
+            Minutes = rounded - entry.DurationMinutes,
+            Kind = AdjustmentKind.Rounding,
+            CreatedAt = nowUtc,
+        });
+        entry.DurationMinutes = rounded;
+
+        await db.SaveChangesAsync(cancellationToken);
+        return new(TimeEntryOperationStatus.Success, Entries: [entry]);
+    }
+
+    /// <summary>Najbliższa wielokrotność jednostki, połowa w dół, minimum jedna jednostka.</summary>
+    public static int RoundToIncrement(int minutes, int incrementMinutes)
+    {
+        if (incrementMinutes <= 0)
+        {
+            return minutes;
+        }
+
+        var units = (int)Math.Ceiling(minutes / (double)incrementMinutes - 0.5);
+        return Math.Max(1, units) * incrementMinutes;
     }
 
     /// <summary>
@@ -355,7 +454,7 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
             gapEndAt = neighborStart.Value;
         }
 
-        var gapMinutes = (int)Math.Round((gapEndAt - gapStartAt).TotalMinutes);
+        var gapMinutes = FreeGapMinutes(gapStartAt, gapEndAt) ?? 0;
         if (gapMinutes <= 0)
         {
             return new(TimeEntryOperationStatus.Conflict, "Między pozycjami nie ma wolnej przerwy.");
@@ -465,37 +564,43 @@ public class TimeEntryOperationsService(AppDbContext db, IOptions<SuggestionOpti
         var pending = await db.Suggestions
             .Where(suggestion => suggestion.Status == SuggestionStatus.Pending
                 && suggestion.EntryDate >= from && suggestion.EntryDate <= to)
-            .Select(suggestion => new { suggestion.StartedAt, suggestion.DurationMinutes, suggestion.Title })
+            .Select(suggestion => new
+            {
+                suggestion.StartedAt,
+                suggestion.DurationMinutes,
+                suggestion.LastActivityAt,
+                suggestion.Title,
+            })
             .ToListAsync(cancellationToken);
 
         return entries
             .Select(entry => new DayItem(entry.StartedAt, entry.EndedAt, $"wpis „{entry.Description}\""))
             .Concat(pending.Select(suggestion => new DayItem(
                 suggestion.StartedAt,
-                suggestion.StartedAt.AddMinutes(suggestion.DurationMinutes),
+                SuggestionSpan.EndOf(
+                    suggestion.StartedAt, suggestion.DurationMinutes, suggestion.LastActivityAt, businessTimeZone),
                 $"oczekująca sugestia „{suggestion.Title}\"")))
             .ToList();
     }
 
     /// <summary>
+    /// Minuty wolnej przerwy albo null przy zachodzeniu pozycji — PODŁOGA, nie
+    /// zaokrąglenie. Ta sama reguła i to samo uzasadnienie co w
+    /// <see cref="SuggestionOperationsService"/>: minuta zaokrąglona w górę to minuta,
+    /// której w przerwie nie ma, a doliczona zostawia trwałe nakładanie blokujące
+    /// późniejsze operacje na tej osi.
+    /// </summary>
+    private static int? FreeGapMinutes(DateTime startAt, DateTime endAt)
+        => TimeAxis.FreeGapMinutes(startAt, endAt);
+
+    /// <summary>
     /// Niezmiennik nakładania w jednym miejscu: zwraca opis pierwszej pozycji
     /// zachodzącej na przedział [start, end) albo null, gdy przedział jest wolny.
     /// </summary>
-    private async Task<string?> FindBlocker(
-        DateTime start,
-        DateTime end,
-        DateOnly date,
-        IReadOnlyCollection<int> excludeEntryIds,
-        CancellationToken cancellationToken)
-    {
-        var items = await LoadDayItemsAsync(date, excludeEntryIds, cancellationToken);
-        return FindBlockerInItems(items, start, end);
-    }
-
     private static string? FindBlockerInItems(IReadOnlyList<DayItem> items, DateTime start, DateTime end)
         => items
-            .Where(item => item.Start < end && start < item.End)
+            .Where(item => TimeAxis.Overlaps(start, end, item.Start, item.End))
             .OrderBy(item => item.Start)
-            .Select(item => $"{item.Title} ({item.Start:HH\\:mm}–{item.End:HH\\:mm})")
+            .Select(item => BusinessMoment.Describe(item.Title, item.Start, item.End))
             .FirstOrDefault();
 }

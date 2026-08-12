@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
 using TimeSuggestions.Data;
 using TimeSuggestions.Models;
@@ -19,20 +21,29 @@ public enum ApprovalOutcome
 
     /// <summary>Wpis rozliczony (zarchiwizowany) — cofnięcie zatwierdzenia jest zablokowane.</summary>
     TimeEntryArchived,
-
-    /// <summary>Nowy wpis nachodziłby na istniejący — niezmiennik "minuta należy do najwyżej jednego wpisu".</summary>
-    OverlapConflict,
 }
 
-/// <summary>Jawny wynik zamiast wyjątków — kontroler tłumaczy go na kody HTTP.</summary>
-public record ApprovalResult(ApprovalOutcome Outcome, TimeEntry? CreatedEntry = null, string? Error = null);
+/// <summary>
+/// Jawny wynik zamiast wyjątków — kontroler tłumaczy go na kody HTTP.
+/// <paramref name="Notice"/> to informacja o tym, co zrobiliśmy z zasięgiem wpisu
+/// (przycięcie do sąsiada, pozostałe nakładanie). NIE jest błędem: zatwierdzenie się
+/// udało, a prawnik ma wiedzieć, czemu godziny wyglądają inaczej, niż się spodziewał.
+/// </summary>
+public record ApprovalResult(
+    ApprovalOutcome Outcome,
+    TimeEntry? CreatedEntry = null,
+    string? Error = null,
+    string? Notice = null);
 
 /// <summary>
 /// Zatwierdzanie i odrzucanie sugestii. Odrzucenie zmienia tylko status (bez usuwania
 /// z bazy) — fizyczne usunięcie sprawiłoby, że kolejna synchronizacja przywróci sugestię.
 /// </summary>
-public class ApprovalService(AppDbContext db)
+public class ApprovalService(AppDbContext db, IOptions<SuggestionOptions> optionsAccessor)
 {
+    private readonly TimeZoneInfo businessTimeZone =
+        TimeZoneInfo.FindSystemTimeZoneById(optionsAccessor.Value.BusinessTimeZoneId);
+
     public async Task<ApprovalResult> ApproveAsync(
         int suggestionId,
         ApproveSuggestionRequest request,
@@ -58,36 +69,66 @@ public class ApprovalService(AppDbContext db)
             return new ApprovalResult(ApprovalOutcome.CaseNotFound);
         }
 
-        // Niezmiennik nakładania: nowy wpis nie może zachodzić na żaden istniejący
-        // (dowolnego źródła, także rozliczony — rozliczona minuta to nadal minuta).
-        // 409 z nazwą blokującego wpisu zamiast cichego nakładu. Dzień ±1, bo
-        // spotkanie kalendarzowe może przechodzić przez północ.
-        var newStart = suggestion.StartedAt;
-        var newEnd = suggestion.StartedAt.AddMinutes(request.DurationMinutes);
+        // NAKŁADANIE NIE ODRZUCA ZATWIERDZENIA. Niezmiennik „minuta należy do najwyżej
+        // jednego wpisu" trzymamy PRZYCINAJĄC ZASIĘG do najbliższej pozycji, a nie
+        // odmawiając rozliczenia. Powód jest twardy: koniec zasięgu liczony z minut to
+        // wartość POCHODNA (prawnik mógł poprawić czas ręcznie, sesja mogła zostać
+        // scalona), a nie fakt z historii pliku — i potrafił zachodzić na sąsiada
+        // o kilkanaście SEKUND, których interfejs w ogóle nie pokazuje. Tak powstała
+        // odmowa „Ten czas nachodzi na wpis (00:07–03:31)" dla sugestii 23:53–00:02,
+        // czyli pracy skończonej pięć minut przed tamtym wpisem: komunikat był
+        // nielogiczny, bo porównywał wyświetlane minuty, a decyzja zapadała na sekundach.
+        // W rozliczaniu czasu odmowa jest najgorszym możliwym wyjściem — zostawia pracę,
+        // której nie da się rozliczyć. Przycięcie nie rusza rozliczanych minut (zasięg to
+        // teren, czas to rachunek) i jest nazwane w komunikacie.
         var neighborFrom = suggestion.EntryDate.AddDays(-1);
         var neighborTo = suggestion.EntryDate.AddDays(1);
-        var blocking = await db.TimeEntries
-            .Where(entry => entry.EntryDate >= neighborFrom && entry.EntryDate <= neighborTo
-                && entry.StartedAt < newEnd && newStart < entry.EndedAt)
-            .OrderBy(entry => entry.StartedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (blocking is not null)
-        {
-            // Blokujący wpis powstał z TEJ SAMEJ sugestii = przegrany wyścig podwójnego
-            // zatwierdzenia (nasz odczyt statusu był stary) — to inny komunikat niż
-            // kolizja z cudzym wpisem. AsNoTracking: nasz kontekst śledzi sugestię
-            // ze STARYM TimeEntryId, a tu potrzebujemy świeżej wartości z bazy.
-            var linkedToSameSuggestion = await db.Suggestions.AsNoTracking()
-                .AnyAsync(fresh => fresh.Id == suggestion.Id && fresh.TimeEntryId == blocking.Id, cancellationToken);
-            if (linkedToSameSuggestion)
-            {
-                return new ApprovalResult(ApprovalOutcome.AlreadyApproved);
-            }
+        var neighbors = await db.TimeEntries
+            .AsNoTracking()
+            .Where(entry => entry.EntryDate >= neighborFrom && entry.EntryDate <= neighborTo)
+            .Select(entry => new { entry.StartedAt, entry.EndedAt, entry.Description })
+            .ToListAsync(cancellationToken);
 
-            return new ApprovalResult(
-                ApprovalOutcome.OverlapConflict,
-                Error: $"Ten czas nachodzi na istniejący wpis „{blocking.Description}\" " +
-                    $"({blocking.StartedAt:HH\\:mm}–{blocking.EndedAt:HH\\:mm}).");
+        var newStart = suggestion.StartedAt;
+        // Koniec wpisu = koniec ZASIĘGU sugestii, a nie koniec liczonego czasu. Po
+        // scaleniu sesji te dwie granice to co innego (patrz SuggestionSpan) i liczenie
+        // po czasie kończyło wpis w środku pracy: druga, krótsza sesja wypadała poza
+        // wpis — nie było jej w podświetleniu historii wersji, a jej minuty uchodziły
+        // za wolne, choć wpis już je rozliczał.
+        var wantedEnd = SuggestionSpan.EndOf(
+            suggestion.StartedAt, request.DurationMinutes, suggestion.LastActivityAt, businessTimeZone);
+
+        var nextStart = neighbors
+            .Where(entry => entry.StartedAt >= newStart && entry.StartedAt < wantedEnd)
+            .Select(entry => (DateTime?)entry.StartedAt)
+            .Min();
+        var newEnd = nextStart ?? wantedEnd;
+        if (newEnd < newStart)
+        {
+            newEnd = newStart;
+        }
+
+        // Pozycja zaczynająca się PRZED nami i sięgająca za nasz początek to jedyne
+        // nakładanie, którego przycięciem końca nie da się usunąć (praca nad dokumentem
+        // w trakcie rozliczonego spotkania to realny przypadek, nie błąd danych).
+        // Wpis i tak powstaje: dane mówią, że obie rzeczy się wydarzyły, a decyzja
+        // o rozliczeniu należy do prawnika. Mówimy mu o tym wprost.
+        var overlapping = neighbors
+            .Where(entry => entry.StartedAt < newEnd && newStart < entry.EndedAt)
+            .OrderBy(entry => entry.StartedAt)
+            .FirstOrDefault();
+
+        string? notice = null;
+        if (overlapping is not null)
+        {
+            notice = $"Uwaga: ten czas pokrywa się z wpisem „{overlapping.Description}\" "
+                + $"({BusinessMoment.Format(overlapping.StartedAt)}–{BusinessMoment.Format(overlapping.EndedAt)}). "
+                + "Wpis powstał, ale sprawdź, czy tych minut nie liczysz dwa razy.";
+        }
+        else if (nextStart is not null && wantedEnd > newEnd)
+        {
+            notice = $"Godziny wpisu kończą się o {BusinessMoment.Format(newEnd)}, bo tam zaczyna się "
+                + $"kolejna pozycja. Rozliczany czas ({request.DurationMinutes} min) został bez zmian.";
         }
 
         var timeEntry = new TimeEntry
@@ -95,10 +136,10 @@ public class ApprovalService(AppDbContext db)
             CaseId = selectedCase.Id,
             Case = selectedCase,
             EntryDate = suggestion.EntryDate,
-            // Godziny wpisu ze StartedAt sugestii + finalnego czasu — od tej pory wpis
-            // sam zna swoje położenie na osi dnia (niezmiennik nakładania, oś czasu).
-            StartedAt = suggestion.StartedAt,
-            EndedAt = suggestion.StartedAt.AddMinutes(request.DurationMinutes),
+            // Godziny wpisu z zasięgu sugestii — od tej pory wpis sam zna swoje
+            // położenie na osi dnia (niezmiennik nakładania, oś czasu).
+            StartedAt = newStart,
+            EndedAt = newEnd,
             DurationMinutes = request.DurationMinutes,
             Description = request.Description,
             CreatedFromSuggestion = true,
@@ -125,7 +166,7 @@ public class ApprovalService(AppDbContext db)
             return new ApprovalResult(ApprovalOutcome.AlreadyApproved);
         }
 
-        return new ApprovalResult(ApprovalOutcome.Success, timeEntry);
+        return new ApprovalResult(ApprovalOutcome.Success, timeEntry, Notice: notice);
     }
 
     public async Task<ApprovalResult> RejectAsync(

@@ -58,10 +58,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .Property(s => s.Status)
             .IsConcurrencyToken();
 
-        // Dziennik wersji jest append-only: powtórny sync tych samych wersji nie może
-        // duplikować faktów, więc klucz naturalny (plik, wersja) domyka indeks unikalny.
+        // Dziennik jest append-only: powtórny sync tych samych faktów nie może ich
+        // duplikować. Klucz naturalny obejmuje MOMENT, bo ta sama wersja Worda online
+        // jest zapisywana wielokrotnie, za każdym razem z późniejszym
+        // lastModifiedDateTime — uzasadnienie przy DocumentActivity.
         modelBuilder.Entity<DocumentActivity>()
-            .HasIndex(activity => new { activity.ExternalId, activity.VersionId })
+            .HasIndex(activity => new { activity.ExternalId, activity.VersionId, activity.OccurredAt })
             .IsUnique();
 
         // Filtrowanie aktywne/archiwum (ArchivedAt == null / != null) to główna oś

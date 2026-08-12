@@ -18,4 +18,8 @@ public enum AdjustmentKind
 
     /// <summary>Dokładna edycja czasu przez ścieżkę approve/edit.</summary>
     ManualEdit,
+
+    /// <summary>Zaokrąglenie do jednostki rozliczeniowej — osobny rodzaj, bo to inna
+    /// decyzja niż korekta „o tyle a tyle minut" i wpis ma to pokazywać wprost.</summary>
+    Rounding,
 }

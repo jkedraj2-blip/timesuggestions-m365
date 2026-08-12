@@ -12,7 +12,8 @@ public class TimeEntriesController(
     AppDbContext db,
     ApprovalService approvalService,
     ArchiveService archiveService,
-    TimeEntryOperationsService operationsService) : ControllerBase
+    TimeEntryOperationsService operationsService,
+    TimeEntryViewService entryView) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<TimeEntriesResponse>> GetTimeEntries(
@@ -30,13 +31,18 @@ public class TimeEntriesController(
             .ThenByDescending(entry => entry.Id)
             .ToListAsync(cancellationToken);
 
+        // Przerwy i etykiety sesji liczone RAZ dla całej listy (dwa zapytania), a nie
+        // per wpis — inaczej widok dnia z dwudziestoma wpisami robi czterdzieści rund.
+        var views = await entryView.BuildManyAsync(entries, notice: null, cancellationToken);
+        var viewById = views.ToDictionary(view => view.Id);
+
         // Grupowanie po dniach z sumami — UI dostaje gotowe liczby zamiast liczyć je samo.
         var days = entries
             .GroupBy(entry => entry.EntryDate)
             .Select(group => new TimeEntryDayDto(
                 group.Key,
                 group.Sum(entry => entry.DurationMinutes),
-                group.Select(TimeEntryDto.FromEntity).ToList()))
+                group.Select(entry => viewById[entry.Id]).ToList()))
             .ToList();
 
         return Ok(new TimeEntriesResponse(entries.Sum(entry => entry.DurationMinutes), days));
@@ -54,13 +60,24 @@ public class TimeEntriesController(
         return Ok(result);
     }
 
+    /// <summary>
+    /// Rozlicza pojedynczy wpis. Osobno od rozliczania zakresu dat, bo gotowość do
+    /// faktury jest cechą wpisu, nie dnia: część pracy z danego dnia bywa jeszcze
+    /// do sprawdzenia, a rozliczanie hurtem zabierało ją razem z gotową.
+    /// </summary>
+    [HttpPost("{id:int}/archive")]
+    public async Task<ActionResult<TimeEntryDto>> ArchiveEntry(int id, CancellationToken cancellationToken)
+        => await ToResponseAsync(
+            await archiveService.ArchiveTimeEntryAsync(id, DateTime.UtcNow, cancellationToken),
+            cancellationToken);
+
     /// <summary>Scala wpisy jednej sesji dokumentu; zwraca wynikowy wpis.</summary>
     [HttpPost("merge")]
     public async Task<ActionResult<TimeEntryDto>> Merge(
         MergeTimeEntriesRequest request,
         CancellationToken cancellationToken)
-        => ToResponse(await operationsService.MergeAsync(
-            request.TimeEntryIds, request.IncludeGaps, DateTime.UtcNow, cancellationToken));
+        => await ToResponseAsync(await operationsService.MergeAsync(
+            request.TimeEntryIds, request.IncludeGaps, DateTime.UtcNow, cancellationToken), cancellationToken);
 
     /// <summary>Odwraca scalenie — przywraca wpisy składowe z ich sesji.</summary>
     [HttpPost("{id:int}/unmerge")]
@@ -68,18 +85,35 @@ public class TimeEntriesController(
     {
         var result = await operationsService.UnmergeAsync(id, DateTime.UtcNow, cancellationToken);
         return result.Status == TimeEntryOperationStatus.Success
-            ? Ok(result.Entries!.Select(TimeEntryDto.FromEntity).ToList())
+            ? Ok(await entryView.BuildManyAsync(result.Entries!, notice: null, cancellationToken))
             : ToError(result);
     }
 
-    /// <summary>Odejmuje wykrytą przerwę (idempotentnie — druga próba na tę samą lukę → 409).</summary>
+    /// <summary>Wyłącza przerwę z rozliczanego czasu wpisu (przerwa zostaje w jego godzinach).</summary>
     [HttpPost("{id:int}/subtract-gap")]
     public async Task<ActionResult<TimeEntryDto>> SubtractGap(
         int id,
         SubtractGapRequest request,
         CancellationToken cancellationToken)
-        => ToResponse(await operationsService.SubtractGapAsync(
-            id, request.GapStartAt!.Value, request.GapEndAt!.Value, DateTime.UtcNow, cancellationToken));
+        => await ToResponseAsync(await operationsService.SetGapCountedAsync(
+            id, request.GapStartAt!.Value, request.GapEndAt!.Value, counted: false, DateTime.UtcNow, cancellationToken),
+            cancellationToken);
+
+    /// <summary>Dolicza z powrotem przerwę leżącą w godzinach wpisu (np. po scaleniu sesji).</summary>
+    [HttpPost("{id:int}/add-gap")]
+    public async Task<ActionResult<TimeEntryDto>> AddGap(
+        int id,
+        SubtractGapRequest request,
+        CancellationToken cancellationToken)
+        => await ToResponseAsync(await operationsService.SetGapCountedAsync(
+            id, request.GapStartAt!.Value, request.GapEndAt!.Value, counted: true, DateTime.UtcNow, cancellationToken),
+            cancellationToken);
+
+    /// <summary>Zaokrągla czas wpisu do jednostki rozliczeniowej z konfiguracji.</summary>
+    [HttpPost("{id:int}/round")]
+    public async Task<ActionResult<TimeEntryDto>> Round(int id, CancellationToken cancellationToken)
+        => await ToResponseAsync(
+            await operationsService.RoundAsync(id, DateTime.UtcNow, cancellationToken), cancellationToken);
 
     /// <summary>Dolicza wolną lukę do sąsiedniej pozycji na osi dnia — minuty liczy serwer.</summary>
     [HttpPost("{id:int}/claim-gap")]
@@ -87,8 +121,8 @@ public class TimeEntriesController(
         int id,
         ClaimGapRequest request,
         CancellationToken cancellationToken)
-        => ToResponse(await operationsService.ClaimGapAsync(
-            id, request.Direction!.Value, DateTime.UtcNow, cancellationToken));
+        => await ToResponseAsync(await operationsService.ClaimGapAsync(
+            id, request.Direction!.Value, DateTime.UtcNow, cancellationToken), cancellationToken);
 
     /// <summary>Szybka korekta ±N minut.</summary>
     [HttpPost("{id:int}/adjust")]
@@ -96,11 +130,15 @@ public class TimeEntriesController(
         int id,
         AdjustTimeEntryRequest request,
         CancellationToken cancellationToken)
-        => ToResponse(await operationsService.AdjustAsync(id, request.Minutes, DateTime.UtcNow, cancellationToken));
+        => await ToResponseAsync(
+            await operationsService.AdjustAsync(id, request.Minutes, DateTime.UtcNow, cancellationToken),
+            cancellationToken);
 
-    private ActionResult<TimeEntryDto> ToResponse(TimeEntryOperationResult result)
+    private async Task<ActionResult<TimeEntryDto>> ToResponseAsync(
+        TimeEntryOperationResult result,
+        CancellationToken cancellationToken)
         => result.Status == TimeEntryOperationStatus.Success
-            ? Ok(TimeEntryDto.FromEntity(result.Entries![0]))
+            ? Ok(await entryView.BuildAsync(result.Entries![0], notice: null, cancellationToken))
             : ToError(result);
 
     private ActionResult ToError(TimeEntryOperationResult result) => result.Status switch

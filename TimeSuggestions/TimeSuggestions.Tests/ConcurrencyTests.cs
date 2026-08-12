@@ -85,12 +85,12 @@ public sealed class ConcurrencyTests : IDisposable
 
         using (var other = CreateContext())
         {
-            var otherResult = await new ApprovalService(other)
+            var otherResult = await new ApprovalService(other, TestHelpers.DefaultOptions())
                 .ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None);
             Assert.Equal(ApprovalOutcome.Success, otherResult.Outcome);
         }
 
-        var result = await new ApprovalService(db)
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions())
             .ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None);
 
         Assert.Equal(ApprovalOutcome.AlreadyApproved, result.Outcome);
@@ -108,8 +108,8 @@ public sealed class ConcurrencyTests : IDisposable
         using var db2 = CreateContext();
 
         var results = await Task.WhenAll(
-            new ApprovalService(db1).ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None),
-            new ApprovalService(db2).ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None));
+            new ApprovalService(db1, TestHelpers.DefaultOptions()).ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None),
+            new ApprovalService(db2, TestHelpers.DefaultOptions()).ApproveAsync(suggestionId, CreateApproveRequest(), Now, CancellationToken.None));
 
         Assert.Equal(1, results.Count(result => result.Outcome == ApprovalOutcome.Success));
         // Przegrany dostaje AlreadyApproved (przy przeplocie odczytów) albo

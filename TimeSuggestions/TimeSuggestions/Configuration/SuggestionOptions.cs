@@ -1,4 +1,4 @@
-namespace TimeSuggestions.Configuration;
+﻿namespace TimeSuggestions.Configuration;
 
 /// <summary>
 /// Parametry reguł biznesowych sugestii. Wartości pochodzą z sekcji "Suggestions"
@@ -22,8 +22,13 @@ public class SuggestionOptions
     /// <summary>Minimalny czas trwania spotkania w minutach; krótsze są odfiltrowywane (dokładnie ta wartość przechodzi).</summary>
     public int MinimumEventDurationMinutes { get; set; } = 5;
 
-    /// <summary>Domyślny czas trwania sugestii z dokumentu — Graph nie mówi, jak długo trwała edycja, tylko kiedy była.</summary>
-    public int DefaultDocumentDurationMinutes { get; set; } = 30;
+    /// <summary>
+    /// Najdłuższa luka, którą wolno jednym kliknięciem doliczyć do sąsiedniej pozycji.
+    /// Wolna godzina między sesjami bywa pracą nad tą samą sprawą poza dokumentem,
+    /// ale kilkugodzinna dziura to już nie „przerwa" tylko inna część dnia — oferowanie
+    /// jej do doliczenia zachęcałoby do zawyżania rozliczenia.
+    /// </summary>
+    public int MaxClaimableGapMinutes { get; set; } = 120;
 
     /// <summary>
     /// Okno synchronizacji wstecz w dniach. Frontend ma własny odpowiednik
@@ -54,13 +59,14 @@ public class SuggestionOptions
     /// </summary>
     public int SessionFlaggedGapMinutes { get; set; } = 30;
 
-    /// <summary>
-    /// Rozbieg sesji: wersja to moment ZAPISU, nie otwarcia pliku — sesja zaczyna się
-    /// tyle minut przed pierwszą wersją (przycięte do północy dnia biznesowego,
-    /// bo sesje nie przechodzą granicy dnia).
-    /// </summary>
-    public int SessionLeadInMinutes { get; set; } = 10;
-
     /// <summary>Minimalny czas sesji — sesja z jedną wersją nie może wyjść zerowa.</summary>
     public int MinimumSessionMinutes { get; set; } = 5;
+
+    /// <summary>
+    /// Jednostka rozliczeniowa kancelarii: do jej wielokrotności zaokrągla przycisk
+    /// „Zaokrąglij" (pół godziny daje wpisy typu 30 min, 1 godz., 1,5 godz.). Wartość
+    /// jest w konfiguracji, bo jednostka to ustalenie z klientem, nie stała programu —
+    /// kancelarie rozliczają się w kwadransach, pół- albo dziesiątych godziny.
+    /// </summary>
+    public int BillingIncrementMinutes { get; set; } = 30;
 }

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TimeSuggestions.Data;
 
@@ -10,9 +11,11 @@ using TimeSuggestions.Data;
 namespace TimeSuggestions.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811194245_AddSuggestionNeedsTimeReview")]
+    partial class AddSuggestionNeedsTimeReview
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
@@ -122,7 +125,7 @@ namespace TimeSuggestions.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ExternalId", "VersionId", "OccurredAt")
+                    b.HasIndex("ExternalId", "VersionId")
                         .IsUnique();
 
                     b.ToTable("DocumentActivities");
@@ -155,12 +158,6 @@ namespace TimeSuggestions.Migrations
 
                     b.Property<bool>("IsAmbiguous")
                         .HasColumnType("INTEGER");
-
-                    b.Property<bool>("IsUserAdjusted")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("LastActivityAt")
-                        .HasColumnType("TEXT");
 
                     b.Property<bool>("NeedsTimeReview")
                         .HasColumnType("INTEGER");

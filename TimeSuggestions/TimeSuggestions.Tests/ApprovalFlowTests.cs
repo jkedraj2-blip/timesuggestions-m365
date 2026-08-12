@@ -28,7 +28,7 @@ public sealed class ApprovalFlowTests : IDisposable
         db = new AppDbContext(options);
         db.Database.EnsureCreated();
 
-        approvalService = new ApprovalService(db);
+        approvalService = new ApprovalService(db, TestHelpers.DefaultOptions());
     }
 
     public void Dispose()

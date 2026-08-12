@@ -1,6 +1,10 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
+using TimeSuggestions.Data;
 using TimeSuggestions.Models;
+using TimeSuggestions.Services;
 
 namespace TimeSuggestions.Tests;
 
@@ -8,6 +12,20 @@ namespace TimeSuggestions.Tests;
 public static class TestHelpers
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Progi i strefa biznesowa w wartościach domyślnych — tych samych co appsettings.</summary>
+    public static IOptions<SuggestionOptions> DefaultOptions() => Options.Create(new SuggestionOptions());
+
+    /// <summary>Strefa biznesowa do porównań czasu w asercjach.</summary>
+    public static TimeZoneInfo BusinessTimeZone()
+        => TimeZoneInfo.FindSystemTimeZoneById(new SuggestionOptions().BusinessTimeZoneId);
+
+    /// <summary>
+    /// Oś czasu z zależnościami złożonymi tak jak w Program.cs — historia dokumentu
+    /// podaje dziś także stan pozycji, więc potrzebuje przerw i numeracji sesji.
+    /// </summary>
+    public static TimelineService Timeline(AppDbContext db)
+        => new(db, DefaultOptions(), new EntryGapService(db, DefaultOptions()), new SessionLabelService(db));
 
     public static List<CalendarEventDto> LoadCalendarEventsFixture()
     {

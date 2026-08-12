@@ -32,11 +32,13 @@ public sealed class TimeEntriesControllerTests : IDisposable
         db = new AppDbContext(options);
         db.Database.EnsureCreated();
 
+        var entryGaps = new EntryGapService(db, TestHelpers.DefaultOptions());
         controller = new TimeEntriesController(
             db,
-            new ApprovalService(db),
+            new ApprovalService(db, TestHelpers.DefaultOptions()),
             new ArchiveService(db),
-            new TimeEntryOperationsService(db, Options.Create(new SuggestionOptions())));
+            new TimeEntryOperationsService(db, TestHelpers.DefaultOptions(), entryGaps),
+            new TimeEntryViewService(entryGaps, new SessionLabelService(db), TestHelpers.DefaultOptions()));
     }
 
     public void Dispose()

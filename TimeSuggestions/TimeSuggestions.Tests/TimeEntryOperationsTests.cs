@@ -32,7 +32,8 @@ public sealed class TimeEntryOperationsTests : IDisposable
         db = new AppDbContext(options);
         db.Database.EnsureCreated();
 
-        operations = new TimeEntryOperationsService(db, Options.Create(new SuggestionOptions()));
+        operations = new TimeEntryOperationsService(
+            db, TestHelpers.DefaultOptions(), new EntryGapService(db, TestHelpers.DefaultOptions()));
     }
 
     public void Dispose()
@@ -235,8 +236,8 @@ public sealed class TimeEntryOperationsTests : IDisposable
         var gaps = DetectedGaps.Serialize([new DetectedGap(At(9, 30), At(9, 50))]);
         var entry = SeedDocumentEntry("file-1", At(9), 60, detectedGapsJson: gaps);
 
-        var result = await operations.SubtractGapAsync(
-            entry.Id, At(9, 30), At(9, 50), Now, CancellationToken.None);
+        var result = await operations.SetGapCountedAsync(
+            entry.Id, At(9, 30), At(9, 50), counted: false, Now, CancellationToken.None);
 
         Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
         var updated = await db.TimeEntries.Include(e => e.Adjustments).SingleAsync();
@@ -251,10 +252,10 @@ public sealed class TimeEntryOperationsTests : IDisposable
     {
         var gaps = DetectedGaps.Serialize([new DetectedGap(At(9, 30), At(9, 50))]);
         var entry = SeedDocumentEntry("file-1", At(9), 60, detectedGapsJson: gaps);
-        await operations.SubtractGapAsync(entry.Id, At(9, 30), At(9, 50), Now, CancellationToken.None);
+        await operations.SetGapCountedAsync(entry.Id, At(9, 30), At(9, 50), counted: false, Now, CancellationToken.None);
 
-        var rerun = await operations.SubtractGapAsync(
-            entry.Id, At(9, 30), At(9, 50), Now, CancellationToken.None);
+        var rerun = await operations.SetGapCountedAsync(
+            entry.Id, At(9, 30), At(9, 50), counted: false, Now, CancellationToken.None);
 
         Assert.Equal(TimeEntryOperationStatus.Conflict, rerun.Status);
         Assert.Equal(40, (await db.TimeEntries.SingleAsync()).DurationMinutes);
@@ -265,8 +266,8 @@ public sealed class TimeEntryOperationsTests : IDisposable
     {
         var entry = SeedDocumentEntry("file-1", At(9), 60);
 
-        var result = await operations.SubtractGapAsync(
-            entry.Id, At(9, 30), At(9, 50), Now, CancellationToken.None);
+        var result = await operations.SetGapCountedAsync(
+            entry.Id, At(9, 30), At(9, 50), counted: false, Now, CancellationToken.None);
 
         Assert.Equal(TimeEntryOperationStatus.Invalid, result.Status);
     }
@@ -351,21 +352,53 @@ public sealed class TimeEntryOperationsTests : IDisposable
         Assert.Equal(TimeEntryOperationStatus.Conflict, aboveMax.Status);
     }
 
+    /// <summary>
+    /// Nakładanie NIE odrzuca zatwierdzenia. Sugestia zaczynająca się w środku cudzego
+    /// wpisu to realny przypadek (dokument zapisany w trakcie rozliczonego spotkania),
+    /// a nie błąd danych — odmowa zostawiałaby prawnika z pracą, której nie da się
+    /// rozliczyć. Wpis powstaje, a komunikat nazywa pokrycie po imieniu.
+    /// </summary>
     [Fact]
-    public async Task ApproveAsync_409GdyNowyWpisNachodziNaIstniejacy()
+    public async Task ApproveAsync_PokrycieZInnymWpisemNieBlokuje()
     {
         SeedDocumentEntry("file-1", At(9), 60, description: "Zajęte minuty"); // 09:00–10:00
         var suggestion = SeedPendingSuggestion(At(9, 30), 30);
 
-        var result = await new ApprovalService(db).ApproveAsync(
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
             suggestion.Id,
             new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 30, Description = "Praca" },
             Now,
             CancellationToken.None);
 
-        Assert.Equal(ApprovalOutcome.OverlapConflict, result.Outcome);
-        Assert.Contains("Zajęte minuty", result.Error);
-        Assert.Equal(1, await db.TimeEntries.CountAsync());
+        Assert.Equal(ApprovalOutcome.Success, result.Outcome);
+        Assert.Contains("Zajęte minuty", result.Notice);
+        Assert.Equal(30, result.CreatedEntry!.DurationMinutes);
+        Assert.Equal(2, await db.TimeEntries.CountAsync());
+    }
+
+    /// <summary>
+    /// Sedno zgłoszonej nielogicznej odmowy: koniec liczony z minut wychodził SEKUNDY
+    /// za początek sąsiada, a komunikat pokazywał obie godziny jako równe (00:07).
+    /// Zasięg przycinamy do sąsiada, rozliczanego czasu nie ruszamy.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_PrzycinaZasiegDoSasiadaZamiastOdmawiac()
+    {
+        // Sąsiad zaczyna 10:00:10; sugestia 09:00 + 60 min sięgałaby 10:00:00 tylko
+        // pozornie — sekundy startu przesuwają koniec za jego początek.
+        SeedDocumentEntry("file-2", new DateTime(2026, 7, 24, 10, 0, 10), 30, description: "Kolejna praca");
+        var suggestion = SeedPendingSuggestion(new DateTime(2026, 7, 24, 9, 0, 20), 60);
+
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
+            suggestion.Id,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 60, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.Success, result.Outcome);
+        Assert.Equal(new DateTime(2026, 7, 24, 10, 0, 10), result.CreatedEntry!.EndedAt);
+        Assert.Equal(60, result.CreatedEntry.DurationMinutes);
+        Assert.Contains("10:00:10", result.Notice);
     }
 
     [Fact]
@@ -375,7 +408,7 @@ public sealed class TimeEntryOperationsTests : IDisposable
         SeedDocumentEntry("file-1", At(9), 60); // 09:00–10:00
         var suggestion = SeedPendingSuggestion(At(10), 30);
 
-        var result = await new ApprovalService(db).ApproveAsync(
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
             suggestion.Id,
             new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 30, Description = "Praca" },
             Now,

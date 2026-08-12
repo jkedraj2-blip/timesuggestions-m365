@@ -36,6 +36,19 @@ public class Suggestion
 
     public int DurationMinutes { get; set; }
 
+    /// <summary>
+    /// Ostatnia znana modyfikacja stojąca za sugestią (UTC): koniec sesji dla dokumentu
+    /// z historią wersji, ostatni zapis pliku dla dokumentu bez niej, koniec spotkania
+    /// dla kalendarza. Pełni dwie role:
+    /// (1) porządek listy — prawnik szuka tego, przy czym właśnie był, a nie tego,
+    ///     co zaczął rano, więc lista idzie malejąco po tej kolumnie, nie po StartedAt;
+    /// (2) zasięg rozstrzygnięcia — po zatwierdzeniu sugestii przedział
+    ///     [SessionAnchor, LastActivityAt] jest już rozliczony, a późniejsza praca nad
+    ///     tym samym plikiem musi dać NOWĄ sugestię. Dla rozstrzygniętych wartość jest
+    ///     zamrożona (sync odświeża wyłącznie oczekujące), więc zasięg się nie rozjeżdża.
+    /// </summary>
+    public DateTime LastActivityAt { get; set; }
+
     /// <summary>Dopasowana sprawa; null przy braku dopasowania lub niejednoznaczności.</summary>
     public int? CaseId { get; set; }
 
@@ -51,6 +64,24 @@ public class Suggestion
     /// Kolumna zamiast tabeli — uzasadnienie przy DetectedGaps.Serialize.
     /// </summary>
     public string? DetectedGapsJson { get; set; }
+
+    /// <summary>
+    /// Czasu nie da się wyliczyć z historii — użytkownik ma go wpisać sam.
+    /// Ustawiane dla sesji z JEDNĄ wersją: jeden zapis nie mówi nic o długości pracy,
+    /// więc zamiast zgadywać, sugestia dostaje minimum i jawne "czas do uzupełnienia".
+    /// Reguła: gdy zgadujemy, mylimy się na niekorzyść kancelarii, nie klienta.
+    /// </summary>
+    public bool NeedsTimeReview { get; set; }
+
+    /// <summary>
+    /// Prawnik sam poprawił czas tej sugestii (doliczył wolną lukę, scalił dwie sesje).
+    /// Od tej chwili synchronizacja jej NIE przelicza i nie odtwarza sesji leżących
+    /// w jej zasięgu [SessionAnchor, LastActivityAt] — inaczej najbliższy sync cofnąłby
+    /// decyzję człowieka do wartości wyliczonej z historii wersji, a scalone sesje
+    /// wróciłyby jako osobne sugestie. Dane ze źródła nieopisujące czasu (nazwa pliku,
+    /// dopasowanie sprawy) odświeżają się dalej.
+    /// </summary>
+    public bool IsUserAdjusted { get; set; }
 
     public SuggestionStatus Status { get; set; } = SuggestionStatus.Pending;
 

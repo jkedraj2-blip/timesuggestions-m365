@@ -522,6 +522,33 @@ public sealed class TimeEntryOperationsTests : IDisposable
         Assert.Contains("10:00", result.Notice);
     }
 
+    /// <summary>
+    /// Sąsiad zaczynający się DOKŁADNIE w momencie startu sugestii nie daje się przyciąć:
+    /// koniec zjeżdżał wtedy do początku i powstawał wpis o zerowym zasięgu, z zachowanym
+    /// czasem do rozliczenia. Taki wpis nie zajmuje na osi dnia ani minuty, więc jego czas
+    /// wyglądał na wolny i mógł zostać doliczony drugi raz gdzie indziej. Układ jest realny:
+    /// spotkanie 18:30–19:00 i praca nad dokumentem zaczęta o 18:30. Przycięcie ma sens
+    /// wyłącznie wobec sąsiada zaczynającego się PÓŹNIEJ; równy start to nakładanie,
+    /// o którym się uprzedza, a nie usterka do naprawienia zasięgiem.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_SasiadOTejSamejGodzinieStartuNieZerujeZasiegu()
+    {
+        SeedPendingSuggestion(At(18, 30), 30, title: "Spotkanie"); // 18:30–19:00
+        var suggestion = SeedPendingDocumentSuggestion("file-1", At(18, 30), 5);
+
+        var result = await new ApprovalService(db, TestHelpers.DefaultOptions()).ApproveAsync(
+            suggestion.Id,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 5, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+
+        Assert.Equal(ApprovalOutcome.Success, result.Outcome);
+        Assert.Equal(At(18, 30), result.CreatedEntry!.StartedAt);
+        Assert.Equal(At(18, 35), result.CreatedEntry.EndedAt);
+        Assert.Contains("pokrywa się", result.Notice);
+    }
+
     /// <summary>A5: pokrycie z oczekującą sugestią „od tyłu" daje Notice z jej nazwą, jak przy wpisie.</summary>
     [Fact]
     public async Task ApproveAsync_PokrycieZOczekujacaSugestiaDajeNotice()

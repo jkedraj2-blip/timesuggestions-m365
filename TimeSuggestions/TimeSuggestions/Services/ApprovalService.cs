@@ -130,15 +130,18 @@ public class ApprovalService(AppDbContext db, IOptions<SuggestionOptions> option
         var wantedEnd = SuggestionSpan.EndOf(
             suggestion.StartedAt, request.DurationMinutes, suggestion.LastActivityAt, businessTimeZone);
 
+        // Sąsiad musi zaczynać się PÓŹNIEJ niż my, żeby przycięcie cokolwiek dało.
+        // Przy równym starcie (spotkanie 18:30–19:00 i praca nad dokumentem zaczęta
+        // o 18:30 to zwykły układ w danych) koniec zjeżdżał do początku i powstawał wpis
+        // o zerowym zasięgu z nietkniętym czasem do rozliczenia — nie zajmował na osi
+        // dnia ani minuty, więc jego czas wyglądał na wolny i dawał się doliczyć drugi
+        // raz gdzie indziej. Równy start to nakładanie, o którym się uprzedza (niżej),
+        // a nie usterka do naprawienia zasięgiem.
         var nextStart = neighbors
-            .Where(entry => entry.StartedAt >= newStart && entry.StartedAt < wantedEnd)
+            .Where(entry => entry.StartedAt > newStart && entry.StartedAt < wantedEnd)
             .Select(entry => (DateTime?)entry.StartedAt)
             .Min();
         var newEnd = nextStart ?? wantedEnd;
-        if (newEnd < newStart)
-        {
-            newEnd = newStart;
-        }
 
         // Pozycja zaczynająca się PRZED nami i sięgająca za nasz początek to jedyne
         // nakładanie, którego przycięciem końca nie da się usunąć (praca nad dokumentem

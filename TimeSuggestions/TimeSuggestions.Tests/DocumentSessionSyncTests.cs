@@ -101,6 +101,48 @@ public sealed class DocumentSessionSyncTests : IDisposable
         Assert.Equal(20, suggestion.DurationMinutes); // 20 min miedzy zapisami
     }
 
+    /// <summary>
+    /// B3 (regresja jawnie dopisana): scal sugestie → zatwierdź → cofnij zatwierdzenie
+    /// → sync z tą samą historią. Działa wyłącznie dzięki temu, że scalenie ustawia
+    /// IsUserAdjusted, a LoadSettledRangesAsync wycina zakresy sugestii oczekujących
+    /// Z TĄ FLAGĄ z wejścia silnika sesji. Bez tej zależności sync odtworzyłby sesje
+    /// składowe OBOK scalonej sugestii — te same minuty istniałyby dwa razy.
+    /// </summary>
+    [Fact]
+    public async Task Sync_PoScaleniuZatwierdzeniuICofnieciuNieOdtwarzaSesjiSkladowych()
+    {
+        // Dwie sesje jednego dnia → dwie sugestie.
+        var request = RequestWithVersions(
+            Now.AddHours(-5), Now.AddHours(-5).AddMinutes(10),
+            Now.AddHours(-1), Now.AddHours(-1).AddMinutes(20));
+        await syncService.SyncAsync(request, Now, CancellationToken.None);
+        var ids = await db.Suggestions.Select(suggestion => suggestion.Id).ToListAsync();
+        Assert.Equal(2, ids.Count);
+
+        var operations = new SuggestionOperationsService(db, Options.Create(new SuggestionOptions()));
+        var merge = await operations.MergeAsync(ids, includeGaps: false, CancellationToken.None);
+        Assert.Equal(TimeEntryOperationStatus.Success, merge.Status);
+        var survivorId = merge.Suggestions![0].Id;
+
+        var approvals = new ApprovalService(db, Options.Create(new SuggestionOptions()));
+        var approved = await approvals.ApproveAsync(
+            survivorId,
+            new ApproveSuggestionRequest { CaseId = 1, DurationMinutes = 30, Description = "Praca" },
+            Now,
+            CancellationToken.None);
+        Assert.Equal(ApprovalOutcome.Success, approved.Outcome);
+        var undone = await approvals.DeleteTimeEntryAsync(approved.CreatedEntry!.Id, CancellationToken.None);
+        Assert.Equal(ApprovalOutcome.Success, undone.Outcome);
+
+        var rerun = await syncService.SyncAsync(request, Now, CancellationToken.None);
+
+        Assert.Equal(0, rerun.Created);
+        var survivor = await db.Suggestions.SingleAsync();
+        Assert.Equal(survivorId, survivor.Id);
+        Assert.Equal(SuggestionStatus.Pending, survivor.Status);
+        Assert.True(survivor.IsUserAdjusted);
+    }
+
     [Fact]
     public async Task Sync_ZaleglaWersjaStarszaNizKotwicaScalaSesjeWDolIPrzesuwaKotwice()
     {

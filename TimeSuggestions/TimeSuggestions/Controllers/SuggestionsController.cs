@@ -78,8 +78,8 @@ public class SuggestionsController(
     public async Task<ActionResult<List<SuggestionDto>>> Merge(
         MergeSuggestionsRequest request,
         CancellationToken cancellationToken)
-        => ToResponse(await operationsService.MergeAsync(
-            request.SuggestionIds, request.IncludeGaps, cancellationToken));
+        => await ToResponseAsync(await operationsService.MergeAsync(
+            request.SuggestionIds, request.IncludeGaps, cancellationToken), cancellationToken);
 
     /// <summary>Rozdziela wolną lukę między tę sugestię a sąsiednią — podział podaje użytkownik.</summary>
     [HttpPost("{id:int}/claim-gap")]
@@ -87,24 +87,46 @@ public class SuggestionsController(
         int id,
         ClaimSuggestionGapRequest request,
         CancellationToken cancellationToken)
-        => ToResponse(await operationsService.ClaimGapAsync(
-            id, request.Direction!.Value, request.Minutes, request.NeighborMinutes, cancellationToken));
+        => await ToResponseAsync(await operationsService.ClaimGapAsync(
+            id, request.Direction!.Value, request.Minutes, request.NeighborMinutes, cancellationToken),
+            cancellationToken);
 
     /// <summary>
-    /// Wynik operacji na kod HTTP. Zwracamy zmienione sugestie bez luk i kandydatów —
-    /// UI i tak przeładowuje listę, żeby zobaczyć skutki na całej osi dnia.
+    /// Wynik operacji na kod HTTP — z PEŁNYM DTO, jak w GET. „gaps: null" znaczy
+    /// w kontrakcie „nie ma czego doliczać po żadnej ze stron"; odpowiedź operacji
+    /// z pominiętymi lukami znaczyła to samo, choć naprawdę „nie policzyliśmy".
     /// </summary>
-    private ActionResult<List<SuggestionDto>> ToResponse(SuggestionOperationResult result) => result.Status switch
+    private async Task<ActionResult<List<SuggestionDto>>> ToResponseAsync(
+        SuggestionOperationResult result,
+        CancellationToken cancellationToken)
     {
-        TimeEntryOperationStatus.Success =>
-            Ok(result.Suggestions!
-                .Select(suggestion => SuggestionDto.FromEntity(suggestion, businessTimeZone))
-                .ToList()),
-        TimeEntryOperationStatus.NotFound => NotFound(new { message = result.Message }),
-        TimeEntryOperationStatus.Conflict => Conflict(new { message = result.Message }),
-        TimeEntryOperationStatus.Invalid => BadRequest(new { message = result.Message }),
-        _ => StatusCode(StatusCodes.Status500InternalServerError),
-    };
+        if (result.Status != TimeEntryOperationStatus.Success)
+        {
+            return result.Status switch
+            {
+                TimeEntryOperationStatus.NotFound => NotFound(new { message = result.Message }),
+                TimeEntryOperationStatus.Conflict => Conflict(new { message = result.Message }),
+                TimeEntryOperationStatus.Invalid => BadRequest(new { message = result.Message }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+
+        var suggestions = result.Suggestions!;
+        var activeCases = suggestions.Any(suggestion => suggestion.IsAmbiguous)
+            ? await db.Cases.Where(legalCase => legalCase.IsActive).ToListAsync(cancellationToken)
+            : [];
+        var gaps = await operationsService.LoadGapsAsync(suggestions, cancellationToken);
+        var labels = await sessionLabels.LoadAsync(suggestions, cancellationToken);
+
+        return Ok(suggestions
+            .Select(suggestion => SuggestionDto.FromEntity(
+                suggestion,
+                businessTimeZone,
+                GetMatchCandidates(suggestion, activeCases),
+                gaps.GetValueOrDefault(suggestion.Id),
+                labels.GetValueOrDefault(suggestion.Id)))
+            .ToList());
+    }
 
     private static IReadOnlyList<string>? GetMatchCandidates(Suggestion suggestion, List<Case> activeCases)
     {

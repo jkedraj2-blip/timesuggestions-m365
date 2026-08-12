@@ -70,7 +70,10 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
             return new(TimeEntryOperationStatus.Invalid, "Scalenie wymaga co najmniej dwóch różnych sugestii.");
         }
 
+        // Case ładowany od razu: kontroler zwraca po operacji PEŁNE DTO (z nazwą sprawy),
+        // a sugestia bez nawigacji dawała w odpowiedzi puste pola sprawy.
         var suggestions = await db.Suggestions
+            .Include(suggestion => suggestion.Case)
             .Where(suggestion => ids.Contains(suggestion.Id))
             .ToListAsync(cancellationToken);
         if (suggestions.Count != ids.Count)
@@ -172,6 +175,7 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
         CancellationToken cancellationToken)
     {
         var suggestion = await db.Suggestions
+            .Include(candidate => candidate.Case)
             .FirstOrDefaultAsync(candidate => candidate.Id == suggestionId, cancellationToken);
         if (suggestion is null)
         {
@@ -239,6 +243,7 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
         if (forNeighborMinutes > 0)
         {
             var other = await db.Suggestions
+                .Include(candidate => candidate.Case)
                 .FirstAsync(candidate => candidate.Id == neighbor.SuggestionId, cancellationToken);
             if (direction == GapDirection.After && !StaysWithinEntryDate(other, forNeighborMinutes))
             {

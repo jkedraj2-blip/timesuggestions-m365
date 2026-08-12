@@ -53,7 +53,7 @@ describe('komunikaty po operacjach na czasie', () => {
     const updated = base({ startedAt: '2026-08-06T09:30:00', durationMinutes: 90 });
 
     expect(gapClaimMessage(previous, [updated], 'Umowa_NovaTech.docx', 'before', 0)).toBe(
-      'Doliczono 30 min przed tą sesją. Ta sugestia to teraz 09:30–11:00 (1 godz. 30 min).',
+      'Doliczono 30 min na początku tej sesji. Ta sugestia to teraz 09:30–11:00 (1 godz. 30 min).',
     );
   });
 
@@ -309,6 +309,9 @@ describe('SuggestionCard', () => {
       suggestionId: 7,
       title: 'Umowa_NovaTech.docx',
       gapMinutes: 30,
+      gapStartAt: '2026-08-06T09:30:00',
+      gapEndAt: '2026-08-06T10:00:00',
+      canClaim: true,
       canMerge: true,
       ...overrides,
     });
@@ -345,13 +348,66 @@ describe('SuggestionCard', () => {
       await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
 
       const row = neighborRows()[0];
-      expect(row.textContent).toContain('Nierozliczone 30 min przed tą sesją');
-      expect(row.textContent).toContain('Umowa_NovaTech.docx');
+      expect(row.textContent).toContain('Od 09:30 do 10:00 nic nie jest rozliczone (30 min).');
       expect(buttonLabels(row)).toEqual([
         'Dolicz 30 min do tej sesji',
         'Podziel przerwę…',
         'Scal w jedną sesję',
       ]);
+    });
+
+    /**
+     * Zdanie ma podawać GODZINY, a nie same minuty. Bez nich dwie karty stojące obok
+     * tej samej dziury pisały co do znaku to samo („Nierozliczone 30 min przed tą
+     * sesją") i wyglądało to na zdublowany albo źle policzony wpis — nie było jak
+     * poznać, że chodzi o ten sam kwadrans dnia. Liczbę minut sesji mylono wtedy
+     * z długością przerwy.
+     */
+    it('po drugiej stronie podaje godziny przerwy i nazwę sąsiada', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: {
+          before: null,
+          after: neighbor({
+            canMerge: false,
+            title: 'why',
+            gapStartAt: '2026-08-06T11:00:00',
+            gapEndAt: '2026-08-06T11:30:00',
+          }),
+        },
+      }));
+
+      expect(neighborRows()[0].textContent).toContain(
+        'Od 11:00 do 11:30 nic nie jest rozliczone (30 min). Później zaczyna się „why".',
+      );
+    });
+
+    /**
+     * Sąsiad tego samego pliku nosi tę samą nazwę co karta, więc powtórzenie jej
+     * w zdaniu czytało się jak odwołanie pozycji do samej siebie („dalej: why"
+     * na karcie „why"). Mówimy wprost, że to druga sesja tego pliku.
+     */
+    it('nie powtarza nazwy karty, gdy sąsiadem jest druga sesja tego samego pliku', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+
+      const text = neighborRows()[0].textContent ?? '';
+      expect(text).toContain('Wcześniej tego dnia jest druga sesja tego pliku.');
+      expect(text).not.toContain('Umowa_NovaTech.docx');
+    });
+
+    /**
+     * Sedno zgłoszenia: dziura większa niż limit doliczania odbierała sąsiada w całości,
+     * więc dwie sesje tego samego pliku nie miały ŻADNEGO przycisku, choć scalenie
+     * przechodzi. Scalanie nie ma nic wspólnego z limitem przerwy.
+     */
+    it('bez doliczania, ale ze scalaniem, gdy przerwa nie mieści się w limicie', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: {
+          before: null,
+          after: neighbor({ canClaim: false, gapMinutes: 237, gapEndAt: '2026-08-06T13:27:00' }),
+        },
+      }));
+
+      expect(buttonLabels(neighborRows()[0])).toEqual(['Scal w jedną sesję']);
     });
 
     it('każdy przycisk niesie pełne zdanie o skutku w podpowiedzi', async () => {
@@ -374,11 +430,19 @@ describe('SuggestionCard', () => {
 
     it('przylegająca sesja tego samego pliku daje samo scalenie — nie ma czego doliczać', async () => {
       await setSuggestion(createSuggestion({
-        gaps: { before: null, after: neighbor({ gapMinutes: 0 }) },
+        gaps: {
+          before: null,
+          after: neighbor({
+            gapMinutes: 0,
+            canClaim: false,
+            gapStartAt: '2026-08-06T11:00:00',
+            gapEndAt: '2026-08-06T11:00:00',
+          }),
+        },
       }));
 
       const row = neighborRows()[0];
-      expect(row.textContent).toContain('Ta sama praca tuż po');
+      expect(row.textContent).toContain('Druga sesja tego pliku zaczyna się dokładnie tam, gdzie ta się kończy.');
       expect(buttonLabels(row)).toEqual(['Scal w jedną sesję']);
     });
 
@@ -420,7 +484,7 @@ describe('SuggestionCard', () => {
       await click('Dolicz 30 min do tej sesji');
 
       expect(messages).toEqual([
-        'Doliczono 30 min przed tą sesją. Ta sugestia to teraz 09:30–11:00 (1 godz. 30 min).',
+        'Doliczono 30 min na początku tej sesji. Ta sugestia to teraz 09:30–11:00 (1 godz. 30 min).',
       ]);
     });
 

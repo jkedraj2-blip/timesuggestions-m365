@@ -104,15 +104,26 @@ export interface Suggestion {
 
 /**
  * Sąsiad sugestii na osi dnia razem z wolną luką dzielącą ich od siebie. Backend
- * przysyła to WYŁĄCZNIE dla luk faktycznie wolnych i mieszczących się w limicie —
- * jeśli w tym czasie trwała praca nad innym dokumentem, luki tu nie ma, bo ten czas
- * jest już rozliczony gdzie indziej.
+ * przysyła to WYŁĄCZNIE dla luk faktycznie wolnych — jeśli w tym czasie trwała praca
+ * nad innym dokumentem, luki tu nie ma, bo ten czas jest już rozliczony gdzie indziej.
  */
 export interface SuggestionNeighbor {
   /** Id sąsiada, gdy jest sugestią oczekującą; null dla wpisu czasu (podziału z nim nie ma). */
   suggestionId: number | null;
   title: string;
   gapMinutes: number;
+  /**
+   * Godziny wolnej przerwy prosto z serwera. Karta nie liczy ich z minut, bo minuty
+   * są podłogą z sekund i odjęte od startu wskazywały początek wolnego czasu o minutę
+   * za późno — a zdanie na karcie podaje ten zakres wprost.
+   */
+  gapStartAt: string;
+  gapEndAt: string;
+  /**
+   * Przerwa mieści się w limicie doliczania jednym ruchem. Fałsz nie ukrywa całego
+   * sąsiada: zostaje po to, żeby dało się scalić sesje tego samego pliku.
+   */
+  canClaim: boolean;
   /**
    * Scalenie z tym sąsiadem na pewno przejdzie (ta sama sugestia oczekująca, ten sam
    * plik, ten sam dzień). Backend liczy to sam — karta nie zgaduje po nazwie pliku

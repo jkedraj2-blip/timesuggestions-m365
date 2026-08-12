@@ -57,7 +57,9 @@ export function gapClaimMessage(
   // Minuty własne z różnicy czasów w odpowiedzi (przy „Dolicz całość" nikt ich nie podawał);
   // minuty sąsiada wprost z żądania — serwer stosuje dokładnie tę liczbę albo odmawia.
   const mineMinutes = mine ? mine.durationMinutes - previous.durationMinutes : 0;
-  const where = side === 'before' ? 'przed' : 'po';
+  // „na początku/na końcu", a nie „przed/po tą sesją": wspólny szablon dla obu stron
+  // dawał niepoprawne „po tą sesją", a i tak nie mówił, co się przesunęło.
+  const where = side === 'before' ? 'na początku' : 'na końcu';
   if (mine === undefined) {
     return `Doliczono ${neighborMinutes} min do „${neighborTitle}", ta sugestia bez zmian.`;
   }
@@ -65,7 +67,7 @@ export function gapClaimMessage(
   const nowLine = ` Ta sugestia to teraz ${formatSpan(mine)} (${formatDuration(mine.durationMinutes)}).`;
   return neighborMinutes > 0
     ? `Przerwa podzielona: ${mineMinutes} min tutaj, ${neighborMinutes} min do „${neighborTitle}".${nowLine}`
-    : `Doliczono ${mineMinutes} min ${where} tą sesją.${nowLine}`;
+    : `Doliczono ${mineMinutes} min ${where} tej sesji.${nowLine}`;
 }
 
 /**
@@ -266,11 +268,11 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
 
       @if (sides().length > 0) {
         <!-- Sąsiedzi na osi dnia pojawiają się TYLKO wtedy, gdy jest co zrobić.
-             Backend przysyła lukę wyłącznie wolną i mieszczącą się w limicie: jeśli
-             prawnik w tym czasie pracował nad innym dokumentem, przerwy nie ma —
-             ten czas jest już rozliczony w historii tamtego pliku. „Scal sesje"
-             wystawiamy wyłącznie na canMerge, czyli gdy backend potwierdził, że
-             scalenie przejdzie — przycisk kończący się odmową był gorszy od braku
+             Backend przysyła lukę wyłącznie wolną: jeśli prawnik w tym czasie pracował
+             nad innym dokumentem, przerwy nie ma — ten czas jest już rozliczony
+             w historii tamtego pliku. Doliczanie wisi na canClaim (limit dotyczy tylko
+             jego), a „Scal sesje" wyłącznie na canMerge, czyli gdy backend potwierdził,
+             że scalenie przejdzie — przycisk kończący się odmową był gorszy od braku
              przycisku, bo obiecywał operację odrzucaną przez tę samą warstwę. -->
         <div class="neighbors">
           @for (side of sides(); track side.side) {
@@ -279,7 +281,7 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
               <!-- Etykiety mówią WPROST, co zrobi kliknięcie i o ile minut chodzi.
                    „Dolicz całość" nie niosło ani liczby, ani kierunku: prawnik klikał
                    i widział tylko, że czas skądś podskoczył. -->
-              @if (side.neighbor.gapMinutes > 0) {
+              @if (side.neighbor.canClaim) {
                 <button
                   class="btn btn-ghost"
                   (click)="claimWhole(side)"
@@ -613,8 +615,10 @@ export class SuggestionCard {
       return [];
     }
 
+    // Wiersz bez jednego przycisku to sam szum — sąsiad musi dawać albo doliczenie,
+    // albo scalenie. Backend stosuje tę samą regułę, tu jest tylko zabezpieczenie.
     const isActionable = (neighbor: SuggestionNeighbor | null): neighbor is SuggestionNeighbor =>
-      neighbor !== null && (neighbor.gapMinutes > 0 || neighbor.canMerge);
+      neighbor !== null && (neighbor.canClaim || neighbor.canMerge);
     const { before, after } = suggestion.gaps;
     const result: Array<{ side: 'before' | 'after'; neighbor: SuggestionNeighbor }> = [];
     if (isActionable(before)) {
@@ -646,15 +650,47 @@ export class SuggestionCard {
     && this.splitFreeMinutes() >= 0
     && this.splitMinutes() + this.splitNeighborMinutes() > 0);
 
-  /** Zdanie mówiące, ile czasu i przy kim jest wolne — bez tego przyciski są zagadką. */
+  /**
+   * Zdanie mówiące, ile czasu i przy kim jest wolne — bez tego przyciski są zagadką.
+   *
+   * Podaje GODZINY, a nie same minuty. Poprzednia wersja („Nierozliczone 30 min przed
+   * tą sesją (dalej: „X")") miała trzy wady naraz. Po pierwsze dwie karty stojące
+   * po obu stronach tej samej dziury pisały co do znaku to samo, więc wyglądało to na
+   * zdublowany wpis, a liczbę minut przerwy mylono z czasem pracy sesji. Po drugie
+   * „dalej:" to skrót myślowy, nie polszczyzna — nikt nie odczyta z niego, że chodzi
+   * o pozycję stojącą po drugiej stronie przerwy. Po trzecie sklejanie jednego szablonu
+   * dla obu stron dawało „po tą sesją" zamiast „po tej sesji".
+   */
   protected neighborLabel(neighbor: SuggestionNeighbor, side: 'before' | 'after'): string {
     if (neighbor.gapMinutes === 0) {
-      return `Ta sama praca ${side === 'before' ? 'tuż przed' : 'tuż po'}: „${neighbor.title}".`;
+      return side === 'before'
+        ? 'Druga sesja tego pliku kończy się dokładnie tam, gdzie ta się zaczyna.'
+        : 'Druga sesja tego pliku zaczyna się dokładnie tam, gdzie ta się kończy.';
     }
-    const where = side === 'before' ? 'przed' : 'po';
-    // „Nierozliczone" zamiast „wolne": luka jest wolna w sensie osi dnia, ale dla prawnika
-    // znaczy to jedno — ten czas nie trafił jeszcze na żaden rachunek.
-    return `Nierozliczone ${neighbor.gapMinutes} min ${where} tą sesją (dalej: „${neighbor.title}").`;
+
+    const time = (value: string): string =>
+      new Date(value).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+    // „Nic nie jest rozliczone" zamiast „wolne": czas jest wolny w sensie osi dnia, ale
+    // dla prawnika znaczy to jedno — nie trafił jeszcze na żaden rachunek.
+    return `Od ${time(neighbor.gapStartAt)} do ${time(neighbor.gapEndAt)}`
+      + ` nic nie jest rozliczone (${neighbor.gapMinutes} min). ${this.neighborPhrase(neighbor, side)}`;
+  }
+
+  /**
+   * Sąsiad tego samego pliku nosi tę samą nazwę co karta, więc powtarzanie jej brzmiało
+   * jak odwołanie pozycji do samej siebie („dalej: why" na karcie „why"). Mówimy wtedy
+   * wprost, że to druga sesja tego pliku — i to samo zdanie tłumaczy przycisk scalania.
+   */
+  private neighborPhrase(neighbor: SuggestionNeighbor, side: 'before' | 'after'): string {
+    if (neighbor.canMerge) {
+      return side === 'before'
+        ? 'Wcześniej tego dnia jest druga sesja tego pliku.'
+        : 'Później tego dnia jest druga sesja tego pliku.';
+    }
+
+    return side === 'before'
+      ? `Wcześniej kończy się „${neighbor.title}".`
+      : `Później zaczyna się „${neighbor.title}".`;
   }
 
   /**

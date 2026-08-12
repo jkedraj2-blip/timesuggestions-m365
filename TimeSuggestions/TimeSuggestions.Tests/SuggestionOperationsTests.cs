@@ -163,6 +163,41 @@ public sealed class SuggestionOperationsTests : IDisposable
         Assert.Equal(2, await db.Suggestions.CountAsync());
     }
 
+    /// <summary>
+    /// A4: luka przechodząca przez lokalną północ nie jest oferowana. Sesje nie
+    /// przekraczają granicy dnia w strefie biznesowej (reguła silnika sesji), a doliczenie
+    /// takiej luki cofałoby StartedAt na inną dobę niż EntryDate — oś grupowania, sum
+    /// dziennych i archiwizacji. Dokładnie to wydarzyło się na realnych danych
+    /// (sugestia 83 / wpis 16: StartedAt 11.08, EntryDate 12.08).
+    /// </summary>
+    [Fact]
+    public async Task LoadGaps_NieOferujeLukiPrzechodzacejPrzezPolnoc()
+    {
+        var evening = AddSuggestion(23, 30, 20);                          // 23:30–23:50
+        var afterMidnight = AddSuggestion(0, 10, 30, day: Day.AddDays(1)); // 00:10–00:40 następnego dnia
+
+        var gaps = await operations.LoadGapsAsync([evening, afterMidnight], CancellationToken.None);
+
+        Assert.Null(gaps.GetValueOrDefault(afterMidnight.Id)?.Before);
+        Assert.Null(gaps.GetValueOrDefault(evening.Id)?.After);
+    }
+
+    /// <summary>A4: przyjęcie takiej luki też jest odmawiane — klientowi nie ufamy.</summary>
+    [Fact]
+    public async Task ClaimGap_OdmawiaLukiPrzechodzacejPrzezPolnoc()
+    {
+        AddSuggestion(23, 30, 20);
+        var afterMidnight = AddSuggestion(0, 10, 30, day: Day.AddDays(1));
+
+        var result = await operations.ClaimGapAsync(
+            afterMidnight.Id, GapDirection.Before, minutes: null, neighborMinutes: null, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Conflict, result.Status);
+        var unchanged = await db.Suggestions.SingleAsync(s => s.Id == afterMidnight.Id);
+        Assert.Equal(new DateTime(2026, 7, 25, 0, 10, 0), unchanged.StartedAt);
+        Assert.Equal(new DateOnly(2026, 7, 25), unchanged.EntryDate);
+    }
+
     [Fact]
     public async Task ClaimGap_BezPodanychMinutDoliczaCalaLukeDoWskazanejSugestii()
     {
@@ -279,23 +314,21 @@ public sealed class SuggestionOperationsTests : IDisposable
 
     /// <summary>
     /// Sąsiad zza północy: luka szuka o dobę w obie strony (spotkanie może przechodzić
-    /// przez dzień), ale scalenie wymaga jednego dnia rozliczeniowego. UI nie może
-    /// dostać zgody na scalenie, które MergeAsync natychmiast odrzuci — przycisk
-    /// kończący się błędem „tylko z tego samego dnia" był obietnicą bez pokrycia.
+    /// przez dzień), ale ani scalenie, ani podział luki nie przechodzą przez granicę dnia.
+    /// Kiedyś luka zza północy była „do rozdzielenia" — i dokładnie to rozjechało
+    /// EntryDate z godzinami na realnych danych (patrz LoadGaps_NieOferujeLuki…).
+    /// Luka przylegająca do północy od swojej strony dnia pozostaje legalna.
     /// </summary>
     [Fact]
-    public async Task LoadGaps_NieObiecujeScaleniaSesjiZDwochDni()
+    public async Task LoadGaps_LukaKonczacaSieRownoOPolnocyJestLegalna()
     {
-        AddSuggestion(23, 30, 20);
-        var nextDay = AddSuggestion(0, 10, 20, day: Day.AddDays(1));
+        AddSuggestion(22, 0, 30);                 // 22:00–22:30
+        var late = AddSuggestion(23, 0, 60);      // 23:00–24:00 (koniec równo o północy)
 
         var gaps = await operations.LoadGapsAsync(await db.Suggestions.ToListAsync(), CancellationToken.None);
 
-        var before = gaps[nextDay.Id].Before;
-        Assert.NotNull(before);
-        // Sama przerwa nadal jest do rozdzielenia — zabroniona jest tylko fuzja pozycji.
-        Assert.Equal(20, before.GapMinutes);
-        Assert.False(before.CanMerge);
+        // Luka 22:30–23:00 leży w całości w jednej dobie — normalnie oferowana.
+        Assert.Equal(30, gaps[late.Id].Before!.GapMinutes);
     }
 
     /// <summary>

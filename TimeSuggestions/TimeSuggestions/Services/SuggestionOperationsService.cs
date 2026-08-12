@@ -219,6 +219,16 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
                 "Po drugiej stronie przerwy jest zatwierdzony wpis czasu — jego czasu nie zmieniamy stąd.");
         }
 
+        // Zapas do reguły z FindNeighbor (luka przez północ nie jest oferowana): nawet
+        // legalna luka nie może przesunąć początku na inną dobę niż EntryDate — możliwe
+        // tylko w skrajności, gdy pozycja zaczyna się dokładnie o lokalnej północy.
+        if (direction == GapDirection.Before && claimedMinutes > 0
+            && !StaysWithinEntryDate(suggestion, claimedMinutes))
+        {
+            return new(TimeEntryOperationStatus.Conflict,
+                "Doliczenie przesunęłoby początek sesji na poprzedni dzień — sesje nie przekraczają granicy dnia.");
+        }
+
         var changed = new List<Suggestion>();
         if (claimedMinutes > 0)
         {
@@ -230,6 +240,11 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
         {
             var other = await db.Suggestions
                 .FirstAsync(candidate => candidate.Id == neighbor.SuggestionId, cancellationToken);
+            if (direction == GapDirection.After && !StaysWithinEntryDate(other, forNeighborMinutes))
+            {
+                return new(TimeEntryOperationStatus.Conflict,
+                    "Podział przesunąłby początek sąsiedniej sesji na poprzedni dzień — sesje nie przekraczają granicy dnia.");
+            }
             // Sąsiad rośnie w przeciwną stronę: luka leży między nimi, więc każdy
             // dokłada ją od swojej strony i nadal się nie nakładają — a niedobrany
             // czas zostaje pośrodku, dalej wolny.
@@ -292,6 +307,21 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
     private static int? FreeGapMinutes(DateTime startAt, DateTime endAt)
         => TimeAxis.FreeGapMinutes(startAt, endAt);
 
+    /// <summary>
+    /// Czy przedział [start, end) dotyka więcej niż jednej doby lokalnej. Koniec równy
+    /// północy należy jeszcze do dnia poprzedniego (przedział półotwarty) — luka
+    /// 22:00–00:00 nie przechodzi przez północ, luka 23:50–00:10 tak.
+    /// </summary>
+    private static bool CrossesLocalMidnight(DateTime gapStartAt, DateTime gapEndAt)
+    {
+        var lastMomentInGap = gapEndAt > gapStartAt ? gapEndAt.AddTicks(-1) : gapStartAt;
+        return DateOnly.FromDateTime(gapStartAt) != DateOnly.FromDateTime(lastMomentInGap);
+    }
+
+    /// <summary>Czy po przesunięciu początku o <paramref name="minutes"/> w tył sugestia zostaje w swojej dobie.</summary>
+    private static bool StaysWithinEntryDate(Suggestion suggestion, int minutes)
+        => DateOnly.FromDateTime(suggestion.StartedAt.AddMinutes(-minutes)) == suggestion.EntryDate;
+
     /// <summary>Doliczone minuty przesuwają początek albo koniec — kotwica sesji zostaje nietknięta (klucz dedupu).</summary>
     private static void ApplyGap(Suggestion suggestion, GapDirection direction, int minutes)
     {
@@ -328,6 +358,16 @@ public class SuggestionOperationsService(AppDbContext db, IOptions<SuggestionOpt
 
         var gapStartAt = direction == GapDirection.Before ? neighbor.End : endAt;
         var gapEndAt = direction == GapDirection.Before ? startAt : neighbor.Start;
+        // ODMOWA dla luki przechodzącej przez lokalną północ — spójnie z silnikiem sesji
+        // („sesje nie przechodzą granicy dnia w strefie biznesowej"). Sąsiad bywa znaleziony
+        // zza północy (okno ±1 doba), a doliczenie takiej luki cofałoby StartedAt na inną
+        // dobę niż EntryDate — oś grupowania, sum dziennych i archiwizacji zakresem dat.
+        // Alternatywa (przycięcie do północy) wymagałaby przeliczania EntryDate przy każdej
+        // zmianie StartedAt w obu serwisach; nie ma jej, więc luka po prostu nie istnieje.
+        if (CrossesLocalMidnight(gapStartAt, gapEndAt))
+        {
+            return null;
+        }
         // Luka zerowa (pozycje przylegają) NIE dyskwalifikuje sąsiada: nie ma czego
         // doliczać, ale sesje tego samego pliku wolno wtedy scalić — UI potrzebuje
         // wiedzieć, że sąsiad w ogóle jest.

@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   archivedSuggestionsToast,
+  bulkApprovable,
+  bulkApproveToast,
   filteredOutLine,
   normalizedSyncDays,
   syncCheckedLine,
   syncReportHeadline,
   syncSkippedLine,
 } from './suggestions-page';
-import { SyncFilteredOutCounts } from '../models/api.models';
+import { Suggestion, SyncFilteredOutCounts } from '../models/api.models';
 
 const NO_FILTERED: SyncFilteredOutCounts = {
   private: 0,
@@ -36,6 +38,60 @@ describe('syncReportHeadline', () => {
     );
     expect(syncReportHeadline({ created: 5, updated: 0, removed: 0 })).toBe(
       'Synchronizacja zakończona: 5 nowych sugestii.',
+    );
+  });
+});
+
+describe('hurtowe zatwierdzanie dopasowanych', () => {
+  const suggestion = (overrides: Partial<Suggestion>): Suggestion => ({
+    id: 1,
+    source: 'document',
+    title: 'Umowa.docx',
+    startedAt: '2026-08-12T10:00:00',
+    durationMinutes: 30,
+    caseId: 1,
+    caseName: 'Kowalski',
+    caseNumber: 'K-1',
+    clientName: 'Kowalski',
+    isAmbiguous: false,
+    matchCandidates: [],
+    proposedDescription: 'Praca',
+    status: 'pending',
+    detectedGaps: [],
+    needsTimeReview: false,
+    sourceExternalId: null,
+    lastActivityAt: '2026-08-12T10:30:00',
+    isUserAdjusted: false,
+    gaps: null,
+    sessionLabel: null,
+    ...overrides,
+  });
+
+  /**
+   * Hurt zapisuje czas bez otwierania choćby jednej karty. Sesja o jednym zapisie
+   * nie ma zmierzonego czasu, więc trafiłaby na rachunek z minimum z konfiguracji —
+   * i to właśnie w trybie, w którym nikt na nią nie patrzy.
+   */
+  it('pomija sugestie z czasem do uzupełnienia, choć są dopasowane', () => {
+    const approvable = bulkApprovable([
+      suggestion({ id: 1 }),
+      suggestion({ id: 2, needsTimeReview: true, durationMinutes: 5 }),
+      suggestion({ id: 3, caseId: null, caseName: null }),
+      suggestion({ id: 4, isAmbiguous: true }),
+    ]);
+
+    expect(approvable.map((item) => item.id)).toEqual([1]);
+  });
+
+  it('komunikat mówi wprost, ile pominięto i co z tym zrobić', () => {
+    expect(bulkApproveToast(3, 0, 0)).toBe('Zapisano 3 wpisy czasu pracy.');
+    expect(bulkApproveToast(3, 0, 2)).toBe(
+      'Zapisano 3 wpisy czasu pracy. Pominięto 2 sugestie z czasem do uzupełnienia'
+        + ' — zatwierdź je pojedynczo.',
+    );
+    expect(bulkApproveToast(1, 2, 1)).toBe(
+      'Zapisano 1, nie udało się 2. Spróbuj pojedynczo. Pominięto 1 sugestię'
+        + ' z czasem do uzupełnienia — zatwierdź je pojedynczo.',
     );
   });
 });

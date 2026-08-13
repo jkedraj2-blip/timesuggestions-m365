@@ -77,6 +77,35 @@ export function syncCheckedLine(fetched: SyncFetchedCounts, windowDays: number):
   return `Sprawdzono ${meetingsText} z ostatnich ${windowDays} dni i ${filesText}.`;
 }
 
+/**
+ * Sugestie, które wolno zatwierdzić HURTEM: jednoznacznie dopasowane i ze zmierzonym
+ * czasem. Sesja o jednym zapisie („czas do uzupełnienia") nie ma zmierzonego czasu —
+ * widoczne minuty to minimum z konfiguracji. Dopasowanie sprawy tego nie ratuje:
+ * mówi, KOMU rozliczyć, a nie ILE. Hurt zapisuje czas bez otwierania choćby jednej
+ * karty, więc taka pozycja trafiłaby na rachunek z wartością, na którą nikt nie
+ * spojrzał — i to właśnie w trybie, w którym nikt na nią nie patrzy.
+ */
+export function bulkApprovable(suggestions: readonly Suggestion[]): Suggestion[] {
+  return suggestions.filter(
+    (suggestion) => suggestion.caseId !== null && !suggestion.isAmbiguous && !suggestion.needsTimeReview);
+}
+
+/** Toast po hurcie: co zapisano, co się nie udało i co świadomie pominięto. */
+export function bulkApproveToast(approved: number, failed: number, skipped: number): string {
+  const done = failed === 0
+    ? `Zapisano ${approved} ${polishPlural(approved, 'wpis', 'wpisy', 'wpisów')} czasu pracy.`
+    : `Zapisano ${approved}, nie udało się ${failed}. Spróbuj pojedynczo.`;
+  if (skipped === 0) {
+    return done;
+  }
+
+  // Pominięcie musi być powiedziane wprost: cicho przemilczane wyglądałoby jak
+  // „wszystko rozliczone", a te pozycje dalej czekają na decyzję o czasie.
+  const subject = polishPlural(skipped, 'sugestię', 'sugestie', 'sugestii');
+  return `${done} Pominięto ${skipped} ${subject} z czasem do uzupełnienia`
+    + ' — zatwierdź je pojedynczo.';
+}
+
 /** Toast po hurtowej archiwizacji: „Zarchiwizowano 3 sugestie." — bez „Cofnij", bo bez unarchive. */
 export function archivedSuggestionsToast(count: number): string {
   return `Zarchiwizowano ${count} ${polishPlural(count, 'sugestię', 'sugestie', 'sugestii')}.`;
@@ -221,9 +250,22 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
       </div>
 
       @if (autoMatchedCount() > 0) {
-        <button class="btn" (click)="approveAllMatched()" [disabled]="bulkApproving()">
+        <button
+          class="btn"
+          (click)="approveAllMatched()"
+          [disabled]="bulkApproving()"
+          title="Zatwierdza dopasowane sugestie ze zmierzonym czasem. Sesje z plakietką czasu do uzupełnienia zostają — ich czas trzeba potwierdzić na karcie."
+        >
           {{ bulkApproving() ? 'Zatwierdzam…' : 'Zatwierdź wszystkie dopasowane (' + autoMatchedCount() + ')' }}
         </button>
+      }
+
+      @if (timeReviewCount() > 0) {
+        <!-- Bez tej linijki licznik przy przycisku byłby po prostu mniejszy niż liczba
+             dopasowanych kart i wyglądałby na pomyłkę. -->
+        <span class="text-warn bulk-note">
+          {{ timeReviewCount() }} dopasowanych czeka na czas — zatwierdź je pojedynczo.
+        </span>
       }
 
       @if (statusFilter() === 'rejected' && suggestions().length > 0) {
@@ -426,6 +468,7 @@ export function filteredOutLine(filtered: SyncFilteredOutCounts): string {
     .auto-sync-help-panel p { margin: 0 0 var(--space-2); max-width: 70ch; }
     .auto-sync-help-panel .actions { margin-top: var(--space-2); }
     .filter-group { display: flex; align-items: center; gap: var(--space-1); }
+    .bulk-note { font-size: var(--font-size-sm); }
     .sync-progress { display: flex; align-items: center; gap: var(--space-3); }
     .spinner {
       width: 14px; height: 14px; border-radius: 50%;
@@ -522,8 +565,18 @@ export class SuggestionsPage implements OnInit {
 
   /** Sugestie z jednoznacznie dopasowaną sprawą — te można zatwierdzić hurtem, bez zastanowienia. */
   protected autoMatchedCount = computed(() =>
+    this.statusFilter() === 'pending' ? bulkApprovable(this.visibleSuggestions()).length : 0,
+  );
+
+  /**
+   * Dopasowane, ale wyjęte z hurtu, bo czekają na czas. Liczba jest widoczna w pasku
+   * narzędzi, a nie tylko w komunikacie po operacji: inaczej licznik przy przycisku
+   * byłby po prostu mniejszy od liczby zielonych kart i wyglądałby na błąd.
+   */
+  protected timeReviewCount = computed(() =>
     this.statusFilter() === 'pending'
-      ? this.visibleSuggestions().filter((s) => s.caseId !== null && !s.isAmbiguous).length
+      ? this.visibleSuggestions()
+        .filter((s) => s.caseId !== null && !s.isAmbiguous && s.needsTimeReview).length
       : 0,
   );
 
@@ -692,7 +745,8 @@ export class SuggestionsPage implements OnInit {
 
   /** Hurtowe zatwierdzenie jednoznacznie dopasowanych — obietnica "jednego kliknięcia" w praktyce. */
   protected async approveAllMatched(): Promise<void> {
-    const matched = this.visibleSuggestions().filter((s) => s.caseId !== null && !s.isAmbiguous);
+    const matched = bulkApprovable(this.visibleSuggestions());
+    const skipped = this.timeReviewCount();
     if (matched.length === 0) {
       return;
     }
@@ -713,9 +767,7 @@ export class SuggestionsPage implements OnInit {
       const approvedCount = results.filter((result) => result.status === 'fulfilled').length;
       const failedCount = results.length - approvedCount;
       this.toasts.show(
-        failedCount === 0
-          ? `Zapisano ${approvedCount} ${polishPlural(approvedCount, 'wpis', 'wpisy', 'wpisów')} czasu pracy.`
-          : `Zapisano ${approvedCount}, nie udało się ${failedCount}. Spróbuj pojedynczo.`,
+        bulkApproveToast(approvedCount, failedCount, skipped),
         { kind: failedCount === 0 ? 'success' : 'error' },
       );
 

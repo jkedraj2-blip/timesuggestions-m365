@@ -113,6 +113,29 @@ bo karta pokazywała obok siebie "początek 16:51", "ostatnia zmiana 16:53" i "c
 dokumentu. Flaga liczy się z zasięgu, nie z liczby wersji: dwa zapisy sekundę po sobie
 mówią o czasie pracy dokładnie tyle samo, co jeden.
 
+## Czas do uzupełnienia blokuje zatwierdzenie jednym kliknięciem
+
+Sama plakietka okazała się za słaba. Karta z dopasowaną sprawą wygląda na gotową do
+zatwierdzenia i jedno kliknięcie zapisywało na rachunku minimum z konfiguracji jako
+zmierzony czas pracy. Dopasowanie sprawy niczego tu nie ratuje: mówi, KOMU rozliczyć,
+a nie ILE.
+
+Pojedyncze zatwierdzenie pyta więc o czas w dwóch krokach (ten sam mechanizm co przy
+rozdzielaniu wpisu): pierwsze kliknięcie zmienia etykietę na "Na pewno 5 min?" i pokazuje
+zdanie o tym, skąd ta liczba pochodzi, drugie zatwierdza. Warunkiem NIE jest sama flaga,
+tylko to, czy w polu czasu wciąż stoi wartość z konfiguracji: kto wpisał własną liczbę
+minut, ten już podjął tę decyzję i drugie pytanie byłoby przeszkadzaniem. Pytanie pada
+po kliknięciu, a nie z góry, bo sesja o jednym zapisie bywa naprawdę pięciominutowa
+i stałe ostrzeżenie byłoby kolejnym tekstem do przewinięcia.
+
+"Zatwierdź wszystkie dopasowane" po prostu takie pozycje pomija. Hurt zapisuje czas bez
+otwierania choćby jednej karty, więc pytanie o potwierdzenie nie ma tam gdzie się pojawić,
+a zgadnięta wartość trafiłaby na rachunek dokładnie w trybie, w którym nikt na nią nie
+patrzy. Licznik przy przycisku liczy tylko pozycje ze zmierzonym czasem, obok stoi
+zdanie ile dopasowanych czeka na czas, a komunikat po operacji powtarza, ile pominięto
+i co z nimi zrobić. Cicho przemilczane pominięcie czytałoby się jako "wszystko
+rozliczone".
+
 Sesje nie przechodzą granicy dnia w strefie biznesowej: wersja po północy otwiera nową
 sesję niezależnie od progu, bo `EntryDate` jest osią grupowania i archiwizacji. Z tej
 samej reguły wynika odmowa doliczania luk przez północ (osobna sekcja niżej). Przerwy

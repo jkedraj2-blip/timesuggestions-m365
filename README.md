@@ -100,6 +100,7 @@ Pełne uzasadnienia: [docs/decyzje-projektowe.md](docs/decyzje-projektowe.md).
 | [Append-only dziennik `DocumentActivity`](docs/decyzje-projektowe.md#append-only-dziennik-aktywności-documentactivity) | Fakt = (plik, wersja, moment); każda synchronizacja jest pomiarem |
 | [Silnik sesji](docs/decyzje-projektowe.md#silnik-sesji-zamiast-sztywnych-30-minut) | Czas z sesji pracy między zapisami; bez rozbiegu, minimum tylko przy braku pomiaru |
 | [Koniec z „domyślnym czasem dokumentu"](docs/decyzje-projektowe.md#koniec-z-domyślnym-czasem-dokumentu) | Zgadywana wartość wyleciała; decyzję o czasie podejmuje człowiek |
+| [Czas do uzupełnienia pyta przed zapisem](docs/decyzje-projektowe.md#czas-do-uzupełnienia-blokuje-zatwierdzenie-jednym-kliknięciem) | Sesja bez pomiaru wymaga potwierdzenia minut; hurt ją pomija i mówi o tym |
 | [Dedup po kotwicy sesji](docs/decyzje-projektowe.md#dedup-po-źródło-id-z-graph-kotwica-sesji) | Jeden plik może mieć wiele sesji jednego dnia; odrzucona sugestia nie wraca |
 | [Kolejność po ostatniej modyfikacji](docs/decyzje-projektowe.md#kolejność-sugestii-po-ostatniej-modyfikacji) | Świeżo zapisany dokument jest na górze listy |
 | [Praca po zatwierdzeniu daje nową sugestię](docs/decyzje-projektowe.md#praca-po-zatwierdzeniu-daje-nową-sugestię) | Silnik dostaje tylko aktywność niepokrytą przez rozstrzygnięte zakresy |
@@ -185,7 +186,7 @@ uprawnienia **Calendars.Read** i **Files.Read**); konfiguracja w
 administratora, utwórz własną rejestrację (SPA, redirect `http://localhost:4200`)
 i podmień `entraClientId`.
 
-**Testy** (344 backend xUnit + 230 frontend Vitest; bez sieci i logowania):
+**Testy** (344 backend xUnit + 238 frontend Vitest; bez sieci i logowania):
 
 ```bash
 cd TimeSuggestions && dotnet test

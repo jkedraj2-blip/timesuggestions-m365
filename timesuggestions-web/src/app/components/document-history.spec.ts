@@ -253,12 +253,19 @@ describe('DocumentHistory', () => {
       expect(element().textContent).toContain('Podświetlone obszary to zapisy');
     });
 
+    /**
+     * Plakietka stoi PRZED stanem sesji: to pierwsza rzecz, której szuka się w tej
+     * chronologii, a jako trzecia plakietka w rzędzie ginęła między stanami pozycji.
+     */
     it('oglądaną pozycję widać po osobnej plakietce, nie po kolorze', async () => {
       await render(THREE_SESSIONS, 'Umowa_NovaTech.docx', CURRENT);
 
-      const marks = Array.from(element().querySelectorAll('.version-row .badge-accent'))
+      const marks = Array.from(element().querySelectorAll('.version-row .current-badge'))
         .map((badge) => badge.textContent?.trim());
       expect(marks).toEqual(['ta pozycja']);
+
+      const marked = element().querySelector('.version-row.current-session .version-marks');
+      expect(marked?.firstElementChild?.classList.contains('current-badge')).toBe(true);
     });
 
     it('numer edycji pada obok stanu, tak jak na karcie pozycji', async () => {

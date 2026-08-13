@@ -198,8 +198,9 @@ function gapStateOf(
           <p class="text-muted note">
             Podświetlone obszary to zapisy, z których policzono pozycje tego pliku;
             plakietka i kolor mówią, w jakim stanie jest każda z nich. Pozycja, z której
-            tu wszedłeś, ma plakietkę <span class="badge badge-accent">ta pozycja</span>.
-            Przy każdej przerwie widać, czy jej minuty są wliczone w czas.
+            tu wszedłeś, ma plakietkę <span class="current-badge">ta pozycja</span>
+            i obwódkę wokół całego swojego obszaru. Przy każdej przerwie widać, czy jej
+            minuty są wliczone w czas.
           </p>
         }
 
@@ -261,14 +262,20 @@ function gapStateOf(
                 <span class="version-size text-muted">{{ version.size / 1024 | number: '1.0-1' }} KB</span>
                 <span class="version-marks">
                   @if (version.opensSession && version.session; as session) {
-                    <!-- Etykieta tylko przy pierwszym wierszu obszaru: powtórzona przy każdym
-                         byłaby szumem, a tło i tak pokazuje, dokąd zaznaczenie sięga.
-                         Numer edycji obok stanu, bo to ten sam numer, który pozycja nosi
-                         na swojej karcie — inaczej trzeba by je kojarzyć po godzinach. -->
-                    <span class="session-badge">{{ sessionBadge(session) }}</span>
+                    <!-- Plakietka oglądanej pozycji stoi PIERWSZA i jest wypełniona:
+                         wcześniej była bladym „ta pozycja" za obwiedzionym stanem, czyli
+                         trzecim z kolei elementem o tej samej wadze — a to jedyna rzecz,
+                         której szuka się w tej chronologii od razu. Etykieta stanu tylko
+                         przy pierwszym wierszu obszaru: powtórzona przy każdym byłaby
+                         szumem, a tło i tak pokazuje, dokąd zaznaczenie sięga. Numer
+                         edycji obok stanu, bo to ten sam numer, który pozycja nosi na
+                         swojej karcie — inaczej trzeba by je kojarzyć po godzinach. -->
                     @if (version.isCurrentSession) {
-                      <span class="badge badge-accent" title="Pozycja, z której otwarto tę historię.">ta pozycja</span>
+                      <span class="current-badge" title="Pozycja, z której otwarto tę historię.">
+                        ta pozycja
+                      </span>
                     }
+                    <span class="session-badge">{{ sessionBadge(session) }}</span>
                   }
                   @if (version.isCurrent && $last) {
                     <!-- Plakietka tylko przy najnowszym zapisie, choć znacznik isCurrent
@@ -414,8 +421,25 @@ function gapStateOf(
       background: var(--session-fill);
       padding-left: var(--space-3);
     }
-    /* Oglądana pozycja grubszym paskiem — obok plakietki „ta pozycja", nigdy zamiast niej. */
-    .current-session.in-session { border-left-width: 6px; padding-left: calc(var(--space-3) - 3px); }
+    /* Oglądana pozycja: grubszy pasek ORAZ obwódka domykająca cały blok, żeby było
+       widać jego początek i koniec bez czytania godzin. Nigdy zamiast plakietki —
+       sam kolor nie wystarcza, bo obszary sąsiednich pozycji też są kolorowe. */
+    .current-session.in-session {
+      border-left-width: 6px; padding-left: calc(var(--space-3) - 3px);
+      border-right: 1px solid var(--session-color);
+    }
+    .current-session.opens-session { border-top: 1px solid var(--session-color); }
+    .current-session.closes-session { border-bottom: 1px solid var(--session-color); }
+    /* Godzina w kolorze stanu: oglądany blok da się znaleźć wzrokiem od razu. */
+    .current-session .version-time { color: var(--session-color); }
+    /* Wypełniona, wersalikowa plakietka: blada obwiedziona ginęła wśród stanów sesji. */
+    .current-badge {
+      display: inline-flex; align-items: center;
+      background: var(--accent); color: var(--accent-contrast);
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+      border-radius: 999px; padding: 2px var(--space-2);
+      font-size: var(--font-size-sm); white-space: nowrap;
+    }
     .opens-session { border-top-left-radius: var(--radius-sm); border-top-right-radius: var(--radius-sm); }
     .closes-session { border-bottom-left-radius: var(--radius-sm); border-bottom-right-radius: var(--radius-sm); }
     .session-badge {

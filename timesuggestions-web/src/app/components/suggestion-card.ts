@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { formatCaseMeta } from '../services/case-label';
+import { TwoStepConfirm } from '../services/confirm-state';
 import { toUserMessage } from '../services/user-message';
 import {
   ApprovePayload,
@@ -123,6 +124,9 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
 @Component({
   selector: 'app-suggestion-card',
   imports: [DatePipe, FormsModule, DurationPipe, DocumentHistory],
+  // Klik gdziekolwiek indziej rozbraja pytanie o czas — nieodpowiedziane pytanie
+  // wiszące na przycisku byłoby pułapką przy powrocie do karty za kilka minut.
+  host: { '(document:click)': 'confirm.reset()' },
   template: `
     <div class="card" [class.card-review]="needsReview()">
       <div class="card-header">
@@ -253,17 +257,36 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
             Czas możesz poprawiać także po zatwierdzeniu, w zakładce „Wpisy czasu".
           </p>
           <div class="actions">
-            <button class="btn btn-primary" (click)="approve()" [disabled]="busy() || sourceConflict()">Zapisz i zatwierdź</button>
+            <button
+              class="btn btn-primary"
+              [class.btn-confirm]="timeQuestionArmed()"
+              (click)="approve($event)"
+              [disabled]="busy() || sourceConflict()"
+            >{{ approveLabel() }}</button>
             <button class="btn" (click)="editing.set(false)" [disabled]="busy()">Anuluj</button>
           </div>
         </div>
       } @else {
         <p class="description">{{ descriptionDraft() }}</p>
         <div class="actions">
-          <button class="btn btn-primary" (click)="approve()" [disabled]="busy() || sourceConflict()">Zatwierdź</button>
+          <button
+            class="btn btn-primary"
+            [class.btn-confirm]="timeQuestionArmed()"
+            (click)="approve($event)"
+            [disabled]="busy() || sourceConflict()"
+          >{{ approveLabel() }}</button>
           <button class="btn" (click)="editing.set(true)" [disabled]="busy()">Edytuj</button>
           <button class="btn btn-danger" (click)="reject()" [disabled]="busy()">Odrzuć</button>
         </div>
+      }
+
+      @if (timeQuestionArmed()) {
+        <!-- Pytanie pada dopiero po kliknięciu, nie zawczasu: sesja o jednym zapisie
+             bywa naprawdę pięciominutowa i ostrzeżenie wiszące od początku byłoby
+             kolejnym tekstem do przewinięcia. Zdanie mówi, SKĄD ta liczba i co zrobić,
+             żeby ją zmienić — samo „na pewno?" zostawiałoby prawnika bez wyjścia
+             poza klikaniem dalej. -->
+        <p class="confirm-note text-warn">{{ timeQuestion() }}</p>
       }
 
       @if (sides().length > 0) {
@@ -417,6 +440,13 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
     .field-hint { grid-column: 1 / -1; margin: 0; font-size: var(--font-size-sm); }
     .edit-form .actions { grid-column: 1 / -1; margin-top: 0; }
     .actions { display: flex; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-3); }
+    /* Uzbrojone pytanie o czas w barwie ostrzeżenia, nie odmowy: to prośba
+       o potwierdzenie liczby, a nie akcja niszcząca. Ten sam bursztyn co plakietka
+       „czas do uzupełnienia", żeby było widać, że chodzi o tę samą rzecz. */
+    .btn-confirm {
+      background: var(--warn-soft); border-color: var(--warn); color: var(--warn);
+    }
+    .confirm-note { margin: var(--space-2) 0 0; font-size: var(--font-size-sm); text-align: right; }
     .conflict-box { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin: var(--space-2) 0; }
     .conflict-box .actions { margin-top: 0; }
     .history { margin-top: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-2); }
@@ -600,7 +630,41 @@ export class SuggestionCard {
     this.sourceConflict.set(false);
   }
 
-  protected async approve(): Promise<void> {
+  /** Potwierdzenie czasu per karta — pytanie dotyczy tej jednej sugestii, nie listy. */
+  protected confirm = new TwoStepConfirm();
+
+  /**
+   * Czy zatwierdzenie ma najpierw zapytać o czas. Warunkiem NIE jest sama plakietka
+   * „czas do uzupełnienia", tylko to, czy w polu wciąż stoi wartość z konfiguracji:
+   * prawnik, który wpisał własną liczbę minut, już podjął tę decyzję i drugie pytanie
+   * byłoby przeszkadzaniem. Dopasowana sprawa niczego tu nie zmienia — dopasowanie
+   * mówi, KOMU rozliczyć, a nie ILE.
+   */
+  protected timeNeedsConfirmation = computed(() =>
+    this.suggestion().needsTimeReview
+    && this.durationDraft() === this.suggestion().durationMinutes);
+
+  protected timeQuestionArmed = computed(() =>
+    this.timeNeedsConfirmation() && this.confirm.isArmed(`approve:${this.suggestion().id}`));
+
+  protected approveLabel = computed(() => {
+    if (this.timeQuestionArmed()) {
+      return `Na pewno ${formatDuration(this.durationDraft())}?`;
+    }
+
+    return this.editing() ? 'Zapisz i zatwierdź' : 'Zatwierdź';
+  });
+
+  protected timeQuestion = computed(() =>
+    `Ta sesja ma jeden zapis, więc ${formatDuration(this.durationDraft())} to minimum`
+    + ' z ustawień, a nie zmierzony czas pracy. Kliknij jeszcze raz, żeby zatwierdzić'
+    + ' tyle, albo wpisz własny czas w „Edytuj".');
+
+  protected async approve(event?: Event): Promise<void> {
+    // Klik nie może dobiec do dokumentu, bo rozbroiłby pytanie w tej samej chwili,
+    // w której je uzbroił.
+    event?.stopPropagation();
+
     if (this.sourceConflict()) {
       this.error.set('Sugestia zmieniła się podczas synchronizacji. Najpierw wybierz, które wartości zachować.');
       return;
@@ -613,6 +677,11 @@ export class SuggestionCard {
     }
     if (this.durationDraft() <= 0) {
       this.error.set('Czas trwania musi być większy od zera.');
+      return;
+    }
+    // Pytanie o czas idzie NA KOŃCU walidacji: nie ma sensu pytać o liczbę minut,
+    // dopóki zatwierdzenie i tak nie przejdzie z innego powodu.
+    if (this.timeNeedsConfirmation() && !this.confirm.confirm(`approve:${this.suggestion().id}`)) {
       return;
     }
 

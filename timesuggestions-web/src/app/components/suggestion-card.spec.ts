@@ -304,6 +304,66 @@ describe('SuggestionCard', () => {
     });
   });
 
+  /**
+   * Sesja o jednym zapisie nie ma zmierzonego czasu — widoczne 5 min to minimum
+   * z konfiguracji, nie pomiar. Dopasowana sprawa niczego tu nie zmienia: dopasowanie
+   * mówi, KOMU rozliczyć, a nie ILE. Zatwierdzenie jednym kliknięciem zapisywało więc
+   * na rachunku liczbę, której nikt nie potwierdził.
+   */
+  describe('czas do uzupełnienia wymaga potwierdzenia', () => {
+    const needsReview = (): Suggestion =>
+      createSuggestion({ needsTimeReview: true, durationMinutes: 5 });
+
+    async function clickButton(label: string): Promise<void> {
+      const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button'));
+      buttons.find((button) => button.textContent?.trim() === label)!.click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it('pierwsze kliknięcie pyta o czas zamiast zatwierdzać', async () => {
+      await setSuggestion(needsReview());
+
+      await clickButton('Zatwierdź');
+
+      expect(approveMock).not.toHaveBeenCalled();
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(text).toContain('Na pewno 5 min?');
+      expect(text).toContain('jeden zapis');
+    });
+
+    it('drugie kliknięcie zatwierdza podpowiedziany czas', async () => {
+      approveMock.mockResolvedValue({ id: 11 });
+      await setSuggestion(needsReview());
+
+      await clickButton('Zatwierdź');
+      await clickButton('Na pewno 5 min?');
+
+      expect(approveMock).toHaveBeenCalledWith(1, expect.objectContaining({ durationMinutes: 5 }));
+    });
+
+    it('własny czas kończy pytanie — decyzja już zapadła', async () => {
+      approveMock.mockResolvedValue({ id: 11 });
+      await setSuggestion(needsReview());
+      card().editing.set(true);
+      card().durationDraft.set(45);
+      fixture.detectChanges();
+
+      await clickButton('Zapisz i zatwierdź');
+
+      expect(approveMock).toHaveBeenCalledWith(1, expect.objectContaining({ durationMinutes: 45 }));
+    });
+
+    it('sesja ze zmierzonym czasem zatwierdza się od razu', async () => {
+      approveMock.mockResolvedValue({ id: 11 });
+      await setSuggestion(createSuggestion({ needsTimeReview: false, durationMinutes: 5 }));
+
+      await clickButton('Zatwierdź');
+
+      expect(approveMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('wolne luki i scalanie sesji', () => {
     const neighbor = (overrides: Partial<SuggestionNeighbor> = {}): SuggestionNeighbor => ({
       suggestionId: 7,

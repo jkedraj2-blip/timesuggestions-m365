@@ -410,6 +410,38 @@ describe('SuggestionCard', () => {
       expect(buttonLabels(neighborRows()[0])).toEqual(['Scal w jedną sesję']);
     });
 
+    /**
+     * Dwie przerwy naraz (jedna przed sesją, druga po niej) zlewały się w ścianę
+     * linków: zdanie i przyciski stały w jednym wierszu, wiersze jeden pod drugim bez
+     * żadnego odstępu, więc nie było widać, gdzie kończy się jedna decyzja, a zaczyna
+     * druga, ani której przerwy dotyczy który przycisk.
+     */
+    it('każda strona dostaje własny blok z nagłówkiem kierunku', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: { before: neighbor(), after: neighbor({ canMerge: false, title: 'Rozprawa' }) },
+      }));
+
+      const rows = neighborRows();
+      expect(rows).toHaveLength(2);
+      expect(rows.map((row) => row.querySelector('.neighbor-when')?.textContent?.trim()))
+        .toEqual(['Przed tą sesją', 'Po tej sesji']);
+    });
+
+    it('formularz podziału otwiera się w bloku swojej przerwy', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: { before: neighbor(), after: neighbor({ canMerge: false, title: 'Rozprawa' }) },
+      }));
+
+      Array.from(neighborRows()[1].querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Podziel przerwę…')!
+        .click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(neighborRows()[0].querySelector('.split-form')).toBeNull();
+      expect(neighborRows()[1].querySelector('.split-form')).not.toBeNull();
+    });
+
     it('każdy przycisk niesie pełne zdanie o skutku w podpowiedzi', async () => {
       await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
 

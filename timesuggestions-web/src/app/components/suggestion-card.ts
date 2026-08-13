@@ -276,71 +276,82 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
              przycisku, bo obiecywał operację odrzucaną przez tę samą warstwę. -->
         <div class="neighbors">
           @for (side of sides(); track side.side) {
+            <!-- Każda strona to osobny blok z ramką, a nie kolejny wiersz tekstu.
+                 Dwie przerwy jedna pod drugą, każda z własnymi przyciskami, zlewały się
+                 w ścianę linków: nie było widać, gdzie kończy się jedna decyzja,
+                 a zaczyna druga, ani której przerwy dotyczy który przycisk. Nagłówek
+                 z kierunkiem daje orientację, zanim się przeczyta zdanie. -->
             <div class="neighbor-row">
-              <span class="text-muted">{{ neighborLabel(side.neighbor, side.side) }}</span>
-              <!-- Etykiety mówią WPROST, co zrobi kliknięcie i o ile minut chodzi.
-                   „Dolicz całość" nie niosło ani liczby, ani kierunku: prawnik klikał
-                   i widział tylko, że czas skądś podskoczył. -->
-              @if (side.neighbor.canClaim) {
-                <button
-                  class="btn btn-ghost"
-                  (click)="claimWhole(side)"
-                  [disabled]="busy()"
-                  [title]="wholeHint(side)"
-                >
-                  Dolicz {{ side.neighbor.gapMinutes }} min do tej sesji
-                </button>
-                <button
-                  class="btn btn-ghost"
-                  (click)="startSplit(side)"
-                  [disabled]="busy()"
-                  [title]="splitHint(side)"
-                >
-                  {{ side.neighbor.suggestionId === null ? 'Dolicz część…' : 'Podziel przerwę…' }}
-                </button>
-              }
-              @if (side.neighbor.canMerge) {
-                <button
-                  class="btn btn-ghost"
-                  (click)="mergeWith(side.neighbor.suggestionId!)"
-                  [disabled]="busy()"
-                  [title]="mergeHint(side)"
-                >
-                  Scal w jedną sesję
-                </button>
-              }
-            </div>
+              <p class="neighbor-when">{{ side.side === 'before' ? 'Przed tą sesją' : 'Po tej sesji' }}</p>
+              <p class="neighbor-text">{{ neighborLabel(side.neighbor, side.side) }}</p>
+              <!-- Przyciski w osobnej linii pod zdaniem: dosunięte do prawej krawędzi
+                   tego samego wiersza stały daleko od tekstu, który je tłumaczy.
+                   Etykiety mówią WPROST, co zrobi kliknięcie i o ile minut chodzi —
+                   „Dolicz całość" nie niosło ani liczby, ani kierunku. -->
+              <div class="neighbor-actions">
+                @if (side.neighbor.canClaim) {
+                  <button
+                    class="btn btn-ghost"
+                    (click)="claimWhole(side)"
+                    [disabled]="busy()"
+                    [title]="wholeHint(side)"
+                  >
+                    Dolicz {{ side.neighbor.gapMinutes }} min do tej sesji
+                  </button>
+                  <button
+                    class="btn btn-ghost"
+                    (click)="startSplit(side)"
+                    [disabled]="busy()"
+                    [title]="splitHint(side)"
+                  >
+                    {{ side.neighbor.suggestionId === null ? 'Dolicz część…' : 'Podziel przerwę…' }}
+                  </button>
+                }
+                @if (side.neighbor.canMerge) {
+                  <button
+                    class="btn btn-ghost"
+                    (click)="mergeWith(side.neighbor.suggestionId!)"
+                    [disabled]="busy()"
+                    [title]="mergeHint(side)"
+                  >
+                    Scal w jedną sesję
+                  </button>
+                }
+              </div>
 
-            @if (splitTarget()?.side === side.side) {
-              <!-- Podział jest jawny, a nie „po połowie w ciemno": prawnik widzi obie
-                   liczby przed zapisem i od razu je poprawia, bo to on wie, po której
-                   stronie przerwy naprawdę pracował. Połowa jest tylko wartością
-                   startową. Niedobrane minuty zostają wolne — nie dopisujemy ich
-                   nikomu za użytkownika. -->
-              <div class="split-form">
-                <label class="split-field">
-                  tutaj
-                  <input type="number" min="0" [max]="side.neighbor.gapMinutes" [(ngModel)]="splitMinutes" />
-                  min
-                </label>
-                @if (side.neighbor.suggestionId !== null) {
+              @if (splitTarget()?.side === side.side) {
+                <!-- Formularz W BLOKU tej przerwy, nie pod całą listą: przy dwóch
+                     przerwach naraz nie było widać, którą się właśnie dzieli.
+                     Podział jest jawny, a nie „po połowie w ciemno": prawnik widzi obie
+                     liczby przed zapisem i od razu je poprawia, bo to on wie, po której
+                     stronie przerwy naprawdę pracował. Połowa jest tylko wartością
+                     startową. Niedobrane minuty zostają wolne — nie dopisujemy ich
+                     nikomu za użytkownika. -->
+                <div class="split-form">
                   <label class="split-field">
-                    „{{ side.neighbor.title }}"
-                    <input type="number" min="0" [max]="side.neighbor.gapMinutes" [(ngModel)]="splitNeighborMinutes" />
+                    tutaj
+                    <input type="number" min="0" [max]="side.neighbor.gapMinutes" [(ngModel)]="splitMinutes" />
                     min
                   </label>
-                }
-                <span class="split-rest" [class.text-warn]="splitFreeMinutes() < 0">
-                  z {{ side.neighbor.gapMinutes }} min zostaje wolne: {{ splitFreeMinutes() }} min
-                </span>
-                <div class="actions">
-                  <button class="btn btn-primary" (click)="saveSplit()" [disabled]="busy() || !splitValid()">
-                    Zapisz podział
-                  </button>
-                  <button class="btn" (click)="splitTarget.set(null)" [disabled]="busy()">Anuluj</button>
+                  @if (side.neighbor.suggestionId !== null) {
+                    <label class="split-field">
+                      „{{ side.neighbor.title }}"
+                      <input type="number" min="0" [max]="side.neighbor.gapMinutes" [(ngModel)]="splitNeighborMinutes" />
+                      min
+                    </label>
+                  }
+                  <span class="split-rest" [class.text-warn]="splitFreeMinutes() < 0">
+                    z {{ side.neighbor.gapMinutes }} min zostaje wolne: {{ splitFreeMinutes() }} min
+                  </span>
+                  <div class="actions">
+                    <button class="btn btn-primary" (click)="saveSplit()" [disabled]="busy() || !splitValid()">
+                      Zapisz podział
+                    </button>
+                    <button class="btn" (click)="splitTarget.set(null)" [disabled]="busy()">Anuluj</button>
+                  </div>
                 </div>
-              </div>
-            }
+              }
+            </div>
           }
         </div>
       }
@@ -410,18 +421,32 @@ export function suggestionGapNote(suggestion: Suggestion): string | null {
     .conflict-box .actions { margin-top: 0; }
     .history { margin-top: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-2); }
     .history-toggle { padding: 0 var(--space-2); font-size: var(--font-size-sm); }
-    .neighbors { margin-top: var(--space-2); display: flex; flex-direction: column; gap: var(--space-1); }
+    .neighbors { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+    /* Blok z ramką i własnym tłem zamiast kolejnej linijki tekstu: dwie przerwy naraz
+       (jedna przed sesją, druga po niej) mają wyglądać na dwie osobne decyzje. Pasek
+       z boku wiąże blok z kartą, do której należy. */
     .neighbor-row {
-      display: flex; align-items: center; gap: var(--space-2);
-      flex-wrap: wrap; font-size: var(--font-size-sm);
+      display: flex; flex-direction: column; gap: var(--space-1);
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm); background: var(--surface-alt);
+      font-size: var(--font-size-sm);
     }
-    .neighbor-row .text-muted { flex: 1; min-width: 0; }
-    .neighbor-row .btn { padding: 0 var(--space-2); font-size: var(--font-size-sm); }
+    /* Kierunek osobno i drobnym drukiem: orientacja przed przeczytaniem zdania. */
+    .neighbor-when {
+      margin: 0; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--text-muted);
+    }
+    .neighbor-text { margin: 0; }
+    .neighbor-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
+    .neighbor-actions .btn { padding: 0 var(--space-2); font-size: var(--font-size-sm); }
     .split-form {
       display: flex; align-items: center; gap: var(--space-3);
       flex-wrap: wrap; font-size: var(--font-size-sm);
       padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius);
     }
+    /* Formularz podziału stoi w bloku swojej przerwy — jaśniejsze tło odcina go od niego. */
+    .neighbor-row .split-form { margin-top: var(--space-2); background: var(--surface); }
     .split-field { display: inline-flex; align-items: center; gap: var(--space-1); }
     /* Wąskie pole: to są minuty przerwy, nie kwota — szersze sugerowałoby większe liczby. */
     .split-field input { width: 4.5rem; }

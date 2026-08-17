@@ -93,6 +93,18 @@ edytował dokument. Dla plików Word i Excel dostępne są przede wszystkim znac
 jest estymowany na podstawie obserwowalnych punktów zapisu, a nie mierzony jak przez
 lokalny rejestrator aktywności klawiatury lub procesu.
 
+Historia wersji OneDrive zawiera znaczniki czasu zapisanych wersji, ale nie rejestruje
+otwarcia pliku, przebiegu aktywności użytkownika ani zamknięcia dokumentu. AutoSave
+zapisuje zmiany regularnie, natomiast Microsoft 365 dodaje wersje do historii okresowo,
+a nie po każdej modyfikacji.
+[Dokumentacja Microsoft dotycząca AutoSave](https://support.microsoft.com/office/6d6bd723-ebfd-4e40-b5f6-ae6e8088f7a5)
+podaje interwał około 10 minut w trakcie jednej sesji edycji. Liczba punktów dostępnych
+przez `GET /drive/items/{id}/versions` może być zatem mniejsza od liczby faktycznych zapisów.
+Dłuższa praca i krótka poprawka mogą pozostawić tylko jeden obserwowalny punkt, jeżeli
+aplikacja nie zsynchronizowała pliku w trakcie edycji. Czas trwania można wyliczyć jako
+różnicę dopiero między co najmniej dwoma punktami. Pojedynczy punkt nie zawiera
+informacji o długości pracy, dlatego taka sesja wymaga ręcznego podania czasu.
+
 Backend prowadzi niemodyfikowalny dziennik `DocumentActivity`. Naturalnym kluczem
 obserwacji jest trójka:
 
@@ -125,11 +137,13 @@ zimowego nie zafałszowała długości, natomiast data i godziny prezentowane u�
 są przeliczane na strefę biznesową, domyślnie `Europe/Warsaw`.
 
 Dla sesji z mierzalnym odstępem system nie dodaje czasu przed pierwszą ani po ostatniej
-obserwacji. Jeżeli różnica między pierwszym i ostatnim punktem po zaokrągleniu wynosi zero
-minut, zasięg kończy się po upływie `MinimumSessionMinutes`, domyślnie 5 minut, a sugestia
-otrzymuje tę samą wartość czasu oraz znacznik `NeedsTimeReview`. Interfejs wymaga wtedy
-dwukrotnego potwierdzenia wartości domyślnej albo wpisania własnej liczby minut.
-Zatwierdzanie hurtowe pomija sugestie ze znacznikiem `NeedsTimeReview`.
+obserwacji. Jeżeli różnica między pierwszym i ostatnim punktem po zaokrągleniu wynosi
+zero minut, typowo przy pojedynczym zapisie, historia nie niesie żadnej informacji
+o długości pracy (ograniczenie opisane w danych wejściowych). Zasięg kończy się wtedy po
+upływie `MinimumSessionMinutes`, domyślnie 5 minut, a sugestia otrzymuje tę samą wartość
+czasu oraz znacznik `NeedsTimeReview`. Interfejs wymaga dwukrotnego potwierdzenia
+wartości domyślnej albo wpisania własnej liczby minut. Zatwierdzanie hurtowe pomija
+sugestie ze znacznikiem `NeedsTimeReview`.
 
 Tor awaryjny jest używany, gdy dla pliku nie ma żadnej zapisanej aktywności. Dotyczy to
 między innymi pliku z `versions: null`, dla którego baza nie zawiera wcześniejszych

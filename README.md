@@ -19,11 +19,13 @@ Aplikacja udostępnia trzy główne widoki:
 | **Wpisy czasu** | Ewidencja aktywnych wpisów według dni, korekty czasu, obsługa przerw, scalanie i rozdzielanie wpisów, zaokrąglanie do jednostki rozliczeniowej oraz archiwizacja rozliczonego czasu |
 | **Sprawy** | Dodawanie i edycja spraw, konfiguracja numeru, klienta i słów kluczowych, aktywacja oraz dezaktywacja bez usuwania historii |
 
-Nad widokami znajduje się podsumowanie liczby oczekujących sugestii, aktywnych wpisów,
-nierozliczonego czasu i ostatniej synchronizacji. Zwijana oś czasu przedstawia sugestie,
-aktywne wpisy i pozycje rozliczone w układzie dziennym. Dla dokumentów dostępna jest
-również historia obserwowanych wersji; porównanie treści działa dla plików `.docx` i jest
-wykonywane wyłącznie w przeglądarce.
+Nad widokami znajduje się podsumowanie liczby oczekujących i zatwierdzonych sugestii,
+sumy minut w aktywnych wpisach oraz czasu ostatniej synchronizacji. Kafelek opisany jako
+„zapisane wpisy” prezentuje wartość `approvedCount`, czyli liczbę zatwierdzonych sugestii;
+po scaleniu kilka sugestii może należeć do jednego wpisu czasu. Zwijana oś czasu
+przedstawia oczekujące sugestie, aktywne wpisy i pozycje rozliczone w układzie dziennym.
+Dla dokumentów dostępna jest historia obserwowanych wersji. Porównanie treści działa
+wyłącznie dla plików `.docx` i jest wykonywane w przeglądarce.
 
 ## Architektura i przepływ danych
 
@@ -46,10 +48,12 @@ Backend w katalogu `TimeSuggestions/` jest aplikacją .NET 10 Web API. Zawiera l
 biznesową, silnik sesji dokumentowych, dopasowanie spraw, ochronę przed duplikatami,
 operacje na czasie oraz dostęp do lokalnej bazy SQLite przez EF Core.
 
-Aplikacja jest klientem publicznym OAuth 2.0 z PKCE i nie posiada `client secret`.
-Token Microsoft Graph pozostaje w przeglądarce i nie jest przekazywany do backendu.
-Adres każdego żądania zawierającego nagłówek `Authorization`, w tym adresy stronicowania
-`@odata.nextLink` i `@odata.deltaLink`, jest weryfikowany przed użyciem.
+Logowanie i pobieranie tokenów obsługuje `@azure/msal-browser` skonfigurowany jako klient
+publiczny bez `client secret`. Token Microsoft Graph pozostaje w przeglądarce i nie jest
+przekazywany do backendu. Przed dołączeniem nagłówka `Authorization` frontend sprawdza,
+czy początkowy adres żądania używa HTTPS i hosta `graph.microsoft.com`. Kontrola obejmuje
+również adresy stronicowania `@odata.nextLink` i wskaźnik `@odata.deltaLink` zapisany
+w `localStorage`.
 
 ## Synchronizacja danych
 
@@ -68,10 +72,15 @@ tylko zmiany. Wskaźnik delty jest zapisywany dopiero po prawidłowym zakończen
 Jawne tombstone'y usuniętych plików usuwają wyłącznie oczekujące sugestie; brak pliku
 w przyrostowej odpowiedzi nie jest traktowany jako dowód jego usunięcia.
 
-Obsługiwane są pliki `.docx`, `.doc`, `.xlsx` i `.xls`, zmodyfikowane przez zalogowanego
-użytkownika w wybranym oknie synchronizacji. Dla każdego kwalifikującego się pliku
-frontend pobiera stronicowaną historię wersji z Microsoft Graph. Liczba równoległych
-żądań jest ograniczona, a błąd historii pojedynczego pliku nie przerywa całej
+Obsługiwane są pliki `.docx`, `.doc`, `.xlsx` i `.xls` z wybranego okna synchronizacji.
+Frontend ustala pole `lastModifiedByMe` na podstawie danych `lastModifiedBy` i aktywnego
+konta MSAL; brak danych autora na dysku osobistym jest traktowany jako modyfikacja
+właściciela. Backend wyklucza z budowania sugestii pliki, dla których
+`lastModifiedByMe` ma wartość `false`. Aktywności wersji są zapisywane dla wszystkich
+plików przekazanych w payloadzie. Dla każdego pliku spełniającego filtr rozszerzenia
+i czasu frontend pobiera stronicowaną historię wersji z Microsoft Graph. Jednocześnie
+działają najwyżej cztery żądania historii. Błąd dotyczący pojedynczego pliku ustawia jego
+pole `versions` na `null`, zwiększa licznik błędów w raporcie i nie przerywa całej
 synchronizacji.
 
 ## Naliczanie czasu pracy nad dokumentami
@@ -91,11 +100,12 @@ obserwacji jest trójka:
 (identyfikator pliku, identyfikator wersji lub próbki, moment modyfikacji UTC)
 ```
 
-Do dziennika trafiają znaczniki wszystkich pobranych wersji. Jeżeli bieżący
-`driveItem.lastModifiedDateTime` wskazuje moment, którego nie ma w historii wersji,
-zapisywana jest dodatkowa próbka bieżącego stanu pliku. Jest to istotne zwłaszcza przy
-ciągłej edycji: aplikacje Office mogą przez dłuższy czas aktualizować tę samą wersję albo
-utworzyć nową wersję dopiero po zamknięciu dokumentu lub okresie bezczynności.
+Do dziennika trafiają znaczniki pobranych wersji. Jeżeli historia wersji została pobrana,
+a bieżący `driveItem.lastModifiedDateTime` wskazuje moment nieobecny na tej liście,
+backend zapisuje dodatkową obserwację z identyfikatorem `item`. Dziennik może również
+zawierać kilka momentów przypisanych do tego samego identyfikatora wersji zwróconego
+przez Graph. Powtórne dane o identycznym pliku, identyfikatorze wersji i momencie są
+pomijane przez kontrolę w serwisie oraz indeks unikalny w SQLite.
 
 ### Budowanie sesji
 
@@ -109,33 +119,39 @@ momentu. Następnie silnik dzieli je na sesje zgodnie z konfigurowalnymi progami
 - zmiana lokalnego dnia zawsze rozpoczyna nową sesję, niezależnie od długości odstępu.
 
 Początkiem sesji jest moment pierwszego zaobserwowanego zapisu, a końcem moment
-ostatniego zapisu. Czas brutto stanowi zaokrąglona do pełnej minuty różnica między tymi
+ostatniego zapisu. Czas brutto jest zaokrągloną do pełnej minuty różnicą między tymi
 punktami. Obliczenie jest wykonywane na znacznikach UTC, aby zmiana czasu letniego lub
 zimowego nie zafałszowała długości, natomiast data i godziny prezentowane użytkownikowi
 są przeliczane na strefę biznesową, domyślnie `Europe/Warsaw`.
 
-System nie dodaje czasu przed pierwszym zapisem ani po ostatnim zapisie. Nie stosuje
-również dawnej, stałej wartości 30 minut dla każdego dokumentu. Jeżeli historia zawiera
-tylko jeden punkt albo wszystkie obserwacje mieszczą się po zaokrągleniu w tej samej
-minucie, rzeczywisty czas jest nieznany. Taka sugestia otrzymuje techniczne minimum
-5 minut oraz znacznik `NeedsTimeReview`. Przed zatwierdzeniem użytkownik musi podać lub
-potwierdzić czas; operacja hurtowa pomija takie pozycje.
+Dla sesji z mierzalnym odstępem system nie dodaje czasu przed pierwszą ani po ostatniej
+obserwacji. Jeżeli różnica między pierwszym i ostatnim punktem po zaokrągleniu wynosi zero
+minut, zasięg kończy się po upływie `MinimumSessionMinutes`, domyślnie 5 minut, a sugestia
+otrzymuje tę samą wartość czasu oraz znacznik `NeedsTimeReview`. Interfejs wymaga wtedy
+dwukrotnego potwierdzenia wartości domyślnej albo wpisania własnej liczby minut.
+Zatwierdzanie hurtowe pomija sugestie ze znacznikiem `NeedsTimeReview`.
 
-Jeżeli pobranie historii wersji nie powiedzie się, plik trafia do trybu awaryjnego:
-powstaje najwyżej jedna sugestia dla danego pliku i dnia, również oznaczona jako
-wymagająca weryfikacji czasu. Błąd jest wykazywany w raporcie synchronizacji.
+Tor awaryjny jest używany, gdy dla pliku nie ma żadnej zapisanej aktywności. Dotyczy to
+między innymi pliku z `versions: null`, dla którego baza nie zawiera wcześniejszych
+obserwacji. W tym trybie powstaje najwyżej jedna sugestia dla danego pliku i lokalnego
+dnia. Otrzymuje ona `MinimumSessionMinutes` i `NeedsTimeReview`. Jeżeli baza zawiera już
+aktywności pliku, silnik może zbudować sesje z zapisanych obserwacji także wtedy, gdy
+bieżące pobranie historii wersji zakończyło się błędem.
 
 ### Znaczenie synchronizacji co 10 minut
 
-Opcjonalne automatyczne sprawdzanie wykonuje synchronizację co 10 minut, gdy użytkownik
-jest zalogowany i karta aplikacji pozostaje otwarta. Funkcja jest domyślnie wyłączona
-i wymaga świadomego włączenia. Po trzech kolejnych błędach wyłącza się automatycznie,
-aby nie wykonywać bez końca nieskutecznych żądań.
+Opcjonalne automatyczne sprawdzanie uruchamia synchronizację co 10 minut, gdy użytkownik
+jest zalogowany i aplikacja pozostaje otwarta. Funkcja jest domyślnie wyłączona. Jej
+włączenie uruchamia synchronizację od razu, a przywrócenie zapisanej preferencji po
+ponownym otwarciu aplikacji uruchamia pierwszy przebieg po upływie interwału. Po trzech
+kolejnych błędach automat wyłącza się i pokazuje komunikat użytkownikowi.
 
-Dziesięciominutowy interwał jest krótszy od 15-minutowego progu ciągłości sesji. Jeżeli
-Office aktualizuje `lastModifiedDateTime`, częstsze odczyty tworzą gęstszy szereg próbek
-i ograniczają ryzyko błędnego podziału ciągłej pracy. Mechanizm ten poprawia jakość
-estymacji, szczególnie wtedy, gdy wiele obserwacji dotyczy tej samej wersji pliku.
+Dziesięciominutowy interwał jest krótszy od 15-minutowego progu ciągłości sesji. Przebieg
+automatyczny odczytuje pełne okno kalendarza i przyrostową deltę OneDrive. Jeżeli delta
+zwróci plik i pobranie historii zakończy się powodzeniem, backend dodaje nieznane
+dotychczas znaczniki wersji. Dodatkowa obserwacja `item` powstaje, gdy
+`driveItem.lastModifiedDateTime` nie występuje wśród momentów zwróconych wersji. Kolejne
+przebiegi mogą w ten sposób zagęścić dziennik aktywności.
 
 Nie jest to jednak gwarancja kompletnego pomiaru. Synchronizacja działa tylko przy
 otwartej aplikacji i aktywnej sesji Microsoft, a częstotliwość tworzenia wersji oraz
@@ -146,18 +162,29 @@ sesji na podstawie dostępnej telemetrii, wymagającą kontroli użytkownika.
 
 ### Dalsza praca, przerwy i nakładanie
 
-Po zatwierdzeniu lub odrzuceniu sugestii jej przedział aktywności jest uznawany za
-rozstrzygnięty. Późniejsze zapisy tego samego pliku mogą zbudować kolejną sugestię,
-zamiast zostać zablokowane przez wcześniejszy wpis. Numer sesji, na przykład „edycja 3”,
-jest wyliczany na podstawie całej historii pliku.
+Aktywności objęte zatwierdzoną sugestią dokumentową albo oczekującą sugestią poprawioną
+przez użytkownika są wyłączane z wejścia silnika sesji. Aktywności spoza tych zakresów
+mogą utworzyć kolejne sugestie tego samego pliku. Odrzucone i zarchiwizowane sugestie
+pozostają w bazie i uczestniczą w ochronie przed ponownym utworzeniem tej samej sesji.
+Numer sesji, na przykład „edycja 3”, jest wyliczany na podstawie chronologii sugestii
+danego pliku.
 
-Przerwy wykryte wewnątrz sesji są częścią czasu brutto, dopóki użytkownik ich nie
-wyłączy. Wolną lukę między sąsiednimi pozycjami można przypisać do jednej lub obu stron,
-jeżeli nie zawiera innego wpisu lub sugestii, nie przekracza lokalnej północy i spełnia
-limit operacji. Sesje tego samego dokumentu można scalać. System rozróżnia zasięg
-czasowy pozycji od liczby minut podlegających rozliczeniu i pilnuje, aby jedna minuta
-doby nie należała do więcej niż jednej aktywnej pozycji. Przy zatwierdzaniu zasięg może
-zostać przycięty do najbliższego sąsiada, a wynik operacji jest komunikowany wprost.
+Przerwy od ponad 15 do 30 minut wewnątrz sesji są częścią czasu brutto, dopóki użytkownik
+nie wyłączy ich w aktywnym wpisie. Wolną lukę między sąsiednimi pozycjami można doliczyć
+do bieżącej sugestii, a także podzielić między dwie oczekujące sugestie. Podział nie może
+przekroczyć długości luki, przejść przez lokalną północ ani przekroczyć limitu 480 minut.
+Jeżeli po drugiej stronie znajduje się wpis czasu, operacja nie zmienia go z poziomu
+sugestii.
+
+Oczekujące sugestie tego samego dokumentu można scalać między sobą, jeżeli pochodzą
+z jednego dnia. Ta sama reguła dotyczy scalania aktywnych wpisów między sobą. Serwisy
+scalania i obsługi luk sprawdzają, czy nowo zajęty odcinek nie zawiera innej pozycji.
+Podczas zatwierdzania koniec zasięgu jest przycinany do późniejszego sąsiada
+rozpoczynającego się wewnątrz tego zasięgu. Pokrycie z pozycją, która rozpoczyna się
+wcześniej albo dokładnie w tym samym momencie, nie blokuje zatwierdzenia; wpis powstaje
+z komunikatem `notice` opisującym nakładanie. Pole `DurationMinutes` pozostaje liczbą
+minut do rozliczenia, natomiast `StartedAt` i `EndedAt` określają położenie wpisu na osi
+czasu.
 
 ## Dopasowanie sugestii do spraw
 
@@ -176,21 +203,28 @@ fleksyjnej, dlatego wymagane warianty nazw należy dodać jako słowa kluczowe.
 
 ## Reguły ewidencji i rozliczania
 
-- Zatwierdzenie wymaga aktywnej sprawy oraz dodatniego czasu nieprzekraczającego
-  obowiązującego limitu. Jedna lub kilka scalonych sugestii może wskazywać ten sam wpis.
-- Każda ręczna korekta czasu jest rejestrowana jako `TimeEntryAdjustment`, co pozwala
-  odtworzyć sposób uzyskania wartości końcowej.
-- Zaokrąglenie jest wykonywane po stronie serwera do jednostki z konfiguracji,
-  domyślnie 30 minut. Jednostka rozliczeniowa nie jest tym samym co estymacja czasu
-  dokumentu i nie wpływa na wynik silnika sesji.
+- Zatwierdzenie wymaga aktywnej sprawy, opisu o długości do 500 znaków oraz czasu od
+  1 do 1440 minut. Jeden wpis może być powiązany z kilkoma scalonymi sugestiami.
+- Korekty aktywnego wpisu wykonywane przez zmianę minut, przełączanie przerw,
+  zaokrąglanie i scalanie z doliczeniem luk są zapisywane jako `TimeEntryAdjustment`.
+  Czas podany w formularzu zatwierdzenia jest zapisywany bez osobnego rekordu korekty.
+- Zaokrąglenie jest wykonywane po stronie serwera do najbliższej wielokrotności
+  `BillingIncrementMinutes`, domyślnie 30 minut. Dokładna połowa jest zaokrąglana w dół,
+  a minimalnym wynikiem jest jedna jednostka. Jednostka rozliczeniowa nie wpływa na
+  wynik silnika sesji dokumentowych.
+- Korekta minut, zaokrąglenie albo przełączenie przerwy aktywnego wpisu nie może
+  zwiększyć jego czasu ponad 480 minut. Zmniejszanie wpisu przekraczającego ten próg jest
+  dozwolone. Zatwierdzenie przyjmuje do 1440 minut, a operacje scalania sumują czasy
+  pozycji zgodnie z własnymi regułami.
 - Cofnięcie zatwierdzenia usuwa aktywny wpis i przywraca jego sugestie. Odrzuconą
   sugestię można przywrócić do czasu jej archiwizacji.
-- Rozliczenie przenosi wpis do jednokierunkowego archiwum. Rozliczonego wpisu nie można
-  edytować ani cofnąć; ewentualne storno pozostaje funkcją planowaną.
+- Rozliczenie ustawia `ArchivedAt`. Rozliczonego wpisu nie można korygować, scalać,
+  rozdzielać ani usunąć przez operację cofnięcia zatwierdzenia.
 - Sprawy są dezaktywowane zamiast usuwane. Numer pozostaje zajęty, ponieważ identyfikuje
   sprawę w historycznych wpisach.
-- Indeksy unikalne i token współbieżności w bazie domykają wyścigi przy synchronizacji,
-  zatwierdzaniu oraz edycji danych. Konflikty są zwracane jako odpowiedzi `409`.
+- Unikalne indeksy obejmują kotwicę sugestii, aktywność dokumentu i numer sprawy. Status
+  sugestii jest tokenem współbieżności. Konflikty domenowe i przegrane wyścigi są
+  zwracane jako odpowiedzi `409` w obsługiwanych ścieżkach.
 
 ## API
 
@@ -198,7 +232,7 @@ Najważniejsze endpointy lokalnego backendu:
 
 | Metoda i ścieżka | Znaczenie |
 |---|---|
-| `POST /api/sync` | Synchronizuje kalendarz, pliki, wersje i tombstone'y; zwraca raport filtrowania, sesji i zmian |
+| `POST /api/sync` | Przetwarza dane kalendarza, pliki, wersje i tombstone'y przesłane przez frontend; zwraca raport filtrowania, sesji i zmian |
 | `GET /api/suggestions` | Zwraca sugestie filtrowane według statusu i źródła |
 | `POST /api/suggestions/merge` | Scala sugestie sesji tego samego dokumentu |
 | `POST /api/suggestions/{id}/claim-gap` | Rozdziela wolną lukę między sąsiednie pozycje |
@@ -207,10 +241,13 @@ Najważniejsze endpointy lokalnego backendu:
 | `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą sugestię |
 | `POST /api/suggestions/{id}/archive` | Archiwizuje pojedynczą odrzuconą sugestię |
 | `POST /api/suggestions/archive-rejected` | Archiwizuje wszystkie odrzucone sugestie |
-| `GET`, `POST`, `PUT /api/cases` | Odczytuje, dodaje i aktualizuje sprawy |
-| `POST /api/cases/{id}/activate` lub `deactivate` | Zmienia aktywność sprawy |
+| `GET /api/cases` | Zwraca aktywne sprawy albo, z `includeInactive=true`, wszystkie sprawy |
+| `POST /api/cases` | Dodaje sprawę z unikalnym numerem |
+| `PUT /api/cases/{id}` | Aktualizuje dane sprawy |
+| `POST /api/cases/{id}/activate` | Aktywuje sprawę |
+| `POST /api/cases/{id}/deactivate` | Dezaktywuje sprawę |
 | `GET /api/time-entries` | Zwraca aktywne albo zarchiwizowane wpisy czasu |
-| `POST /api/time-entries/merge` | Scala wpisy jednej sesji dokumentowej |
+| `POST /api/time-entries/merge` | Scala aktywne wpisy tego samego dokumentu i dnia |
 | `POST /api/time-entries/{id}/unmerge` | Odtwarza wpisy składowe przed archiwizacją |
 | `POST /api/time-entries/{id}/add-gap` lub `subtract-gap` | Włącza albo wyłącza wykrytą przerwę |
 | `POST /api/time-entries/{id}/adjust` | Wykonuje ręczną korektę czasu |
@@ -218,8 +255,9 @@ Najważniejsze endpointy lokalnego backendu:
 | `POST /api/time-entries/archive` | Archiwizuje wpisy z zakresu dat |
 | `POST /api/time-entries/{id}/archive` | Archiwizuje pojedynczy wpis |
 | `DELETE /api/time-entries/{id}` | Cofa zatwierdzenie aktywnego wpisu |
-| `GET /api/timeline` i `GET /api/timeline/{date}` | Zwraca miesięczne podsumowanie i pozycje wybranego dnia |
-| `GET /api/timeline/document-activity` | Zwraca historię obserwacji i sesji dokumentu |
+| `GET /api/timeline?from=&to=` | Zwraca dzienne liczniki z zakresu nieprzekraczającego 366 dni |
+| `GET /api/timeline/{date}` | Zwraca oczekujące sugestie i wpisy wybranego dnia |
+| `GET /api/timeline/document-activity?externalId=` | Zwraca historię obserwacji i sesji dokumentu |
 | `GET /api/summary` | Zwraca dane kafelków podsumowania |
 
 Przykładowe żądania znajdują się w
@@ -234,9 +272,10 @@ metadane: nazwy plików, tytuły nieprywatnych spotkań, klientów, numery spraw
 aktywności i opisy wpisów. Baza stanowi zatem indeks pracy kancelarii i wymaga ochrony
 na równi z innymi danymi zawodowymi.
 
-Obecna wersja jest lokalnym prototypem dla jednego użytkownika:
+Implementacja jest lokalnym prototypem dla jednego użytkownika:
 
-- API nie ma własnego uwierzytelniania i nasłuchuje wyłącznie na `localhost:5188`;
+- API nie ma własnego uwierzytelniania; profil `http` używany w instrukcji uruchomienia
+  nasłuchuje na `http://localhost:5188`;
 - baza `timesuggestions.db` oraz kopie wykonywane przed migracjami nie są szyfrowane
   przez aplikację;
 - komunikacja z lokalnym API odbywa się po HTTP, a CORS dopuszcza wyłącznie
@@ -248,15 +287,11 @@ Obecna wersja jest lokalnym prototypem dla jednego użytkownika:
   przez Microsoft 365;
 - listy sugestii oraz wpisów nie są stronicowane.
 
-Przed wdrożeniem produkcyjnym wymagane są co najmniej: walidacja tokenu Entra dla API,
-izolacja danych użytkowników, HTTPS, szyfrowanie danych spoczynkowych, kontrolowana
-retencja i kopie zapasowe, audyt dostępu, ograniczanie liczby żądań, paginacja oraz
-monitoring bez rejestrowania poufnych metadanych. Token Graph nadal powinien pozostać
-wyłącznie po stronie klienta.
-
 ## Uruchomienie lokalne
 
-Wymagane są .NET SDK 10, Node.js 20 lub nowszy oraz Angular CLI.
+Wymagane są .NET SDK 10 oraz Node.js w wersji obsługiwanej przez Angular 21:
+`^20.19.0`, `^22.12.0` albo `>=24.0.0`. Angular CLI jest zależnością deweloperską
+projektu i jest uruchamiany lokalnie przez `npx`.
 
 Backend:
 
@@ -265,11 +300,14 @@ cd TimeSuggestions/TimeSuggestions
 dotnet run --launch-profile http
 ```
 
-Backend działa pod adresem `http://localhost:5188`. Przy starcie automatycznie tworzy
-bazę SQLite i wykonuje migracje. Przed każdą oczekującą migracją powstaje kopia
-`timesuggestions.db.bak-<nazwa-migracji>`. Jeżeli migracja zostanie przerwana, należy
-zatrzymać backend, przywrócić kopię bazy, usunąć odpowiadające jej pliki `-wal` i `-shm`,
-jeżeli istnieją, a następnie uruchomić aplikację ponownie.
+Backend działa pod adresem `http://localhost:5188`. Przy starcie wykonuje migracje EF
+Core. Jeżeli plik bazy już istnieje i co najmniej jedna migracja oczekuje na wykonanie,
+przed całym przebiegiem powstaje jedna kopia
+`timesuggestions.db.bak-<ostatnia-oczekująca-migracja>`. Istniejąca kopia o tej nazwie
+nie jest nadpisywana. Przy pierwszym uruchomieniu, gdy plik bazy jeszcze nie istnieje,
+kopia nie powstaje. Jeżeli migracja zostanie przerwana, należy zatrzymać backend,
+przywrócić kopię bazy, usunąć odpowiadające jej pliki `-wal` i `-shm`, jeżeli istnieją,
+a następnie uruchomić aplikację ponownie.
 
 Frontend:
 
@@ -279,12 +317,12 @@ npm install
 npx ng serve
 ```
 
-Frontend działa pod adresem `http://localhost:4200`. Repozytorium zawiera publiczną
-konfigurację rejestracji Entra ID obsługującą konta organizacyjne i osobiste. Aplikacja
-prosi o delegowane uprawnienia `Calendars.Read` i `Files.Read`. Jeżeli tenant wymaga
-zgody administratora, można utworzyć własną rejestrację typu SPA z adresem przekierowania
-`http://localhost:4200` i podmienić `entraClientId` w
-`timesuggestions-web/src/environments/environment.ts`.
+Frontend działa pod adresem `http://localhost:4200`. Konfiguracja w
+`timesuggestions-web/src/environments/environment.ts` zawiera publiczny identyfikator
+klienta, authority `https://login.microsoftonline.com/common` oraz adres przekierowania
+`http://localhost:4200`. Logowanie żąda delegowanych uprawnień `Calendars.Read` i
+`Files.Read`. Dostępność logowania zależy również od ustawień zewnętrznej rejestracji
+Entra ID i zasad zgody obowiązujących w danym tenancie.
 
 ## Testy
 

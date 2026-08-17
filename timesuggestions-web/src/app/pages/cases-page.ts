@@ -2,6 +2,7 @@ import { Component, ElementRef, OnInit, effect, inject, signal, untracked, viewC
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
+import { scrollToElement } from '../services/scroll-highlight';
 import { toUserMessage } from '../services/user-message';
 import { CaseInfo, CaseWritePayload } from '../models/api.models';
 
@@ -127,7 +128,7 @@ export function parseKeywords(text: string): string[] {
                 @for (keyword of caseInfo.keywords; track keyword) {
                   <span class="badge badge-accent">{{ keyword }}</span>
                 } @empty {
-                  <span class="text-muted">—</span>
+                  <span class="text-muted">brak</span>
                 }
               </td>
               <td class="row-actions">
@@ -178,10 +179,9 @@ export class CasesPage implements OnInit {
       }
       untracked(() => {
         this.formOpenRequested.set(false);
-        // Płynność przewijania kontroluje media query prefers-reduced-motion
-        // w styles.css (scroll-behavior na html) — tu tylko żądanie przewinięcia.
-        // Wywołanie opcjonalne: środowisko testowe (jsdom) nie implementuje scrollIntoView.
-        card.nativeElement.scrollIntoView?.({ block: 'start' });
+        // Wspólny util "przewiń i pokaż" (scroll-highlight) — ten sam wzorzec
+        // wykorzystuje nawigacja z osi czasu.
+        scrollToElement(card.nativeElement, 'start');
         // Fokus dla klawiatury i czytników ekranu; preventScroll — fokus nie może
         // przerwać rozpoczętego płynnego przewijania.
         this.nameField()?.nativeElement.focus({ preventScroll: true });
@@ -287,7 +287,7 @@ export class CasesPage implements OnInit {
       this.toasts.show(
         isActive
           ? `Sprawa „${caseInfo.name}" jest znów aktywna.`
-          : `Zdezaktywowano sprawę „${caseInfo.name}" — nie będzie brana pod uwagę przy dopasowaniu.`,
+          : `Zdezaktywowano sprawę „${caseInfo.name}". Nie będzie brana pod uwagę przy dopasowaniu.`,
       );
       await this.loadData();
     } catch (error) {

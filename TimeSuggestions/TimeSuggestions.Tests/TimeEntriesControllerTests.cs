@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using TimeSuggestions.Configuration;
 using TimeSuggestions.Contracts;
 using TimeSuggestions.Controllers;
 using TimeSuggestions.Data;
@@ -30,7 +32,13 @@ public sealed class TimeEntriesControllerTests : IDisposable
         db = new AppDbContext(options);
         db.Database.EnsureCreated();
 
-        controller = new TimeEntriesController(db, new ApprovalService(db), new ArchiveService(db));
+        var entryGaps = new EntryGapService(db, TestHelpers.DefaultOptions());
+        controller = new TimeEntriesController(
+            db,
+            new ApprovalService(db, TestHelpers.DefaultOptions()),
+            new ArchiveService(db),
+            new TimeEntryOperationsService(db, TestHelpers.DefaultOptions(), entryGaps),
+            new TimeEntryViewService(entryGaps, new SessionLabelService(db), TestHelpers.DefaultOptions()));
     }
 
     public void Dispose()
@@ -61,7 +69,7 @@ public sealed class TimeEntriesControllerTests : IDisposable
             Description = "Praca",
             CreatedFromSuggestion = true,
             Source = SuggestionSource.Calendar,
-            Suggestion = suggestion,
+            Suggestions = [suggestion],
             CreatedAt = Now,
             ArchivedAt = archivedAt,
         };

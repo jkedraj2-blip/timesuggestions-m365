@@ -13,20 +13,57 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
 
+    public DbSet<DocumentActivity> DocumentActivities => Set<DocumentActivity>();
+
+    public DbSet<TimeEntryAdjustment> TimeEntryAdjustments => Set<TimeEntryAdjustment>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Ochrona przed duplikatami: powtórna synchronizacja tego samego obiektu Graph
-        // (dla dokumentów — tego samego pliku w tym samym dniu) nie tworzy drugiej sugestii,
-        // a odrzucona sugestia nie wraca na listę.
+        // nie tworzy drugiej sugestii, a odrzucona sugestia nie wraca na listę.
+        // Klucz z SessionAnchor zamiast EntryDate: jeden plik może mieć wiele sesji
+        // (sugestii) tego samego dnia, a kotwica sesji jest stabilna między syncami.
         modelBuilder.Entity<Suggestion>()
-            .HasIndex(s => new { s.Source, s.ExternalId, s.EntryDate })
+            .HasIndex(s => new { s.Source, s.ExternalId, s.SessionAnchor })
             .IsUnique();
 
-        // Jeden wpis czasu na sugestię — dwa równoległe zatwierdzenia rozstrzyga baza:
-        // drugi INSERT kończy się konfliktem unikalności (SQLITE_CONSTRAINT_UNIQUE),
-        // który serwis mapuje na 409, a nie duplikatem wpisu.
-        modelBuilder.Entity<TimeEntry>()
-            .HasIndex(entry => entry.SuggestionId)
+        // Korekty wpisu żyją i umierają z wpisem (cofnięcie zatwierdzenia usuwa wpis
+        // razem z dziennikiem korekt) — kaskada jest tu zamierzona.
+        modelBuilder.Entity<TimeEntryAdjustment>()
+            .HasOne(adjustment => adjustment.TimeEntry)
+            .WithMany(entry => entry.Adjustments)
+            .HasForeignKey(adjustment => adjustment.TimeEntryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<TimeEntryAdjustment>()
+            .HasIndex(adjustment => adjustment.TimeEntryId);
+
+        // Relacja odwrócona (wiele sugestii → jeden wpis po scaleniu sesji): klucz obcy
+        // po stronie sugestii, zwykły indeks. SetNull na wypadek usunięcia wpisu poza
+        // ścieżką aplikacyjną — kod i tak jawnie przywraca sugestie do Pending.
+        modelBuilder.Entity<Suggestion>()
+            .HasOne(s => s.TimeEntry)
+            .WithMany(entry => entry.Suggestions)
+            .HasForeignKey(s => s.TimeEntryId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<Suggestion>()
+            .HasIndex(s => s.TimeEntryId);
+
+        // Zdjęcie unikalnego TimeEntries.SuggestionId zabrało bazie ochronę przed
+        // podwójnym zatwierdzeniem — zastępuje ją token współbieżności na statusie:
+        // UPDATE trafia tylko wiersz ze statusem, który żądanie faktycznie widziało,
+        // więc przegrany wyścig dostaje jawny konflikt zamiast drugiego wpisu.
+        modelBuilder.Entity<Suggestion>()
+            .Property(s => s.Status)
+            .IsConcurrencyToken();
+
+        // Dziennik jest append-only: powtórny sync tych samych faktów nie może ich
+        // duplikować. Klucz naturalny obejmuje MOMENT, bo ta sama wersja Worda online
+        // jest zapisywana wielokrotnie, za każdym razem z późniejszym
+        // lastModifiedDateTime — uzasadnienie przy DocumentActivity.
+        modelBuilder.Entity<DocumentActivity>()
+            .HasIndex(activity => new { activity.ExternalId, activity.VersionId, activity.OccurredAt })
             .IsUnique();
 
         // Filtrowanie aktywne/archiwum (ArchivedAt == null / != null) to główna oś

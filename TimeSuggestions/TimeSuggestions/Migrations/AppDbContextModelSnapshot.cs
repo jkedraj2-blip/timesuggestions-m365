@@ -97,6 +97,37 @@ namespace TimeSuggestions.Migrations
                         });
                 });
 
+            modelBuilder.Entity("TimeSuggestions.Models.DocumentActivity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("VersionId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExternalId", "VersionId", "OccurredAt")
+                        .IsUnique();
+
+                    b.ToTable("DocumentActivities");
+                });
+
             modelBuilder.Entity("TimeSuggestions.Models.Suggestion", b =>
                 {
                     b.Property<int>("Id")
@@ -107,6 +138,9 @@ namespace TimeSuggestions.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DetectedGapsJson")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("DurationMinutes")
@@ -122,8 +156,20 @@ namespace TimeSuggestions.Migrations
                     b.Property<bool>("IsAmbiguous")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("IsUserAdjusted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("LastActivityAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("NeedsTimeReview")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ProposedDescription")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("SessionAnchor")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Source")
@@ -133,6 +179,10 @@ namespace TimeSuggestions.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("TimeEntryId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Title")
@@ -143,7 +193,9 @@ namespace TimeSuggestions.Migrations
 
                     b.HasIndex("CaseId");
 
-                    b.HasIndex("Source", "ExternalId", "EntryDate")
+                    b.HasIndex("TimeEntryId");
+
+                    b.HasIndex("Source", "ExternalId", "SessionAnchor")
                         .IsUnique();
 
                     b.ToTable("Suggestions");
@@ -191,8 +243,14 @@ namespace TimeSuggestions.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DetectedGapsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("DurationMinutes")
                         .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("EndedAt")
+                        .HasColumnType("TEXT");
 
                     b.Property<DateOnly>("EntryDate")
                         .HasColumnType("TEXT");
@@ -200,8 +258,8 @@ namespace TimeSuggestions.Migrations
                     b.Property<int>("Source")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("SuggestionId")
-                        .HasColumnType("INTEGER");
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
@@ -209,10 +267,38 @@ namespace TimeSuggestions.Migrations
 
                     b.HasIndex("CaseId");
 
-                    b.HasIndex("SuggestionId")
-                        .IsUnique();
-
                     b.ToTable("TimeEntries");
+                });
+
+            modelBuilder.Entity("TimeSuggestions.Models.TimeEntryAdjustment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("GapEndAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("GapStartAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Minutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TimeEntryId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TimeEntryId");
+
+                    b.ToTable("TimeEntryAdjustments");
                 });
 
             modelBuilder.Entity("TimeSuggestions.Models.Suggestion", b =>
@@ -221,7 +307,14 @@ namespace TimeSuggestions.Migrations
                         .WithMany()
                         .HasForeignKey("CaseId");
 
+                    b.HasOne("TimeSuggestions.Models.TimeEntry", "TimeEntry")
+                        .WithMany("Suggestions")
+                        .HasForeignKey("TimeEntryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.Navigation("Case");
+
+                    b.Navigation("TimeEntry");
                 });
 
             modelBuilder.Entity("TimeSuggestions.Models.TimeEntry", b =>
@@ -232,15 +325,25 @@ namespace TimeSuggestions.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("TimeSuggestions.Models.Suggestion", "Suggestion")
-                        .WithMany()
-                        .HasForeignKey("SuggestionId")
+                    b.Navigation("Case");
+                });
+
+            modelBuilder.Entity("TimeSuggestions.Models.TimeEntryAdjustment", b =>
+                {
+                    b.HasOne("TimeSuggestions.Models.TimeEntry", "TimeEntry")
+                        .WithMany("Adjustments")
+                        .HasForeignKey("TimeEntryId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Case");
+                    b.Navigation("TimeEntry");
+                });
 
-                    b.Navigation("Suggestion");
+            modelBuilder.Entity("TimeSuggestions.Models.TimeEntry", b =>
+                {
+                    b.Navigation("Adjustments");
+
+                    b.Navigation("Suggestions");
                 });
 #pragma warning restore 612, 618
         }

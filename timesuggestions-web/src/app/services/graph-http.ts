@@ -16,6 +16,11 @@
 const ALLOWED_PROTOCOL = 'https:';
 const ALLOWED_HOST = 'graph.microsoft.com';
 const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Osobny, dłuższy limit dla treści plików: strona JSON waży kilobajty, a wersja
+ * dokumentu bywa wielomegabajtowa i na wolnym łączu 30 s potrafi nie wystarczyć.
+ */
+const CONTENT_TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const DEFAULT_RETRY_DELAY_MS = 1000;
@@ -98,6 +103,103 @@ export async function fetchGraphPage<T>(
     }
 
     await delay(retryDelayMs(response, attempt));
+  }
+}
+
+/**
+ * Odpowiedź binarna (treść pliku lub wersji). Dla odpowiedzi nie-OK niesie kod
+ * błędu z ciała Graph: sam status „400" nie mówi nic, a `invalidRequest`
+ * czy `resourceModified` wskazuje wprost, co poszło nie tak.
+ */
+export type GraphBinaryResult =
+  | { ok: true; status: number; bytes: Uint8Array }
+  | { ok: false; status: number; errorCode: string | null };
+
+/**
+ * Pobiera zawartość binarną z Graph pod tym samym reżimem co strony JSON:
+ * walidacja adresu, token per próba, ponowienia błędów przejściowych z Retry-After
+ * i limit czasu obejmujący także odczyt strumienia. <paramref name="signal"/> to
+ * anulowanie po stronie użytkownika — łączymy je z limitem czasu, bo to dwa
+ * niezależne powody przerwania tego samego żądania.
+ */
+export async function fetchGraphBinary(
+  url: string,
+  getToken: () => Promise<string>,
+  signal?: AbortSignal,
+): Promise<GraphBinaryResult> {
+  assertTrustedGraphUrl(url);
+
+  for (let attempt = 1; ; attempt++) {
+    if (signal?.aborted) {
+      throw new GraphAbortedError();
+    }
+
+    const token = await getToken();
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CONTENT_TIMEOUT_MS);
+    const abortFromCaller = () => controller.abort();
+    signal?.addEventListener('abort', abortFromCaller, { once: true });
+
+    let response: Response;
+    try {
+      try {
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+      } catch {
+        if (signal?.aborted) {
+          throw new GraphAbortedError();
+        }
+        if (controller.signal.aborted) {
+          throw new Error('Przekroczono limit czasu pobierania z Microsoft Graph.');
+        }
+        throw new Error('Błąd połączenia z Microsoft Graph.');
+      }
+
+      if (!RETRYABLE_STATUSES.has(response.status) || attempt >= MAX_ATTEMPTS) {
+        if (!response.ok) {
+          return { ok: false, status: response.status, errorCode: await readErrorCode(response) };
+        }
+
+        // Odczyt strumienia wciąż POD limitem czasu — zatrzymane pobieranie
+        // nie może wisieć bez granicy.
+        try {
+          return { ok: true, status: response.status, bytes: new Uint8Array(await response.arrayBuffer()) };
+        } catch {
+          if (signal?.aborted) {
+            throw new GraphAbortedError();
+          }
+          throw new Error('Przerwane pobieranie treści z Microsoft Graph.');
+        }
+      }
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abortFromCaller);
+    }
+
+    await delay(retryDelayMs(response, attempt));
+  }
+}
+
+/** Anulowanie przez użytkownika — wywołujący rozpoznaje je i nie pokazuje błędu. */
+export class GraphAbortedError extends Error {
+  constructor() {
+    super('Żądanie do Microsoft Graph zostało anulowane.');
+  }
+}
+
+/**
+ * Kod błędu z ciała odpowiedzi Graph (`error.code`). Ciało bywa puste albo nie-JSON,
+ * dlatego brak kodu jest normalnym wynikiem, nie wyjątkiem.
+ */
+async function readErrorCode(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { error?: { code?: string } };
+    return body.error?.code ?? null;
+  } catch {
+    return null;
   }
 }
 

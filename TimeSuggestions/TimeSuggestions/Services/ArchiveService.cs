@@ -46,6 +46,45 @@ public class ArchiveService(AppDbContext db)
     }
 
     /// <summary>
+    /// Rozliczenie POJEDYNCZEGO wpisu. Rozliczanie całego dnia zakłada, że dzień jest
+    /// zamknięty, a to nieprawda w połowie sytuacji: część pracy jest gotowa do faktury,
+    /// część czeka na rozstrzygnięcie przerw albo na wskazanie sprawy. Bez tej operacji
+    /// prawnik musiał albo rozliczyć razem z gotowym wpisem coś, czego jeszcze nie
+    /// sprawdził, albo nie rozliczyć nic.
+    ///
+    /// Zwraca wpis, żeby interfejs pokazał to, co naprawdę zapisano. Kształt wyniku jak
+    /// w pozostałych operacjach na wpisie: ten sam mapper błędów w kontrolerze.
+    /// </summary>
+    public async Task<TimeEntryOperationResult> ArchiveTimeEntryAsync(
+        int timeEntryId,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var entry = await db.TimeEntries
+            .Include(candidate => candidate.Case)
+            .Include(candidate => candidate.Suggestions)
+            .Include(candidate => candidate.Adjustments)
+            .FirstOrDefaultAsync(candidate => candidate.Id == timeEntryId, cancellationToken);
+        if (entry is null)
+        {
+            return new TimeEntryOperationResult(TimeEntryOperationStatus.NotFound, "Wpis czasu nie istnieje.");
+        }
+
+        // Data rozliczenia jest wartością audytową — powtórzone kliknięcie nie może jej
+        // przesunąć, więc druga próba jest konfliktem, a nie cichym sukcesem.
+        if (entry.ArchivedAt is not null)
+        {
+            return new TimeEntryOperationResult(
+                TimeEntryOperationStatus.Archived, "Ten wpis jest już rozliczony.");
+        }
+
+        entry.ArchivedAt = nowUtc;
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new TimeEntryOperationResult(TimeEntryOperationStatus.Success, Entries: [entry]);
+    }
+
+    /// <summary>
     /// Wszystkie odrzucone → zarchiwizowane. Zero odrzuconych to sukces z zerem.
     /// Rejected → Archived to jedyna droga do archiwum sugestii: Pending czeka na
     /// decyzję, a „archiwizacją" Approved jest archiwizacja powiązanego wpisu czasu.

@@ -18,6 +18,9 @@ import {
   SyncRequest,
   TimeEntriesResponse,
   TimeEntry,
+  DocumentHistory,
+  TimelineDay,
+  TimelineItem,
 } from '../models/api.models';
 import { GraphEvent } from '../models/graph.models';
 
@@ -25,6 +28,7 @@ import { GraphEvent } from '../models/graph.models';
 export type SyncStage =
   | { kind: 'calendar'; page: number }
   | { kind: 'files'; page: number }
+  | { kind: 'versions'; done: number; total: number }
   | { kind: 'processing' };
 
 /** Wydarzenia o tych poufnościach nie opuszczają przeglądarki (spójnie z filtrem backendu). */
@@ -48,7 +52,6 @@ export class ApiService {
    */
   async syncNow(
     onStage?: (stage: SyncStage) => void,
-    defaultDocumentDurationMinutes?: number,
     syncDaysBack?: number,
   ): Promise<SyncReport> {
     // Zakres wybrany w UI; brak wartości = domyślne okno (SYNC_DAYS_BACK).
@@ -76,8 +79,10 @@ export class ApiService {
       return true;
     });
 
-    const driveResult = await this.graphFiles.getRecentDocuments(days, (page) =>
-      onStage?.({ kind: 'files', page }),
+    const driveResult = await this.graphFiles.getRecentDocuments(
+      days,
+      (page) => onStage?.({ kind: 'files', page }),
+      ({ done, total }) => onStage?.({ kind: 'versions', done, total }),
     );
 
     onStage?.({ kind: 'processing' });
@@ -98,13 +103,14 @@ export class ApiService {
       clientFilteredCounts: {
         private: privateCount,
         cancelled: cancelledCount,
-        documentsOutsideWindow: driveResult.documentsOutsideWindow,
         documentsNotOfficeDocument: driveResult.documentsNotOfficeDocument,
       },
-      defaultDocumentDurationMinutes,
+      driveFileVersionFetchErrors: driveResult.versionFetchErrors,
     };
 
     const report = await this.requestJson<SyncReport>('POST', '/api/sync', request);
+    // Nazwy pominiętych plików dopinamy lokalnie — nie były i nie będą wysyłane.
+    report.skippedNotOfficeNames = driveResult.notOfficeDocumentNames;
 
     // Wskaźnik delta przesuwamy dopiero po udanym zapisie (obejmującym też
     // tombstone'y) — nieudany sync nie gubi zmian.
@@ -122,6 +128,26 @@ export class ApiService {
     if (filter?.source) params.set('source', filter.source);
     const query = params.size > 0 ? `?${params}` : '';
     return this.requestJson<Suggestion[]>('GET', `/api/suggestions${query}`);
+  }
+
+  /** Scalenie sesji tego samego dokumentu w jedną sugestię (opcjonalnie z wolnymi lukami). */
+  mergeSuggestions(suggestionIds: number[], includeGaps: boolean): Promise<Suggestion[]> {
+    return this.requestJson<Suggestion[]>('POST', '/api/suggestions/merge', { suggestionIds, includeGaps });
+  }
+
+  /**
+   * Rozdziela wolną lukę: minutes trafia do tej sugestii, neighborMinutes do sąsiedniej,
+   * reszta zostaje wolna. Bez obu wartości — cała luka do tej sugestii. Rozmiar luki
+   * i tak przelicza serwer; stąd idzie wyłącznie decyzja użytkownika o podziale.
+   */
+  claimSuggestionGap(
+    suggestionId: number,
+    direction: 'before' | 'after',
+    minutes?: number,
+    neighborMinutes?: number,
+  ): Promise<Suggestion[]> {
+    return this.requestJson<Suggestion[]>(
+      'POST', `/api/suggestions/${suggestionId}/claim-gap`, { direction, minutes, neighborMinutes });
   }
 
   approve(suggestionId: number, payload: ApprovePayload): Promise<TimeEntry> {
@@ -173,12 +199,77 @@ export class ApiService {
     return this.requestJson<ArchiveTimeEntriesResult>('POST', '/api/time-entries/archive', { from, to });
   }
 
+  /** Rozliczenie POJEDYNCZEGO wpisu — gotowość do faktury jest cechą wpisu, nie dnia. */
+  archiveTimeEntry(timeEntryId: number): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/archive`);
+  }
+
   async deleteTimeEntry(timeEntryId: number): Promise<void> {
     await this.request('DELETE', `/api/time-entries/${timeEntryId}`);
   }
 
+  /** Scala wpisy jednej sesji dokumentu; includeGaps dolicza wolne luki między sesjami. */
+  mergeTimeEntries(timeEntryIds: number[], includeGaps: boolean): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', '/api/time-entries/merge', { timeEntryIds, includeGaps });
+  }
+
+  /** Odwraca scalenie — przywraca wpisy składowe z ich sesji. */
+  unmergeTimeEntry(timeEntryId: number): Promise<TimeEntry[]> {
+    return this.requestJson<TimeEntry[]>('POST', `/api/time-entries/${timeEntryId}/unmerge`);
+  }
+
+  /**
+   * Włącza albo wyłącza przerwę z rozliczanego czasu wpisu. Zakres musi pochodzić
+   * z listy detectedGaps wpisu (backend liczy ją z historii wersji), a kierunek musi
+   * zgadzać się z jej obecnym stanem — inaczej odpowiedź to 409.
+   */
+  setGapCounted(
+    timeEntryId: number,
+    gapStartAt: string,
+    gapEndAt: string,
+    counted: boolean,
+  ): Promise<TimeEntry> {
+    const action = counted ? 'add-gap' : 'subtract-gap';
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/${action}`, {
+      gapStartAt,
+      gapEndAt,
+    });
+  }
+
+  /** Zaokrągla czas wpisu do jednostki rozliczeniowej z konfiguracji backendu. */
+  roundTimeEntry(timeEntryId: number): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/round`);
+  }
+
+  /** Szybka korekta czasu wpisu o ±N minut. */
+  adjustTimeEntry(timeEntryId: number, minutes: number): Promise<TimeEntry> {
+    return this.requestJson<TimeEntry>('POST', `/api/time-entries/${timeEntryId}/adjust`, { minutes });
+  }
+
   getSummary(): Promise<Summary> {
     return this.requestJson<Summary>('GET', '/api/summary');
+  }
+
+  /** Agregacja osi czasu per dzień — jedno żądanie na cały miesiąc, nie 31. */
+  getTimeline(from: string, to: string): Promise<TimelineDay[]> {
+    return this.requestJson<TimelineDay[]>('GET', `/api/timeline?from=${from}&to=${to}`);
+  }
+
+  /** Pozycje jednego dnia osi czasu, posortowane po godzinie startu. */
+  getTimelineDay(date: string): Promise<TimelineItem[]> {
+    return this.requestJson<TimelineItem[]>('GET', `/api/timeline/${date}`);
+  }
+
+  /**
+   * Chronologia modyfikacji dokumentu razem z pozycjami, które z niej powstały.
+   * Jedno żądanie na obie rzeczy: stan pozycji jest częścią tej samej odpowiedzi,
+   * więc nie może rozjechać się z wersjami.
+   */
+  getDocumentHistory(externalId: string): Promise<DocumentHistory> {
+    return this.requestJson<DocumentHistory>(
+      'GET',
+      `/api/timeline/document-activity?externalId=${encodeURIComponent(externalId)}`,
+    );
   }
 
   private toCalendarPayload(event: GraphEvent): CalendarEventPayload {

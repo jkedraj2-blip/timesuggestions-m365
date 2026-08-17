@@ -17,14 +17,27 @@ export interface DriveFilePayload {
   id: string;
   name: string;
   lastModifiedDateTime: string;
+  /** Rozmiar pliku w bajtach — trafia do dziennika razem z próbką aktywności. */
+  size: number;
   lastModifiedByMe: boolean;
+  /**
+   * Historia wersji pliku; null = pobranie wersji nie powiodło się dla tego pliku
+   * (backend buduje wtedy sugestię z minimum czasu i prośbą o uzupełnienie).
+   */
+  versions?: DriveFileVersionPayload[] | null;
+}
+
+/** Jedna wersja pliku z historii Graph — surowy fakt do dziennika DocumentActivity w backendzie. */
+export interface DriveFileVersionPayload {
+  versionId: string;
+  lastModifiedDateTime: string;
+  size: number;
 }
 
 /** Liczniki pozycji odfiltrowanych w przeglądarce — backend dolicza je do raportu. */
 export interface ClientFilteredCounts {
   private: number;
   cancelled: number;
-  documentsOutsideWindow: number;
   documentsNotOfficeDocument: number;
 }
 
@@ -41,8 +54,20 @@ export interface SyncRequest {
   deletedDriveFileIds?: string[];
   /** Liczniki filtrów klienckich (prywatność + wstępne filtrowanie dokumentów). */
   clientFilteredCounts?: ClientFilteredCounts;
-  /** Opcjonalna preferencja użytkownika — bez wartości obowiązuje konfiguracja backendu. */
-  defaultDocumentDurationMinutes?: number;
+  /** Ile pobrań historii wersji padło po stronie klienta — raport wersji ma pokazywać prawdę. */
+  driveFileVersionFetchErrors?: number;
+}
+
+/**
+ * Przerwa w zasięgu pozycji (czasy strefy biznesowej). `counted` mówi, czy jej minuty
+ * wchodzą do rozliczanego czasu: przerwa wewnątrz sesji jest liczona (można ją odjąć),
+ * przerwa między scalonymi sesjami nie jest (można ją doliczyć).
+ */
+export interface DetectedGap {
+  startAt: string;
+  endAt: string;
+  minutes: number;
+  counted: boolean;
 }
 
 export interface Suggestion {
@@ -61,6 +86,55 @@ export interface Suggestion {
   matchCandidates: string[];
   proposedDescription: string;
   status: SuggestionStatus;
+  /** Wykryte przerwy sesji dokumentowej — przycisk "Odejmij przerwę" bierze dane stąd, nie z heurystyki UI. */
+  detectedGaps: DetectedGap[];
+  /** Czas wyliczony z jednego zapisu — karta prosi o wpisanie go zamiast podsuwać zgadywaną wartość. */
+  needsTimeReview: boolean;
+  /** Id pliku z Graph (tylko dokumenty) — po nim karta pobiera chronologię modyfikacji. */
+  sourceExternalId: string | null;
+  /** Ostatnia znana modyfikacja (UTC) — po niej idzie kolejność listy sugestii. */
+  lastActivityAt: string;
+  /** Czas poprawiony ręcznie (scalenie, doliczona luka) — synchronizacja go nie przelicza. */
+  isUserAdjusted: boolean;
+  /** Wolne luki wokół sugestii; null = nie ma czego doliczać po żadnej ze stron. */
+  gaps: SuggestionGaps | null;
+  /** „edycja 3" — numer sesji w całej historii pliku; null dla pozycji kalendarzowych. */
+  sessionLabel: string | null;
+}
+
+/**
+ * Sąsiad sugestii na osi dnia razem z wolną luką dzielącą ich od siebie. Backend
+ * przysyła to WYŁĄCZNIE dla luk faktycznie wolnych — jeśli w tym czasie trwała praca
+ * nad innym dokumentem, luki tu nie ma, bo ten czas jest już rozliczony gdzie indziej.
+ */
+export interface SuggestionNeighbor {
+  /** Id sąsiada, gdy jest sugestią oczekującą; null dla wpisu czasu (podziału z nim nie ma). */
+  suggestionId: number | null;
+  title: string;
+  gapMinutes: number;
+  /**
+   * Godziny wolnej przerwy prosto z serwera. Karta nie liczy ich z minut, bo minuty
+   * są podłogą z sekund i odjęte od startu wskazywały początek wolnego czasu o minutę
+   * za późno — a zdanie na karcie podaje ten zakres wprost.
+   */
+  gapStartAt: string;
+  gapEndAt: string;
+  /**
+   * Przerwa mieści się w limicie doliczania jednym ruchem. Fałsz nie ukrywa całego
+   * sąsiada: zostaje po to, żeby dało się scalić sesje tego samego pliku.
+   */
+  canClaim: boolean;
+  /**
+   * Scalenie z tym sąsiadem na pewno przejdzie (ta sama sugestia oczekująca, ten sam
+   * plik, ten sam dzień). Backend liczy to sam — karta nie zgaduje po nazwie pliku
+   * i nie wystawia przycisku, po którym przychodzi odmowa.
+   */
+  canMerge: boolean;
+}
+
+export interface SuggestionGaps {
+  before: SuggestionNeighbor | null;
+  after: SuggestionNeighbor | null;
 }
 
 export interface CaseInfo {
@@ -94,16 +168,50 @@ export interface TimeEntry {
   caseNumber: string | null;
   clientName: string | null;
   entryDate: string;
+  /** Początek i koniec wpisu w strefie biznesowej — oś niezmiennika nakładania i osi czasu. */
+  startedAt: string;
+  endedAt: string;
   durationMinutes: number;
   description: string;
   createdFromSuggestion: boolean;
   source: SuggestionSource;
-  suggestionId: number;
+  /** Sugestie składowe wpisu — po scaleniu sesji jest ich więcej niż jedna. */
+  suggestionIds: number[];
   /** Tytuł spotkania / nazwa pliku, z którego powstał wpis — kotwica w realnym zdarzeniu. */
   sourceTitle: string | null;
   sourceStartedAt: string | null;
+  /** Id pliku z Graph (wpisy dokumentowe) — po nim UI rozpoznaje wpisy tego samego dokumentu do scalenia. */
+  sourceExternalId: string | null;
   /** Moment rozliczenia (UTC); null = wpis aktywny. Zarchiwizowany wpis jest tylko do odczytu. */
   archivedAt: string | null;
+  /** Przerwy leżące w godzinach wpisu, liczone z historii wersji razem z ich stanem. */
+  detectedGaps: DetectedGap[];
+  /** „edycja 3" — numer sesji w całej historii pliku; null dla wpisów kalendarzowych. */
+  sessionLabel: string | null;
+  /**
+   * Czas po zaokrągleniu do jednostki rozliczeniowej — liczy go backend, żeby etykieta
+   * przycisku nie mogła obiecać innej wartości niż zapisze operacja. Równy
+   * durationMinutes = nie ma czego zaokrąglać.
+   */
+  roundedDurationMinutes: number;
+  /**
+   * Suma korekt z zaokrąglania (dodatnia = dołożono, ujemna = zdjęto); 0 = nie
+   * zaokrąglano. Osobno od przerw, bo to inna decyzja: doliczona do różnicy między
+   * godzinami a czasem zamieniała się w komunikat o „nieliczonych przerwach",
+   * których w historii wersji nikt nigdy nie widział.
+   */
+  roundingMinutes: number;
+  /**
+   * Zdanie o tym, co stało się z godzinami wpisu przy zatwierdzaniu (przycięcie do
+   * sąsiada, pozostałe pokrycie). Wypełniane tylko w odpowiedzi na zatwierdzenie.
+   */
+  notice: string | null;
+  /**
+   * Liczba korekt w dzienniku wpisu. Rozdzielenie scalonego wpisu kasuje jego korekty
+   * (dotyczyły bytu, który przestaje istnieć) — potwierdzenie „Rozdziel" mówi,
+   * ile ich przepadnie.
+   */
+  adjustmentCount: number;
 }
 
 /** Wpisy pogrupowane po dniach z gotowymi sumami z backendu. */
@@ -116,6 +224,82 @@ export interface TimeEntryDay {
   date: string;
   totalMinutes: number;
   entries: TimeEntry[];
+}
+
+/** Liczniki jednego dnia osi czasu — zatwierdzona sugestia liczona raz, jako wpis. */
+export interface TimelineDay {
+  date: string;
+  pendingCount: number;
+  activeCount: number;
+  archivedCount: number;
+}
+
+/** Pozycja listy dnia na osi czasu. */
+export interface TimelineItem {
+  /** Typ mówi, do której zakładki nawigować po kliknięciu. */
+  type: 'suggestion' | 'timeEntry';
+  id: number;
+  source: SuggestionSource;
+  startedAt: string;
+  endedAt: string;
+  durationMinutes: number;
+  title: string;
+  caseName: string | null;
+  caseNumber: string | null;
+  clientName: string | null;
+  /** Status koloruje i etykietuje pozycję (nigdy samym kolorem); archived jest nieklikalne. */
+  status: 'pending' | 'active' | 'archived';
+  /** Id pliku z Graph dla pozycji dokumentowych — zasila chronologię modyfikacji i diff wersji. */
+  externalId: string | null;
+}
+
+/** Stan pozycji powstałej z historii pliku — niesie kolor obszaru i treść plakietki. */
+export type DocumentSessionKind = 'pending' | 'rejected' | 'archived' | 'unsettled' | 'settled';
+
+/**
+ * Jedna pozycja powstała z tego pliku: sugestia albo wpis czasu. Sugestia zatwierdzona
+ * nie jest osobną pozycją — reprezentuje ją wpis, który z niej powstał.
+ */
+export interface DocumentSession {
+  kind: DocumentSessionKind;
+  startAt: string;
+  endAt: string;
+  suggestionId: number | null;
+  timeEntryId: number | null;
+  /** „edycja 3" — ten sam numer, który pozycja nosi na swojej karcie. */
+  label: string | null;
+  gaps: DetectedGap[];
+}
+
+/**
+ * Chronologia pliku razem ze wszystkimi pozycjami, które z niej powstały. Stan pozycji
+ * przychodzi z bazy, a nie od tego, kto historię otworzył — inaczej ta sama historia
+ * pokazywała pracę raz jako rozliczoną, raz jako nierozliczoną.
+ */
+export interface DocumentHistory {
+  versions: DocumentActivityItem[];
+  sessions: DocumentSession[];
+}
+
+/** Jedna wersja z chronologii modyfikacji dokumentu (poziom 3 osi czasu). */
+export interface DocumentActivityItem {
+  versionId: string;
+  occurredAt: string;
+  size: number;
+  /** Przerwa od poprzedniej wersji w minutach; null dla pierwszej. */
+  gapMinutesSincePrevious: number | null;
+  /** Przerwa dłuższa niż próg ciągłości pracy, czyli przestój, a nie pauza w pisaniu. */
+  isSessionBreak: boolean;
+  /** Przerwa rozcinająca pracę na dwie sesje — domyślnie nie jest wliczona w czas. */
+  splitsSession: boolean;
+  /**
+   * Wiersz należy do bieżącej wersji pliku — jej treść to aktualna treść dokumentu.
+   * Dotyczy KAŻDEJ próbki tej wersji, nie tylko ostatniej: wersja jeszcze
+   * niezapieczętowana trafia do dziennika wiele razy.
+   */
+  isCurrent: boolean;
+  /** Kolejna próbka tej samej wersji co wiersz wyżej — Graph nie ma stanu pośredniego do porównania. */
+  isSameVersionAsPrevious: boolean;
 }
 
 /** Liczniki dla kafelków podsumowania. */
@@ -152,7 +336,6 @@ export interface SyncFilteredOutCounts {
   cancelled: number;
   invalidDates: number;
   notOfficeDocument: number;
-  outsideWindow: number;
   notModifiedByUser: number;
   total: number;
 }
@@ -163,8 +346,23 @@ export interface SyncMatchedCounts {
   ambiguous: number;
 }
 
+/** Liczniki historii wersji z jednego syncu — pomiar gęstości wersji (etap 0 silnika sesji). */
+export interface SyncVersionCounts {
+  filesWithHistory: number;
+  filesWithoutHistory: number;
+  fetchErrors: number;
+  newActivities: number;
+}
+
 /** Pełny raport synchronizacji — aplikacja pokazuje użytkownikowi swoją pracę. */
 export interface SyncReport {
+  /**
+   * Nazwy plików pominiętych jako „inne niż Word/Excel", ustawiane PO STRONIE
+   * PRZEGLĄDARKI (backend ich nie widzi — nie ma powodu ich wysyłać). Bez nich raport
+   * mówi tylko „pominięto 1 pozycję" i wygląda jak magia, bo delta OneDrive melduje
+   * każdą zmianę na dysku, także w plikach spoza tej aplikacji.
+   */
+  skippedNotOfficeNames?: string[];
   fetched: SyncFetchedCounts;
   filteredOut: SyncFilteredOutCounts;
   aggregated: number;
@@ -179,4 +377,6 @@ export interface SyncReport {
   matched: SyncMatchedCounts;
   /** Faktycznie użyte okno w dniach — teksty raportu pokazują je zamiast zgadywać z własnej stałej. */
   windowDays: number;
+  /** Liczniki historii wersji plików — ile z historią, ile bez, ile błędów pobierania. */
+  versions: SyncVersionCounts;
 }

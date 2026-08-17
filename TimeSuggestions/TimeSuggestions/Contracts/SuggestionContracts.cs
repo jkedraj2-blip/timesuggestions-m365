@@ -1,7 +1,26 @@
 using System.ComponentModel.DataAnnotations;
 using TimeSuggestions.Models;
+using TimeSuggestions.Services;
 
 namespace TimeSuggestions.Contracts;
+
+/// <summary>
+/// Przerwa w zasięgu pozycji (czasy strefy biznesowej). <paramref name="Counted"/> mówi,
+/// czy jej minuty wchodzą do rozliczanego czasu — od tego zależy, czy interfejs oferuje
+/// „Odejmij przerwę", czy „Dolicz przerwę". Przerwa wewnątrz sesji jest liczona (siedzi
+/// w czasie brutto), przerwa między scalonymi sesjami nie jest.
+/// </summary>
+public record DetectedGapDto(DateTime StartAt, DateTime EndAt, int Minutes, bool Counted)
+{
+    /// <summary>Przerwy sesji zapisane przy sugestii — zawsze wewnątrz sesji, więc liczone.</summary>
+    public static IReadOnlyList<DetectedGapDto> FromJson(string? json)
+        => DetectedGaps.Deserialize(json)
+            .Select(gap => new DetectedGapDto(gap.StartAt, gap.EndAt, gap.Minutes, Counted: true))
+            .ToList();
+
+    public static IReadOnlyList<DetectedGapDto> FromEntryGaps(IReadOnlyList<EntryGap> gaps)
+        => gaps.Select(gap => new DetectedGapDto(gap.StartAt, gap.EndAt, gap.Minutes, gap.Counted)).ToList();
+}
 
 /// <summary>Sugestia w kształcie dla interfejsu — spłaszczone dane sprawy zamiast pełnej encji.</summary>
 public record SuggestionDto(
@@ -17,14 +36,43 @@ public record SuggestionDto(
     bool IsAmbiguous,
     IReadOnlyList<string> MatchCandidates,
     string ProposedDescription,
-    SuggestionStatus Status)
+    SuggestionStatus Status,
+    IReadOnlyList<DetectedGapDto> DetectedGaps,
+    // Czas wyliczony z JEDNEGO zapisu — UI prosi o wpisanie go ręcznie zamiast
+    // podsuwać zgadywaną wartość do zatwierdzenia.
+    bool NeedsTimeReview,
+    // Id pliku z Graph (tylko dokumenty) — po nim karta pobiera chronologię
+    // modyfikacji; dla spotkań null, identyfikatory kalendarza nie mają tu zastosowania.
+    string? SourceExternalId,
+    // Ostatnia znana modyfikacja w czasie STREFY BIZNESOWEJ — tej samej osi co
+    // StartedAt. Encja trzyma tę wartość w UTC (razem z kotwicą sesji), ale interfejs
+    // musi dostać obie godziny na jednej osi: inaczej sesja o jednym zapisie pokazuje
+    // "początek 22:58, ostatnia zmiana 20:58" i wygląda, jakby skończyła się przed
+    // rozpoczęciem, choć to dokładnie ten sam moment.
+    DateTime LastActivityAt,
+    // Czas poprawiony ręcznie (scalenie, doliczona luka) — sync go już nie przelicza.
+    bool IsUserAdjusted,
+    // Wolne luki wokół sugestii; null = nie ma czego doliczać po żadnej ze stron.
+    SuggestionGaps? Gaps,
+    // „edycja 3" — numer sesji w całej historii pliku; null dla pozycji kalendarzowych.
+    string? SessionLabel = null)
 {
     /// <summary>
     /// Dla sugestii niejednoznacznych przekazujemy pasujące sprawy —
     /// UI mówi użytkownikowi konkretnie "pasuje do X i Y", a nie tylko "sprawdź to".
     /// Numer i klient czytane na żywo z nawigacji Case (bez snapshotu w sugestii).
     /// </summary>
-    public static SuggestionDto FromEntity(Suggestion suggestion, IReadOnlyList<string>? matchCandidates = null) => new(
+    /// <param name="businessTimeZone">
+    /// Strefa biznesowa do sprowadzenia <see cref="Suggestion.LastActivityAt"/> (UTC)
+    /// na tę samą oś co StartedAt. Wymagana — pominięcie jej było źródłem godzin
+    /// rozjeżdżających się o offset strefy.
+    /// </param>
+    public static SuggestionDto FromEntity(
+        Suggestion suggestion,
+        TimeZoneInfo businessTimeZone,
+        IReadOnlyList<string>? matchCandidates = null,
+        SuggestionGaps? gaps = null,
+        string? sessionLabel = null) => new(
         suggestion.Id,
         suggestion.Source,
         suggestion.Title,
@@ -37,7 +85,83 @@ public record SuggestionDto(
         suggestion.IsAmbiguous,
         matchCandidates ?? [],
         suggestion.ProposedDescription,
-        suggestion.Status);
+        suggestion.Status,
+        DetectedGapDto.FromJson(suggestion.DetectedGapsJson),
+        suggestion.NeedsTimeReview,
+        suggestion.Source == SuggestionSource.Document ? suggestion.ExternalId : null,
+        ToBusinessLocal(suggestion.LastActivityAt, businessTimeZone),
+        suggestion.IsUserAdjusted,
+        gaps,
+        sessionLabel);
+
+    /// <summary>
+    /// LastActivityAt jest w encji zawsze w UTC, ale po odczycie z SQLite Kind bywa
+    /// Unspecified — a BusinessTime.ToBusinessLocal traktuje Unspecified jako "już
+    /// lokalny" (tak przychodzi kalendarz z Graph) i zwróciłby wartość nietkniętą.
+    /// Dlatego oznaczamy Kind jawnie przed konwersją.
+    /// </summary>
+    private static DateTime ToBusinessLocal(DateTime utc, TimeZoneInfo businessTimeZone)
+        => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), businessTimeZone);
+}
+
+/// <summary>Żądanie scalenia kilku sugestii tego samego dokumentu w jedną.</summary>
+public class MergeSuggestionsRequest : IValidatableObject
+{
+    /// <summary>Tyle sesji jednego pliku jednego dnia i tak nie powstaje — limit chroni przed absurdalnym żądaniem.</summary>
+    public const int MaxMergeCount = 50;
+
+    [Required(ErrorMessage = "Lista sugestii do scalenia jest wymagana.")]
+    public List<int> SuggestionIds { get; set; } = [];
+
+    /// <summary>true = dolicz wolne luki między scalanymi sesjami do czasu wyniku.</summary>
+    public bool IncludeGaps { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (SuggestionIds.Count < 2)
+        {
+            yield return new ValidationResult(
+                "Scalenie wymaga co najmniej dwóch sugestii.", [nameof(SuggestionIds)]);
+        }
+
+        if (SuggestionIds.Count > MaxMergeCount)
+        {
+            yield return new ValidationResult(
+                "Scalenie może objąć najwyżej 50 sugestii.", [nameof(SuggestionIds)]);
+        }
+    }
+}
+
+/// <summary>
+/// Żądanie rozdzielenia wolnej luki: ile minut bierze ta sugestia, ile sąsiednia.
+/// Obie wartości pochodzą wprost od użytkownika (widzi je i zmienia przed zapisem),
+/// ale rozmiar luki i tak przelicza serwer — klient podaje podział, nie fakt.
+/// </summary>
+public class ClaimSuggestionGapRequest : IValidatableObject
+{
+    [Required(ErrorMessage = "Kierunek doliczenia przerwy jest wymagany.")]
+    public Services.GapDirection? Direction { get; set; }
+
+    /// <summary>Minuty dla tej sugestii; brak wartości = cała wolna luka (skrót „Dolicz całość").</summary>
+    [Range(0, Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        ErrorMessage = "Doliczany czas musi mieścić się w zakresie 0–480 minut.")]
+    public int? Minutes { get; set; }
+
+    /// <summary>Minuty dla sąsiedniej sugestii; reszta luki zostaje wolna.</summary>
+    [Range(0, Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        ErrorMessage = "Czas dla sąsiada musi mieścić się w zakresie 0–480 minut.")]
+    public int? NeighborMinutes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        // Sam NeighborMinutes bez Minutes znaczyłby „całą lukę tutaj I jeszcze tyle
+        // sąsiadowi" — sprzeczność, która skończyłaby się odmową dopiero w serwisie.
+        if (Minutes is null && NeighborMinutes is > 0)
+        {
+            yield return new ValidationResult(
+                "Podział przerwy wymaga podania minut dla obu stron.", [nameof(Minutes)]);
+        }
+    }
 }
 
 /// <summary>Wartości finalne wpisu — edycja to zatwierdzenie z poprawionymi wartościami (jeden endpoint).</summary>
@@ -201,6 +325,64 @@ public class ArchiveTimeEntriesRequest : IValidatableObject
     }
 }
 
+/// <summary>Żądanie scalenia wpisów jednej sesji dokumentu w jeden wpis.</summary>
+public class MergeTimeEntriesRequest : IValidatableObject
+{
+    /// <summary>Rozsądny limit liczby scalanych wpisów — więcej sesji jednego pliku jednego dnia nie istnieje.</summary>
+    public const int MaxMergeCount = 50;
+
+    [Required(ErrorMessage = "Lista wpisów do scalenia jest wymagana.")]
+    public List<int> TimeEntryIds { get; set; } = [];
+
+    /// <summary>true = dolicz wolne luki między sesjami (zapis GapAddition per lukę).</summary>
+    public bool IncludeGaps { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (TimeEntryIds.Count < 2)
+        {
+            yield return new ValidationResult(
+                "Scalenie wymaga co najmniej dwóch wpisów.", [nameof(TimeEntryIds)]);
+        }
+
+        if (TimeEntryIds.Count > MaxMergeCount)
+        {
+            yield return new ValidationResult(
+                "Scalenie może objąć najwyżej 50 wpisów.", [nameof(TimeEntryIds)]);
+        }
+    }
+}
+
+/// <summary>
+/// Żądanie odjęcia wykrytej przerwy — zakres identyfikuje przerwę z listy wykrytych
+/// przerw wpisu (backend waliduje pochodzenie, klientowi nie ufa).
+/// </summary>
+public class SubtractGapRequest
+{
+    [Required(ErrorMessage = "Początek przerwy jest wymagany.")]
+    public DateTime? GapStartAt { get; set; }
+
+    [Required(ErrorMessage = "Koniec przerwy jest wymagany.")]
+    public DateTime? GapEndAt { get; set; }
+}
+
+/// <summary>Szybka korekta czasu wpisu o ±N minut.</summary>
+public class AdjustTimeEntryRequest : IValidatableObject
+{
+    [Range(-Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        Configuration.SuggestionOptions.MaxDocumentDurationMinutes,
+        ErrorMessage = "Korekta musi mieścić się w zakresie ±480 minut.")]
+    public int Minutes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (Minutes == 0)
+        {
+            yield return new ValidationResult("Korekta o zero minut nic nie zmienia.", [nameof(Minutes)]);
+        }
+    }
+}
+
 /// <summary>Wpisy pogrupowane po dniach z sumami — widok "Wpisy czasu" pokazuje je od razu policzone.</summary>
 public record TimeEntriesResponse(int TotalMinutes, IReadOnlyList<TimeEntryDayDto> Days);
 
@@ -213,32 +395,82 @@ public record TimeEntryDto(
     string? CaseNumber,
     string? ClientName,
     DateOnly EntryDate,
+    DateTime StartedAt,
+    DateTime EndedAt,
     int DurationMinutes,
     string Description,
     bool CreatedFromSuggestion,
     SuggestionSource Source,
-    int SuggestionId,
+    IReadOnlyList<int> SuggestionIds,
     string? SourceTitle,
     DateTime? SourceStartedAt,
-    DateTime? ArchivedAt)
+    // Id pliku z Graph (dla wpisów dokumentowych) — UI po nim rozpoznaje, które wpisy
+    // wolno zaznaczyć do scalenia; backend i tak waliduje po swojej stronie.
+    string? SourceExternalId,
+    DateTime? ArchivedAt,
+    IReadOnlyList<DetectedGapDto> DetectedGaps,
+    // Etykieta sesji („edycja 3") licząca sesje w całej historii pliku;
+    // null dla wpisów kalendarzowych, które sesji edycji nie mają.
+    string? SessionLabel = null,
+    // Czas po zaokrągleniu do jednostki rozliczeniowej. Liczy go SERWER, żeby etykieta
+    // przycisku („Zaokrąglij do 1 godz.") nie mogła obiecać innej wartości niż ta, którą
+    // operacja zapisze — jednostka jest w konfiguracji backendu i frontend jej nie zna.
+    // Równy DurationMinutes = nie ma czego zaokrąglać.
+    int RoundedDurationMinutes = 0,
+    // Suma korekt z zaokrąglania (dodatnia = dołożono, ujemna = zdjęto); 0 = nie
+    // zaokrąglano. Osobno od reszty, bo to inna decyzja niż przerwy i niż korekta ±15,
+    // a wrzucona do jednego worka z przerwami zamieniała się w komunikat, że wpis ma
+    // „nieliczone przerwy", których nikt nigdy nie widział w historii wersji.
+    int RoundingMinutes = 0,
+    // Zdanie o tym, co stało się z godzinami wpisu przy zatwierdzaniu (przycięcie do
+    // sąsiada, pozostałe pokrycie). Wypełniane tylko w odpowiedzi na zatwierdzenie.
+    string? Notice = null,
+    // Liczba korekt w dzienniku wpisu. Rozdzielenie scalonego wpisu kasuje jego korekty
+    // (dotyczyły bytu, który przestaje istnieć), więc potwierdzenie przycisku „Rozdziel"
+    // mówi, ile ich przepadnie — do tego UI potrzebuje liczby z góry.
+    int AdjustmentCount = 0)
 {
     /// <summary>
     /// SourceTitle/SourceStartedAt to kotwica wpisu w realnym zdarzeniu (tytuł spotkania
     /// lub nazwa pliku) — opis mógł zostać nadpisany przez użytkownika przy zatwierdzaniu.
+    /// Po scaleniu sesji wpis ma wiele sugestii: kotwicą jest najwcześniejsza z nich.
+    /// Przerwy przychodzą z <see cref="EntryGapService"/> (liczone z dziennika wersji
+    /// razem ze stanem „liczona/nieliczona"); brak listy = wpis bez przerw do pokazania.
     /// </summary>
-    public static TimeEntryDto FromEntity(TimeEntry entry) => new(
-        entry.Id,
-        entry.CaseId,
-        entry.Case?.Name,
-        entry.Case?.CaseNumber,
-        entry.Case?.ClientName,
-        entry.EntryDate,
-        entry.DurationMinutes,
-        entry.Description,
-        entry.CreatedFromSuggestion,
-        entry.Source,
-        entry.SuggestionId,
-        entry.Suggestion?.Title,
-        entry.Suggestion?.StartedAt,
-        entry.ArchivedAt);
+    public static TimeEntryDto FromEntity(
+        TimeEntry entry,
+        string? notice = null,
+        IReadOnlyList<EntryGap>? gaps = null,
+        string? sessionLabel = null,
+        int roundedDurationMinutes = 0)
+    {
+        var firstSuggestion = entry.Suggestions.OrderBy(suggestion => suggestion.StartedAt).FirstOrDefault();
+
+        return new(
+            entry.Id,
+            entry.CaseId,
+            entry.Case?.Name,
+            entry.Case?.CaseNumber,
+            entry.Case?.ClientName,
+            entry.EntryDate,
+            entry.StartedAt,
+            entry.EndedAt,
+            entry.DurationMinutes,
+            entry.Description,
+            entry.CreatedFromSuggestion,
+            entry.Source,
+            entry.Suggestions.Select(suggestion => suggestion.Id).ToList(),
+            firstSuggestion?.Title,
+            firstSuggestion?.StartedAt,
+            entry.Source == SuggestionSource.Document ? firstSuggestion?.ExternalId : null,
+            entry.ArchivedAt,
+            gaps is null ? [] : DetectedGapDto.FromEntryGaps(gaps),
+            sessionLabel,
+            roundedDurationMinutes == 0 ? entry.DurationMinutes : roundedDurationMinutes,
+            entry.Adjustments
+                .Where(adjustment => adjustment.Kind == AdjustmentKind.Rounding)
+                .Sum(adjustment => adjustment.Minutes),
+            notice,
+            entry.Adjustments.Count);
+    }
 }

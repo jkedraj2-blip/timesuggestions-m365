@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { ComponentFixture } from '@angular/core/testing';
-import { SuggestionCard } from './suggestion-card';
+import {
+  SuggestionCard,
+  gapClaimMessage,
+  mergeMessage,
+  suggestionGapNote,
+} from './suggestion-card';
 import { ApiService } from '../services/api.service';
-import { Suggestion } from '../models/api.models';
+import { Suggestion, SuggestionNeighbor } from '../models/api.models';
 
 function createSuggestion(overrides: Partial<Suggestion> = {}): Suggestion {
   return {
@@ -20,20 +25,141 @@ function createSuggestion(overrides: Partial<Suggestion> = {}): Suggestion {
     matchCandidates: [],
     proposedDescription: 'Spotkanie z Kowalski',
     status: 'pending',
+    detectedGaps: [],
+    needsTimeReview: false,
+    sourceExternalId: null,
+    // Bez sufiksu „Z": DTO podaje ostatnią zmianę na TEJ SAMEJ osi co startedAt
+    // (czas strefy biznesowej), więc fixture nie może udawać wartości w UTC.
+    lastActivityAt: '2026-08-06T11:00:00',
+    isUserAdjusted: false,
+    gaps: null,
+    sessionLabel: null,
     ...overrides,
   };
 }
+
+/**
+ * Operacja na przerwie jest natychmiastowa i cicha: karta znika, lista ładuje się od nowa
+ * i bez zdania „co się właśnie stało" prawnik widzi tylko przeskakujące liczby. Te teksty
+ * są całym potwierdzeniem operacji — stąd testy na nie same, a nie na przypadkowy fragment.
+ */
+describe('komunikaty po operacjach na czasie', () => {
+  const base = (overrides: Partial<Suggestion> = {}): Suggestion =>
+    createSuggestion({ startedAt: '2026-08-06T10:00:00', durationMinutes: 60, ...overrides });
+
+  it('doliczenie całości podaje minuty, kierunek i nowy zakres godzin', () => {
+    const previous = base();
+    // Sesja rośnie „przed": start cofa się o 30 min, czas rośnie o tyle samo.
+    const updated = base({ startedAt: '2026-08-06T09:30:00', durationMinutes: 90 });
+
+    expect(gapClaimMessage(previous, [updated], 'Umowa_NovaTech.docx', 'before', 0)).toBe(
+      'Doliczono 30 min na początku tej sesji. Ta sugestia to teraz 09:30–11:00 (1 godz. 30 min).',
+    );
+  });
+
+  it('podział mówi, ile poszło tutaj, a ile do sąsiada', () => {
+    const previous = base();
+    const updated = base({ durationMinutes: 75 });
+    const other = base({ id: 7, durationMinutes: 40 });
+
+    expect(gapClaimMessage(previous, [updated, other], 'Umowa_NovaTech.docx', 'after', 15)).toBe(
+      'Przerwa podzielona: 15 min tutaj, 15 min do „Umowa_NovaTech.docx".'
+        + ' Ta sugestia to teraz 10:00–11:15 (1 godz. 15 min).',
+    );
+  });
+
+  it('gdy cała przerwa poszła do sąsiada, mówi to wprost zamiast milczeć', () => {
+    const previous = base();
+    const other = base({ id: 7, durationMinutes: 40 });
+
+    expect(gapClaimMessage(previous, [other], 'Umowa_NovaTech.docx', 'before', 20)).toBe(
+      'Doliczono 20 min do „Umowa_NovaTech.docx", ta sugestia bez zmian.',
+    );
+  });
+
+  it('scalenie mówi, co powstało i że przerwa NIE została doliczona', () => {
+    expect(mergeMessage(base({ title: 'Umowa_NovaTech.docx', durationMinutes: 135 }))).toBe(
+      'Sesje scalone w jedną: „Umowa_NovaTech.docx" 10:00–12:15 (2 godz. 15 min do rozliczenia).'
+        + ' Przerwa między sesjami nie została doliczona.',
+    );
+  });
+
+  /**
+   * Sedno scalenia bez przerw: godziny obejmują OBIE sesje, a czas liczy tylko je same.
+   * Komunikat wyliczający koniec z minut kończył scaloną sugestię w środku pracy —
+   * prawnik czytał godzinę, pod którą wciąż pisał w dokumencie.
+   */
+  /**
+   * Przy samym „Zatwierdź" nie było ŻADNEJ informacji, że w tym czasie siedzi przerwa
+   * i że da się ją poprawić po zatwierdzeniu. To zmienia kwotę na rachunku, więc musi
+   * być napisane, a nie ukryte w historii wersji.
+   */
+  describe('informacja o przerwach', () => {
+    it('nazywa wykrytą przerwę i mówi, gdzie się ją odejmuje', () => {
+      const note = suggestionGapNote(base({
+        detectedGaps: [
+          { startAt: '2026-08-06T10:20:00', endAt: '2026-08-06T10:40:00', minutes: 20, counted: true },
+        ],
+      }));
+
+      expect(note).toContain('W tej sesji jest 1 przerwa (łącznie 20 min) wliczona w czas pracy.');
+      expect(note).toContain('Wpisy czasu');
+    });
+
+    it('po scaleniu mówi wprost, ile minut NIE jest liczone', () => {
+      const note = suggestionGapNote(base({
+        startedAt: '2026-08-06T10:00:00',
+        durationMinutes: 50,
+        lastActivityAt: '2026-08-06T11:20:00',
+      }));
+
+      expect(note).toContain('obejmuje 1 godz. 20 min, a liczy 50 min');
+      expect(note).toContain('30 min przerw między sesjami nie jest liczone');
+    });
+
+    it('milczy, gdy nie ma o czym mówić', () => {
+      expect(suggestionGapNote(base())).toBeNull();
+    });
+  });
+
+  it('po scaleniu podaje zasięg obu sesji, nie odcinek długości czasu', () => {
+    const survivor = base({
+      title: 'Umowa_NovaTech.docx',
+      startedAt: '2026-08-06T10:00:00',
+      durationMinutes: 50,
+      lastActivityAt: '2026-08-06T11:20:00',
+    });
+
+    expect(mergeMessage(survivor)).toBe(
+      'Sesje scalone w jedną: „Umowa_NovaTech.docx" 10:00–11:20 (50 min do rozliczenia).'
+        + ' Przerwa między sesjami nie została doliczona.',
+    );
+  });
+});
 
 describe('SuggestionCard', () => {
   let fixture: ComponentFixture<SuggestionCard>;
 
   const approveMock = vi.fn();
+  const claimGapMock = vi.fn();
+  const mergeMock = vi.fn();
 
   beforeEach(async () => {
     approveMock.mockReset();
+    claimGapMock.mockReset();
+    mergeMock.mockReset();
     TestBed.configureTestingModule({
       providers: [
-        { provide: ApiService, useValue: { approve: approveMock, reject: vi.fn(), restore: vi.fn() } },
+        {
+          provide: ApiService,
+          useValue: {
+            approve: approveMock,
+            reject: vi.fn(),
+            restore: vi.fn(),
+            claimSuggestionGap: claimGapMock,
+            mergeSuggestions: mergeMock,
+          },
+        },
       ],
     });
     fixture = TestBed.createComponent(SuggestionCard);
@@ -135,5 +261,367 @@ describe('SuggestionCard', () => {
 
     expect(card().sourceConflict()).toBe(false);
     expect(card().durationDraft()).toBe(120);
+  });
+
+  describe('wiersz z czasami', () => {
+    function details(): string[] {
+      return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.detail'))
+        .map((detail) => (detail.textContent ?? '').replace(/\s+/g, ' ').trim());
+    }
+
+    it('podaje początek, ostatnią zmianę i czas pracy — w tej kolejności i z podpisami', async () => {
+      await setSuggestion(createSuggestion({
+        startedAt: '2026-08-11T22:58:00',
+        lastActivityAt: '2026-08-11T23:14:00',
+        durationMinutes: 16,
+      }));
+
+      expect(details()).toEqual([
+        'początek 11.08.2026 22:58',
+        'ostatnia zmiana 23:14',
+        'czas pracy 16 min',
+      ]);
+    });
+
+    it('pomija ostatnią zmianę, gdy to ten sam moment co początek (sesja z jednego zapisu)', async () => {
+      await setSuggestion(createSuggestion({
+        startedAt: '2026-08-11T22:58:36',
+        lastActivityAt: '2026-08-11T22:58:36',
+        durationMinutes: 5,
+      }));
+
+      expect(details()).toEqual(['początek 11.08.2026 22:58', 'czas pracy 5 min']);
+    });
+
+    it('dokłada datę do ostatniej zmiany dopiero po zmianie doby', async () => {
+      await setSuggestion(createSuggestion({
+        startedAt: '2026-08-11T23:50:00',
+        lastActivityAt: '2026-08-12T00:10:00',
+        durationMinutes: 20,
+      }));
+
+      expect(details()[1]).toBe('ostatnia zmiana 12.08.2026 00:10');
+    });
+  });
+
+  /**
+   * Sesja o jednym zapisie nie ma zmierzonego czasu — widoczne 5 min to minimum
+   * z konfiguracji, nie pomiar. Dopasowana sprawa niczego tu nie zmienia: dopasowanie
+   * mówi, KOMU rozliczyć, a nie ILE. Zatwierdzenie jednym kliknięciem zapisywało więc
+   * na rachunku liczbę, której nikt nie potwierdził.
+   */
+  describe('czas do uzupełnienia wymaga potwierdzenia', () => {
+    const needsReview = (): Suggestion =>
+      createSuggestion({ needsTimeReview: true, durationMinutes: 5 });
+
+    async function clickButton(label: string): Promise<void> {
+      const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button'));
+      buttons.find((button) => button.textContent?.trim() === label)!.click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it('pierwsze kliknięcie pyta o czas zamiast zatwierdzać', async () => {
+      await setSuggestion(needsReview());
+
+      await clickButton('Zatwierdź');
+
+      expect(approveMock).not.toHaveBeenCalled();
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(text).toContain('Na pewno 5 min?');
+      expect(text).toContain('jeden zapis');
+    });
+
+    it('drugie kliknięcie zatwierdza podpowiedziany czas', async () => {
+      approveMock.mockResolvedValue({ id: 11 });
+      await setSuggestion(needsReview());
+
+      await clickButton('Zatwierdź');
+      await clickButton('Na pewno 5 min?');
+
+      expect(approveMock).toHaveBeenCalledWith(1, expect.objectContaining({ durationMinutes: 5 }));
+    });
+
+    it('własny czas kończy pytanie — decyzja już zapadła', async () => {
+      approveMock.mockResolvedValue({ id: 11 });
+      await setSuggestion(needsReview());
+      card().editing.set(true);
+      card().durationDraft.set(45);
+      fixture.detectChanges();
+
+      await clickButton('Zapisz i zatwierdź');
+
+      expect(approveMock).toHaveBeenCalledWith(1, expect.objectContaining({ durationMinutes: 45 }));
+    });
+
+    it('sesja ze zmierzonym czasem zatwierdza się od razu', async () => {
+      approveMock.mockResolvedValue({ id: 11 });
+      await setSuggestion(createSuggestion({ needsTimeReview: false, durationMinutes: 5 }));
+
+      await clickButton('Zatwierdź');
+
+      expect(approveMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('wolne luki i scalanie sesji', () => {
+    const neighbor = (overrides: Partial<SuggestionNeighbor> = {}): SuggestionNeighbor => ({
+      suggestionId: 7,
+      title: 'Umowa_NovaTech.docx',
+      gapMinutes: 30,
+      gapStartAt: '2026-08-06T09:30:00',
+      gapEndAt: '2026-08-06T10:00:00',
+      canClaim: true,
+      canMerge: true,
+      ...overrides,
+    });
+
+    function neighborRows(): HTMLElement[] {
+      return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.neighbor-row'));
+    }
+
+    function buttonLabels(root: HTMLElement): (string | undefined)[] {
+      return Array.from(root.querySelectorAll('button')).map((button) => button.textContent?.trim());
+    }
+
+    function splitForm(): HTMLElement | null {
+      return (fixture.nativeElement as HTMLElement).querySelector('.split-form');
+    }
+
+    /** Klika przycisk po widocznej etykiecie — test opisuje to, co widzi użytkownik. */
+    async function click(label: string): Promise<void> {
+      const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button'));
+      buttons.find((button) => button.textContent?.trim() === label)!.click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it('nie pokazuje niczego, gdy backend nie przysłał luk', () => {
+      expect(neighborRows()).toHaveLength(0);
+    });
+
+    /**
+     * Etykieta ma nieść liczbę i kierunek. „Dolicz całość" nie mówiło ani ile minut,
+     * ani gdzie one pójdą — prawnik klikał i widział wyłącznie, że czas skądś podskoczył.
+     */
+    it('opisuje wolną lukę i daje wybór: całość, podział albo scalenie', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+
+      const row = neighborRows()[0];
+      expect(row.textContent).toContain('Od 09:30 do 10:00 nic nie jest rozliczone (30 min).');
+      expect(buttonLabels(row)).toEqual([
+        'Dolicz 30 min do tej sesji',
+        'Podziel przerwę…',
+        'Scal w jedną sesję',
+      ]);
+    });
+
+    /**
+     * Zdanie ma podawać GODZINY, a nie same minuty. Bez nich dwie karty stojące obok
+     * tej samej dziury pisały co do znaku to samo („Nierozliczone 30 min przed tą
+     * sesją") i wyglądało to na zdublowany albo źle policzony wpis — nie było jak
+     * poznać, że chodzi o ten sam kwadrans dnia. Liczbę minut sesji mylono wtedy
+     * z długością przerwy.
+     */
+    it('po drugiej stronie podaje godziny przerwy i nazwę sąsiada', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: {
+          before: null,
+          after: neighbor({
+            canMerge: false,
+            title: 'why',
+            gapStartAt: '2026-08-06T11:00:00',
+            gapEndAt: '2026-08-06T11:30:00',
+          }),
+        },
+      }));
+
+      expect(neighborRows()[0].textContent).toContain(
+        'Od 11:00 do 11:30 nic nie jest rozliczone (30 min). Później zaczyna się „why".',
+      );
+    });
+
+    /**
+     * Sąsiad tego samego pliku nosi tę samą nazwę co karta, więc powtórzenie jej
+     * w zdaniu czytało się jak odwołanie pozycji do samej siebie („dalej: why"
+     * na karcie „why"). Mówimy wprost, że to druga sesja tego pliku.
+     */
+    it('nie powtarza nazwy karty, gdy sąsiadem jest druga sesja tego samego pliku', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+
+      const text = neighborRows()[0].textContent ?? '';
+      expect(text).toContain('Wcześniej tego dnia jest druga sesja tego pliku.');
+      expect(text).not.toContain('Umowa_NovaTech.docx');
+    });
+
+    /**
+     * Sedno zgłoszenia: dziura większa niż limit doliczania odbierała sąsiada w całości,
+     * więc dwie sesje tego samego pliku nie miały ŻADNEGO przycisku, choć scalenie
+     * przechodzi. Scalanie nie ma nic wspólnego z limitem przerwy.
+     */
+    it('bez doliczania, ale ze scalaniem, gdy przerwa nie mieści się w limicie', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: {
+          before: null,
+          after: neighbor({ canClaim: false, gapMinutes: 237, gapEndAt: '2026-08-06T13:27:00' }),
+        },
+      }));
+
+      expect(buttonLabels(neighborRows()[0])).toEqual(['Scal w jedną sesję']);
+    });
+
+    /**
+     * Dwie przerwy naraz (jedna przed sesją, druga po niej) zlewały się w ścianę
+     * linków: zdanie i przyciski stały w jednym wierszu, wiersze jeden pod drugim bez
+     * żadnego odstępu, więc nie było widać, gdzie kończy się jedna decyzja, a zaczyna
+     * druga, ani której przerwy dotyczy który przycisk.
+     */
+    it('każda strona dostaje własny blok z nagłówkiem kierunku', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: { before: neighbor(), after: neighbor({ canMerge: false, title: 'Rozprawa' }) },
+      }));
+
+      const rows = neighborRows();
+      expect(rows).toHaveLength(2);
+      expect(rows.map((row) => row.querySelector('.neighbor-when')?.textContent?.trim()))
+        .toEqual(['Przed tą sesją', 'Po tej sesji']);
+    });
+
+    it('formularz podziału otwiera się w bloku swojej przerwy', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: { before: neighbor(), after: neighbor({ canMerge: false, title: 'Rozprawa' }) },
+      }));
+
+      Array.from(neighborRows()[1].querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Podziel przerwę…')!
+        .click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(neighborRows()[0].querySelector('.split-form')).toBeNull();
+      expect(neighborRows()[1].querySelector('.split-form')).not.toBeNull();
+    });
+
+    it('każdy przycisk niesie pełne zdanie o skutku w podpowiedzi', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+
+      const titles = Array.from(neighborRows()[0].querySelectorAll('button'))
+        .map((button) => button.getAttribute('title') ?? '');
+      expect(titles[0]).toContain('Sąsiad zostaje bez zmian');
+      expect(titles[1]).toContain('niedobrane minuty zostaną wolne');
+      expect(titles[2]).toContain('przerwa między nimi NIE jest doliczana');
+    });
+
+    it('przy wpisie czasu po drugiej stronie oferuje doliczenie części, nie podział', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: { before: neighbor({ suggestionId: null, canMerge: false, title: 'wpis „Rozprawa"' }), after: null },
+      }));
+
+      expect(buttonLabels(neighborRows()[0])).toEqual(['Dolicz 30 min do tej sesji', 'Dolicz część…']);
+    });
+
+    it('przylegająca sesja tego samego pliku daje samo scalenie — nie ma czego doliczać', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: {
+          before: null,
+          after: neighbor({
+            gapMinutes: 0,
+            canClaim: false,
+            gapStartAt: '2026-08-06T11:00:00',
+            gapEndAt: '2026-08-06T11:00:00',
+          }),
+        },
+      }));
+
+      const row = neighborRows()[0];
+      expect(row.textContent).toContain('Druga sesja tego pliku zaczyna się dokładnie tam, gdzie ta się kończy.');
+      expect(buttonLabels(row)).toEqual(['Scal w jedną sesję']);
+    });
+
+    /**
+     * Sedno poprawki: sąsiad zza północy nie może obiecywać scalenia, bo backend
+     * odmawia scalania pozycji z dwóch dni. Sama przerwa nadal jest do rozdzielenia.
+     */
+    it('nie proponuje scalenia, gdy backend go nie potwierdził', async () => {
+      await setSuggestion(createSuggestion({
+        gaps: { before: neighbor({ canMerge: false }), after: null },
+      }));
+
+      expect(buttonLabels(neighborRows()[0])).toEqual(['Dolicz 30 min do tej sesji', 'Podziel przerwę…']);
+    });
+
+    it('sugestia rozstrzygnięta nie dostaje żadnych akcji na luce', async () => {
+      await setSuggestion(createSuggestion({ status: 'rejected', gaps: { before: neighbor(), after: null } }));
+
+      expect(neighborRows()).toHaveLength(0);
+    });
+
+    it('„Dolicz całość" nie podaje minut — całą lukę wylicza serwer', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+      claimGapMock.mockResolvedValue([]);
+
+      await click('Dolicz 30 min do tej sesji');
+
+      expect(claimGapMock).toHaveBeenCalledWith(1, 'before');
+    });
+
+    it('po doliczeniu wypuszcza gotowe potwierdzenie dla użytkownika', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+      claimGapMock.mockResolvedValue([
+        createSuggestion({ startedAt: '2026-08-06T09:30:00', durationMinutes: 90 }),
+      ]);
+      const messages: string[] = [];
+      fixture.componentInstance.adjusted.subscribe((message) => messages.push(message));
+
+      await click('Dolicz 30 min do tej sesji');
+
+      expect(messages).toEqual([
+        'Doliczono 30 min na początku tej sesji. Ta sugestia to teraz 09:30–11:00 (1 godz. 30 min).',
+      ]);
+    });
+
+    it('podział startuje od połowy i pokazuje obie liczby przed zapisem', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+
+      await click('Podziel przerwę…');
+
+      const inputs = Array.from(splitForm()!.querySelectorAll('input')) as HTMLInputElement[];
+      expect(inputs.map((input) => input.value)).toEqual(['15', '15']);
+      expect(splitForm()!.textContent).toContain('z 30 min zostaje wolne: 0 min');
+    });
+
+    it('zapisuje podział poprawiony ręcznie i melduje resztę jako wolną', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+      claimGapMock.mockResolvedValue([]);
+      await click('Podziel przerwę…');
+
+      const [mine, theirs] = Array.from(splitForm()!.querySelectorAll('input')) as HTMLInputElement[];
+      mine.value = '20';
+      mine.dispatchEvent(new Event('input'));
+      theirs.value = '5';
+      theirs.dispatchEvent(new Event('input'));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(splitForm()!.textContent).toContain('zostaje wolne: 5 min');
+      await click('Zapisz podział');
+      expect(claimGapMock).toHaveBeenCalledWith(1, 'before', 20, 5);
+    });
+
+    it('nie pozwala zapisać podziału większego niż przerwa', async () => {
+      await setSuggestion(createSuggestion({ gaps: { before: neighbor(), after: null } }));
+      await click('Podziel przerwę…');
+
+      const [mine] = Array.from(splitForm()!.querySelectorAll('input')) as HTMLInputElement[];
+      mine.value = '40';
+      mine.dispatchEvent(new Event('input'));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const save = Array.from(splitForm()!.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Zapisz podział') as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      expect(claimGapMock).not.toHaveBeenCalled();
+    });
   });
 });

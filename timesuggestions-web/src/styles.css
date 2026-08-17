@@ -440,3 +440,19 @@ h1, h2, h3 {
 .text-warn {
   color: var(--warn);
 }
+
+/* Chwilowe podświetlenie pozycji po nawigacji z osi czasu (scroll-highlight util).
+   Sam box-shadow zamiast tła — działa we wszystkich trzech motywach bez nowych tokenów. */
+.flash-highlight {
+  animation: flash-highlight 2s ease-out;
+}
+
+@keyframes flash-highlight {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}

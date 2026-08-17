@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   archivedSuggestionsToast,
+  bulkApprovable,
+  bulkApproveToast,
   filteredOutLine,
-  normalizedDocumentMinutes,
   normalizedSyncDays,
   syncCheckedLine,
   syncReportHeadline,
   syncSkippedLine,
 } from './suggestions-page';
-import { SyncFilteredOutCounts } from '../models/api.models';
+import { Suggestion, SyncFilteredOutCounts } from '../models/api.models';
 
 const NO_FILTERED: SyncFilteredOutCounts = {
   private: 0,
@@ -17,7 +18,6 @@ const NO_FILTERED: SyncFilteredOutCounts = {
   cancelled: 0,
   invalidDates: 0,
   notOfficeDocument: 0,
-  outsideWindow: 0,
   notModifiedByUser: 0,
   total: 0,
 };
@@ -25,7 +25,7 @@ const NO_FILTERED: SyncFilteredOutCounts = {
 describe('syncReportHeadline', () => {
   it('bez żadnych zmian mówi wprost "bez zmian" zamiast zerowych liczników', () => {
     expect(syncReportHeadline({ created: 0, updated: 0, removed: 0 })).toBe(
-      'Synchronizacja zakończona — bez zmian. Wszystkie sugestie są aktualne.',
+      'Synchronizacja zakończona bez zmian. Wszystkie sugestie są aktualne.',
     );
   });
 
@@ -38,6 +38,60 @@ describe('syncReportHeadline', () => {
     );
     expect(syncReportHeadline({ created: 5, updated: 0, removed: 0 })).toBe(
       'Synchronizacja zakończona: 5 nowych sugestii.',
+    );
+  });
+});
+
+describe('hurtowe zatwierdzanie dopasowanych', () => {
+  const suggestion = (overrides: Partial<Suggestion>): Suggestion => ({
+    id: 1,
+    source: 'document',
+    title: 'Umowa.docx',
+    startedAt: '2026-08-12T10:00:00',
+    durationMinutes: 30,
+    caseId: 1,
+    caseName: 'Kowalski',
+    caseNumber: 'K-1',
+    clientName: 'Kowalski',
+    isAmbiguous: false,
+    matchCandidates: [],
+    proposedDescription: 'Praca',
+    status: 'pending',
+    detectedGaps: [],
+    needsTimeReview: false,
+    sourceExternalId: null,
+    lastActivityAt: '2026-08-12T10:30:00',
+    isUserAdjusted: false,
+    gaps: null,
+    sessionLabel: null,
+    ...overrides,
+  });
+
+  /**
+   * Hurt zapisuje czas bez otwierania choćby jednej karty. Sesja o jednym zapisie
+   * nie ma zmierzonego czasu, więc trafiłaby na rachunek z minimum z konfiguracji —
+   * i to właśnie w trybie, w którym nikt na nią nie patrzy.
+   */
+  it('pomija sugestie z czasem do uzupełnienia, choć są dopasowane', () => {
+    const approvable = bulkApprovable([
+      suggestion({ id: 1 }),
+      suggestion({ id: 2, needsTimeReview: true, durationMinutes: 5 }),
+      suggestion({ id: 3, caseId: null, caseName: null }),
+      suggestion({ id: 4, isAmbiguous: true }),
+    ]);
+
+    expect(approvable.map((item) => item.id)).toEqual([1]);
+  });
+
+  it('komunikat mówi wprost, ile pominięto i co z tym zrobić', () => {
+    expect(bulkApproveToast(3, 0, 0)).toBe('Zapisano 3 wpisy czasu pracy.');
+    expect(bulkApproveToast(3, 0, 2)).toBe(
+      'Zapisano 3 wpisy czasu pracy. Pominięto 2 sugestie z czasem do uzupełnienia'
+        + ' — zatwierdź je pojedynczo.',
+    );
+    expect(bulkApproveToast(1, 2, 1)).toBe(
+      'Zapisano 1, nie udało się 2. Spróbuj pojedynczo. Pominięto 1 sugestię'
+        + ' z czasem do uzupełnienia — zatwierdź je pojedynczo.',
     );
   });
 });
@@ -103,58 +157,39 @@ describe('syncSkippedLine', () => {
 
 describe('filteredOutLine', () => {
   it('przy jednym powodzie nie dubluje liczby', () => {
-    expect(filteredOutLine({ ...NO_FILTERED, outsideWindow: 1, total: 1 }, 7)).toBe(
-      'Pominięto 1 pozycję: sprzed rozliczanego zakresu ostatnich 7 dni.',
+    expect(filteredOutLine({ ...NO_FILTERED, tooShort: 1, total: 1 })).toBe(
+      'Pominięto 1 pozycję: krótsza niż 5 minut.',
     );
-    expect(filteredOutLine({ ...NO_FILTERED, outsideWindow: 6, total: 6 }, 14)).toBe(
-      'Pominięto 6 pozycji: sprzed rozliczanego zakresu ostatnich 14 dni.',
+    expect(filteredOutLine({ ...NO_FILTERED, notOfficeDocument: 6, total: 6 })).toBe(
+      'Pominięto 6 pozycji: plików innych niż Word/Excel.',
     );
   });
 
   it('przy wielu powodach skleja liczbę i powód separatorem, bez separatora na końcu', () => {
-    const text = filteredOutLine({ ...NO_FILTERED, cancelled: 2, outsideWindow: 1, total: 3 }, 7);
-    expect(text).toBe(
-      'Pominięto 3 pozycje: 2 odwołane · 1 sprzed rozliczanego zakresu ostatnich 7 dni.',
-    );
+    const text = filteredOutLine({ ...NO_FILTERED, cancelled: 2, allDay: 1, total: 3 });
+    expect(text).toBe('Pominięto 3 pozycje: 2 odwołane · 1 całodniowa.');
     expect(text.trimEnd().endsWith('·')).toBe(false);
 
-    expect(filteredOutLine({ ...NO_FILTERED, cancelled: 2, tooShort: 1, total: 3 }, 7)).toBe(
+    expect(filteredOutLine({ ...NO_FILTERED, cancelled: 2, tooShort: 1, total: 3 })).toBe(
       'Pominięto 3 pozycje: 2 odwołane · 1 krótsza niż 5 minut.',
     );
   });
 
   it('opisuje powody językiem użytkownika', () => {
-    expect(filteredOutLine({ ...NO_FILTERED, private: 1, total: 1 }, 7)).toBe(
+    expect(filteredOutLine({ ...NO_FILTERED, private: 1, total: 1 })).toBe(
       'Pominięto 1 pozycję: prywatna lub poufna (tytuły nie opuszczają przeglądarki).',
     );
-    expect(filteredOutLine({ ...NO_FILTERED, notOfficeDocument: 3, total: 3 }, 7)).toBe(
+    expect(filteredOutLine({ ...NO_FILTERED, notOfficeDocument: 3, total: 3 })).toBe(
       'Pominięto 3 pozycje: pliki inne niż Word/Excel.',
     );
   });
 
   it('odmienia etykiety po liczebniku', () => {
-    expect(filteredOutLine({ ...NO_FILTERED, cancelled: 5, total: 5 }, 7)).toBe(
+    expect(filteredOutLine({ ...NO_FILTERED, cancelled: 5, total: 5 })).toBe(
       'Pominięto 5 pozycji: odwołanych.',
     );
-    expect(filteredOutLine({ ...NO_FILTERED, notModifiedByUser: 2, total: 2 }, 7)).toBe(
+    expect(filteredOutLine({ ...NO_FILTERED, notModifiedByUser: 2, total: 2 })).toBe(
       'Pominięto 2 pozycje: zmodyfikowane przez kogoś innego.',
     );
   });
-});
-
-describe('normalizedDocumentMinutes', () => {
-  it.each([
-    [1, 1],
-    [30, 30],
-    [480, 480],
-  ])('przepuszcza wartość %i', (raw, expected) => {
-    expect(normalizedDocumentMinutes(raw)).toBe(expected);
-  });
-
-  it.each([0, -5, 481, 30.5, Number.NaN, 'abc', '', null, undefined])(
-    'wartość spoza zakresu (%s) traktuje jak brak preferencji',
-    (raw) => {
-      expect(normalizedDocumentMinutes(raw)).toBeUndefined();
-    },
-  );
 });

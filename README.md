@@ -1,126 +1,329 @@
 # TimeSuggestions
 
-Prototyp automatycznych sugestii wpisów czasu pracy dla kancelarii prawnych.
-Na podstawie spotkań z kalendarza Outlook i edytowanych dokumentów Word/Excel w OneDrive
-(Microsoft Graph) aplikacja proponuje wpisy czasu, które użytkownik zatwierdza jednym
-kliknięciem. Po zatwierdzeniu powstaje rozliczalny wpis (`TimeEntry`) przypisany do sprawy (`Case`).
+TimeSuggestions jest prototypem aplikacji wspierającej ewidencję czasu pracy w kancelarii
+prawnej. Na podstawie spotkań z kalendarza Outlook oraz aktywności w dokumentach Word i
+Excel zapisanych w OneDrive aplikacja tworzy sugestie wpisów czasu. Użytkownik weryfikuje
+sprawę, opis i czas, a następnie zatwierdza sugestię jako rozliczalny `TimeEntry`.
+
+Projekt nie jest automatycznym systemem rozliczeniowym. Dane z Microsoft 365 stanowią
+materiał pomocniczy, natomiast decyzja o przypisaniu czasu do klienta i sprawy zawsze
+należy do użytkownika.
+
+## Zakres funkcjonalny
+
+Aplikacja udostępnia trzy główne widoki:
+
+| Widok | Zakres |
+|---|---|
+| **Sugestie** | Synchronizacja danych z Microsoft 365, filtrowanie i zatwierdzanie propozycji, edycja czasu i opisu, odrzucanie, przywracanie, scalanie sesji dokumentowych oraz rozdzielanie wolnych przerw |
+| **Wpisy czasu** | Ewidencja aktywnych wpisów według dni, korekty czasu, obsługa przerw, scalanie i rozdzielanie wpisów, zaokrąglanie do jednostki rozliczeniowej oraz archiwizacja rozliczonego czasu |
+| **Sprawy** | Dodawanie i edycja spraw, konfiguracja numeru, klienta i słów kluczowych, aktywacja oraz dezaktywacja bez usuwania historii |
+
+Nad widokami znajduje się podsumowanie liczby oczekujących i zatwierdzonych sugestii,
+sumy minut w aktywnych wpisach oraz czasu ostatniej synchronizacji. Kafelek opisany jako
+„zapisane wpisy” prezentuje wartość `approvedCount`, czyli liczbę zatwierdzonych sugestii;
+po scaleniu kilka sugestii może należeć do jednego wpisu czasu. Zwijana oś czasu
+przedstawia oczekujące sugestie, aktywne wpisy i pozycje rozliczone w układzie dziennym.
+Dla dokumentów dostępna jest historia obserwowanych wersji. Porównanie treści działa
+wyłącznie dla plików `.docx` i jest wykonywane w przeglądarce.
 
 ## Architektura i przepływ danych
 
+```text
+Logowanie MSAL
+  -> frontend pobiera kalendarz i metadane plików z Microsoft Graph
+  -> dane prywatne i nieobsługiwane elementy są filtrowane w przeglądarce
+  -> POST /api/sync przekazuje dane domenowe do lokalnego API
+  -> backend filtruje dane, odtwarza sesje dokumentowe i dopasowuje sprawy
+  -> zapisuje lub aktualizuje sugestie w SQLite
+  -> użytkownik zatwierdza, edytuje albo odrzuca propozycję
+  -> zatwierdzenie tworzy wpis czasu przypisany do sprawy
 ```
-MSAL login → frontend pobiera Graph (kalendarz + pliki z okna synchronizacji, wszystkie strony)
-           → filtr prywatności w przeglądarce (tytuły prywatnych nie opuszczają przeglądarki)
-           → POST /api/sync (surowe dane + tombstone'y + liczniki filtrów klienckich)
-           → backend: filtrowanie → dopasowanie do spraw → zapis sugestii (dedup)
-             + rekonsyliacja kalendarza (aktualizacje w miejscu / usuwanie nieaktualnych)
-           → raport synchronizacji + lista sugestii → karty w UI
-           → Zatwierdź / Edytuj / Odrzuć → TimeEntry w bazie → widok "Wpisy czasu"
+
+Frontend w katalogu `timesuggestions-web/` jest aplikacją Angular 21. Odpowiada za
+logowanie MSAL, komunikację z Microsoft Graph, filtrowanie danych wrażliwych, obsługę
+interfejsu i opcjonalną synchronizację w tle.
+
+Backend w katalogu `TimeSuggestions/` jest aplikacją .NET 10 Web API. Zawiera logikę
+biznesową, silnik sesji dokumentowych, dopasowanie spraw, ochronę przed duplikatami,
+operacje na czasie oraz dostęp do lokalnej bazy SQLite przez EF Core.
+
+Logowanie i pobieranie tokenów obsługuje `@azure/msal-browser` skonfigurowany jako klient
+publiczny bez `client secret`. Token Microsoft Graph pozostaje w przeglądarce i nie jest
+przekazywany do backendu. Przed dołączeniem nagłówka `Authorization` frontend sprawdza,
+czy początkowy adres żądania używa HTTPS i hosta `graph.microsoft.com`. Kontrola obejmuje
+również adresy stronicowania `@odata.nextLink` i wskaźnik `@odata.deltaLink` zapisany
+w `localStorage`.
+
+## Synchronizacja danych
+
+Kalendarz jest pobierany jako kompletny widok wybranego okna czasu. Domyślne okno
+obejmuje 7 dni, w interfejsie można wybrać 14 albo 30 dni, a API dopuszcza maksymalnie
+90 dni. Frontend odrzuca wydarzenia prywatne, osobiste, poufne i anulowane, zanim ich
+tytuły opuszczą przeglądarkę. Backend ponownie stosuje reguły walidacji i odrzuca także
+wydarzenia całodniowe, z błędnymi datami, poza oknem oraz krótsze niż skonfigurowane
+minimum, domyślnie 5 minut.
+
+Dokumenty są pobierane przez `GET /me/drive/root/delta`. Pierwsza synchronizacja może
+przejść przez cały OneDrive, natomiast kolejne używają zapisanego `deltaLink` i pobierają
+tylko zmiany. Wskaźnik delty jest zapisywany dopiero po prawidłowym zakończeniu
+`POST /api/sync`, dzięki czemu nieudany przebieg nie powoduje utraty zmian. Odpowiedzi
+`410 Gone` powodują kontrolowane wyczyszczenie wskaźnika i wykonanie pełnej synchronizacji.
+Jawne tombstone'y usuniętych plików usuwają wyłącznie oczekujące sugestie; brak pliku
+w przyrostowej odpowiedzi nie jest traktowany jako dowód jego usunięcia.
+
+Obsługiwane są pliki `.docx`, `.doc`, `.xlsx` i `.xls` z wybranego okna synchronizacji.
+Frontend ustala pole `lastModifiedByMe` na podstawie danych `lastModifiedBy` i aktywnego
+konta MSAL; brak danych autora na dysku osobistym jest traktowany jako modyfikacja
+właściciela. Backend wyklucza z budowania sugestii pliki, dla których
+`lastModifiedByMe` ma wartość `false`. Aktywności wersji są zapisywane dla wszystkich
+plików przekazanych w payloadzie. Dla każdego pliku spełniającego filtr rozszerzenia
+i czasu frontend pobiera stronicowaną historię wersji z Microsoft Graph. Jednocześnie
+działają najwyżej cztery żądania historii. Błąd dotyczący pojedynczego pliku ustawia jego
+pole `versions` na `null`, zwiększa licznik błędów w raporcie i nie przerywa całej
+synchronizacji.
+
+## Naliczanie czasu pracy nad dokumentami
+
+### Dane wejściowe
+
+Microsoft Graph nie udostępnia informacji o tym, przez jaki czas użytkownik aktywnie
+edytował dokument. Dla plików Word i Excel dostępne są przede wszystkim znaczniki
+`lastModifiedDateTime` elementu oraz zapisanych wersji. Z tego powodu czas dokumentowy
+jest estymowany na podstawie obserwowalnych punktów zapisu, a nie mierzony jak przez
+lokalny rejestrator aktywności klawiatury lub procesu.
+
+Historia wersji OneDrive zawiera znaczniki czasu zapisanych wersji, ale nie rejestruje
+otwarcia pliku, przebiegu aktywności użytkownika ani zamknięcia dokumentu. AutoSave
+zapisuje zmiany regularnie, natomiast Microsoft 365 dodaje wersje do historii okresowo,
+a nie po każdej modyfikacji.
+[Dokumentacja Microsoft dotycząca AutoSave](https://support.microsoft.com/office/6d6bd723-ebfd-4e40-b5f6-ae6e8088f7a5)
+podaje interwał około 10 minut w trakcie jednej sesji edycji. Liczba punktów dostępnych
+przez `GET /drive/items/{id}/versions` może być zatem mniejsza od liczby faktycznych zapisów.
+Dłuższa praca i krótka poprawka mogą pozostawić tylko jeden obserwowalny punkt, jeżeli
+aplikacja nie zsynchronizowała pliku w trakcie edycji. Czas trwania można wyliczyć jako
+różnicę dopiero między co najmniej dwoma punktami. Pojedynczy punkt nie zawiera
+informacji o długości pracy, dlatego taka sesja wymaga ręcznego podania czasu.
+
+Backend prowadzi niemodyfikowalny dziennik `DocumentActivity`. Naturalnym kluczem
+obserwacji jest trójka:
+
+```text
+(identyfikator pliku, identyfikator wersji lub próbki, moment modyfikacji UTC)
 ```
 
-- **Frontend (Angular 21, `timesuggestions-web/`)**: logowanie MSAL (klient publiczny,
-  bez sekretu), pobieranie surowych danych z Microsoft Graph, trzy widoki (Sugestie,
-  Wpisy czasu, Sprawy), kafelki podsumowania, powiadomienia z akcją "Cofnij".
-- **Backend (.NET 10 Web API, `TimeSuggestions/`)**: cała logika biznesowa
-  (normalizacja, filtrowanie z licznikami, dopasowanie, agregacja, ochrona przed
-  duplikatami), baza SQLite przez EF Core, endpointy REST.
+Do dziennika trafiają znaczniki pobranych wersji. Jeżeli historia wersji została pobrana,
+a bieżący `driveItem.lastModifiedDateTime` wskazuje moment nieobecny na tej liście,
+backend zapisuje dodatkową obserwację z identyfikatorem `item`. Dziennik może również
+zawierać kilka momentów przypisanych do tego samego identyfikatora wersji zwróconego
+przez Graph. Powtórne dane o identycznym pliku, identyfikatorze wersji i momencie są
+pomijane przez kontrolę w serwisie oraz indeks unikalny w SQLite.
 
-**Dlaczego token nie idzie do backendu:** aplikacja jest klientem publicznym bez sekretu,
-więc token Graph żyje wyłącznie w przeglądarce. Backend dostaje tylko surowe dane domenowe
-(tytuły, daty, nazwy plików), dzięki czemu powierzchnia ataku jest mniejsza, a model
-bezpieczeństwa prostszy. Logika w .NET jest przy tym czysto testowalna (xUnit, bez sieci
-i logowania). Token nie jest też wysyłany pod żaden adres spoza `https://graph.microsoft.com`:
-adresy stronicowania (`@odata.nextLink`, `@odata.deltaLink`, wartości z localStorage)
-są walidowane przed dołączeniem nagłówka `Authorization`.
+### Budowanie sesji
 
-## Ograniczenia prototypu
+Dla każdego pliku aktywności są porządkowane chronologicznie i deduplikowane według
+momentu. Następnie silnik dzieli je na sesje zgodnie z konfigurowalnymi progami:
 
-- **API backendu nie ma uwierzytelniania.** To świadoma decyzja prototypu uruchamianego
-  lokalnie: każdy proces z dostępem do portu 5188 może czytać i zapisywać dane.
-  Backend nasłuchuje wyłącznie na `localhost` (profil `http` w `launchSettings.json`),
-  więc nie jest wystawiony poza maszynę. W wersji produkcyjnej należałoby dodać
-  walidację tokenu Entra dla własnego API oraz rozdzielenie danych per użytkownik;
-  prototyp celowo tego nie implementuje.
-- **Sugestie dokumentowe to nie pełna historia pracy.** Delta OneDrive zwraca ostatni
-  zaobserwowany stan pliku: sugestia odpowiada ostatniej modyfikacji, a edycje z dni
-  pomiędzy synchronizacjami (sprzed ostatniej zmiany pliku) nie są odtwarzane.
-  Produkcyjnie rozwiązałby to endpoint `driveItem/versions`.
-- **Jedna strefa biznesowa.** Czasy obu źródeł są sprowadzane do skonfigurowanej strefy
-  (`Suggestions:BusinessTimeZoneId`, domyślnie `Europe/Warsaw`), bez obsługi wielu
-  stref per użytkownik.
+- odstęp do 15 minut włącznie oznacza kontynuację tej samej sesji;
+- odstęp powyżej 15 i do 30 minut włącznie pozostaje częścią sesji, ale jest oznaczany
+  jako wykryta przerwa, którą użytkownik może wyłączyć z rozliczenia;
+- odstęp dłuższy niż 30 minut rozpoczyna nową sesję i nową sugestię;
+- zmiana lokalnego dnia zawsze rozpoczyna nową sesję, niezależnie od długości odstępu.
 
-## Widoki aplikacji
+Początkiem sesji jest moment pierwszego zaobserwowanego zapisu, a końcem moment
+ostatniego zapisu. Czas brutto jest zaokrągloną do pełnej minuty różnicą między tymi
+punktami. Obliczenie jest wykonywane na znacznikach UTC, aby zmiana czasu letniego lub
+zimowego nie zafałszowała długości, natomiast data i godziny prezentowane użytkownikowi
+są przeliczane na strefę biznesową, domyślnie `Europe/Warsaw`.
 
-| Widok | Rola |
+Dla sesji z mierzalnym odstępem system nie dodaje czasu przed pierwszą ani po ostatniej
+obserwacji. Jeżeli różnica między pierwszym i ostatnim punktem po zaokrągleniu wynosi
+zero minut, typowo przy pojedynczym zapisie, historia nie niesie żadnej informacji
+o długości pracy (ograniczenie opisane w danych wejściowych). Zasięg kończy się wtedy po
+upływie `MinimumSessionMinutes`, domyślnie 5 minut, a sugestia otrzymuje tę samą wartość
+czasu oraz znacznik `NeedsTimeReview`. Interfejs wymaga dwukrotnego potwierdzenia
+wartości domyślnej albo wpisania własnej liczby minut. Zatwierdzanie hurtowe pomija
+sugestie ze znacznikiem `NeedsTimeReview`.
+
+Tor awaryjny jest używany, gdy dla pliku nie ma żadnej zapisanej aktywności. Dotyczy to
+między innymi pliku z `versions: null`, dla którego baza nie zawiera wcześniejszych
+obserwacji. W tym trybie powstaje najwyżej jedna sugestia dla danego pliku i lokalnego
+dnia. Otrzymuje ona `MinimumSessionMinutes` i `NeedsTimeReview`. Jeżeli baza zawiera już
+aktywności pliku, silnik może zbudować sesje z zapisanych obserwacji także wtedy, gdy
+bieżące pobranie historii wersji zakończyło się błędem.
+
+### Znaczenie synchronizacji co 10 minut
+
+Opcjonalne automatyczne sprawdzanie uruchamia synchronizację co 10 minut, gdy użytkownik
+jest zalogowany i aplikacja pozostaje otwarta. Funkcja jest domyślnie wyłączona. Jej
+włączenie uruchamia synchronizację od razu, a przywrócenie zapisanej preferencji po
+ponownym otwarciu aplikacji uruchamia pierwszy przebieg po upływie interwału. Po trzech
+kolejnych błędach automat wyłącza się i pokazuje komunikat użytkownikowi.
+
+Dziesięciominutowy interwał jest krótszy od 15-minutowego progu ciągłości sesji. Przebieg
+automatyczny odczytuje pełne okno kalendarza i przyrostową deltę OneDrive. Jeżeli delta
+zwróci plik i pobranie historii zakończy się powodzeniem, backend dodaje nieznane
+dotychczas znaczniki wersji. Dodatkowa obserwacja `item` powstaje, gdy
+`driveItem.lastModifiedDateTime` nie występuje wśród momentów zwróconych wersji. Kolejne
+przebiegi mogą w ten sposób zagęścić dziennik aktywności.
+
+Nie jest to jednak gwarancja kompletnego pomiaru. Synchronizacja działa tylko przy
+otwartej aplikacji i aktywnej sesji Microsoft, a częstotliwość tworzenia wersji oraz
+aktualizacji metadanych zależy od Worda, Excela, sposobu zapisu i klienta Office.
+Jeżeli źródło nie opublikuje kolejnych znaczników, aplikacja nie ma danych pozwalających
+odtworzyć czasu między nimi. Z tego powodu wynik należy traktować jako rekonstrukcję
+sesji na podstawie dostępnej telemetrii, wymagającą kontroli użytkownika.
+
+### Dalsza praca, przerwy i nakładanie
+
+Aktywności objęte zatwierdzoną sugestią dokumentową albo oczekującą sugestią poprawioną
+przez użytkownika są wyłączane z wejścia silnika sesji. Aktywności spoza tych zakresów
+mogą utworzyć kolejne sugestie tego samego pliku. Odrzucone i zarchiwizowane sugestie
+pozostają w bazie i uczestniczą w ochronie przed ponownym utworzeniem tej samej sesji.
+Numer sesji, na przykład „edycja 3”, jest wyliczany na podstawie chronologii sugestii
+danego pliku.
+
+Przerwy od ponad 15 do 30 minut wewnątrz sesji są częścią czasu brutto, dopóki użytkownik
+nie wyłączy ich w aktywnym wpisie. Wolną lukę między sąsiednimi pozycjami można doliczyć
+do bieżącej sugestii, a także podzielić między dwie oczekujące sugestie. Podział nie może
+przekroczyć długości luki, przejść przez lokalną północ ani przekroczyć limitu 480 minut.
+Jeżeli po drugiej stronie znajduje się wpis czasu, operacja nie zmienia go z poziomu
+sugestii.
+
+Oczekujące sugestie tego samego dokumentu można scalać między sobą, jeżeli pochodzą
+z jednego dnia. Ta sama reguła dotyczy scalania aktywnych wpisów między sobą. Serwisy
+scalania i obsługi luk sprawdzają, czy nowo zajęty odcinek nie zawiera innej pozycji.
+Podczas zatwierdzania koniec zasięgu jest przycinany do późniejszego sąsiada
+rozpoczynającego się wewnątrz tego zasięgu. Pokrycie z pozycją, która rozpoczyna się
+wcześniej albo dokładnie w tym samym momencie, nie blokuje zatwierdzenia; wpis powstaje
+z komunikatem `notice` opisującym nakładanie. Pole `DurationMinutes` pozostaje liczbą
+minut do rozliczenia, natomiast `StartedAt` i `EndedAt` określają położenie wpisu na osi
+czasu.
+
+## Dopasowanie sugestii do spraw
+
+Dopasowanie wykorzystuje nazwę pliku albo tytuł spotkania oraz aktywne dane sprawy:
+klienta, numer sprawy i słowa kluczowe. Tekst jest normalizowany i dzielony na pełne
+tokeny. Termin jednowyrazowy musi odpowiadać całemu słowu, dlatego `Alfa` nie pasuje do
+`Alfabet`. Termin wielowyrazowy musi tworzyć ciąg kolejnych słów, a interpunkcja nie
+przerywa dopasowania.
+
+Jeżeli krótsze trafienie w całości zawiera się w dłuższym, wybierane jest trafienie
+bardziej szczegółowe. Przykładowo nazwa `Audyt Beta Logistics.docx` może wskazać klienta
+`Beta Logistics` zamiast ogólnego słowa kluczowego `Beta`. Rozłączne trafienia kilku
+spraw pozostają niejednoznaczne i wymagają decyzji użytkownika. Brak dopasowania nie
+blokuje sugestii; sprawę można wskazać ręcznie. Mechanizm nie wykonuje analizy odmiany
+fleksyjnej, dlatego wymagane warianty nazw należy dodać jako słowa kluczowe.
+
+## Reguły ewidencji i rozliczania
+
+- Zatwierdzenie wymaga aktywnej sprawy, opisu o długości do 500 znaków oraz czasu od
+  1 do 1440 minut. Jeden wpis może być powiązany z kilkoma scalonymi sugestiami.
+- Korekty aktywnego wpisu wykonywane przez zmianę minut, przełączanie przerw,
+  zaokrąglanie i scalanie z doliczeniem luk są zapisywane jako `TimeEntryAdjustment`.
+  Czas podany w formularzu zatwierdzenia jest zapisywany bez osobnego rekordu korekty.
+- Zaokrąglenie jest wykonywane po stronie serwera do najbliższej wielokrotności
+  `BillingIncrementMinutes`, domyślnie 30 minut. Dokładna połowa jest zaokrąglana w dół,
+  a minimalnym wynikiem jest jedna jednostka. Jednostka rozliczeniowa nie wpływa na
+  wynik silnika sesji dokumentowych.
+- Korekta minut, zaokrąglenie albo przełączenie przerwy aktywnego wpisu nie może
+  zwiększyć jego czasu ponad 480 minut. Zmniejszanie wpisu przekraczającego ten próg jest
+  dozwolone. Zatwierdzenie przyjmuje do 1440 minut, a operacje scalania sumują czasy
+  pozycji zgodnie z własnymi regułami.
+- Cofnięcie zatwierdzenia usuwa aktywny wpis i przywraca jego sugestie. Odrzuconą
+  sugestię można przywrócić do czasu jej archiwizacji.
+- Rozliczenie ustawia `ArchivedAt`. Rozliczonego wpisu nie można korygować, scalać,
+  rozdzielać ani usunąć przez operację cofnięcia zatwierdzenia.
+- Sprawy są dezaktywowane zamiast usuwane. Numer pozostaje zajęty, ponieważ identyfikuje
+  sprawę w historycznych wpisach.
+- Unikalne indeksy obejmują kotwicę sugestii, aktywność dokumentu i numer sprawy. Status
+  sugestii jest tokenem współbieżności. Konflikty domenowe i przegrane wyścigi są
+  zwracane jako odpowiedzi `409` w obsługiwanych ścieżkach.
+
+## API
+
+Najważniejsze endpointy lokalnego backendu:
+
+| Metoda i ścieżka | Znaczenie |
 |---|---|
-| **Sugestie** | Karty propozycji z akcjami Zatwierdź / Edytuj / Odrzuć, dopasowana sprawa w podpisanej linii z numerem i klientem (kandydaci przy niejednoznacznym dopasowaniu z numerami w nawiasach), filtr źródła i statusu (oczekujące / odrzucone / zarchiwizowane), przycisk "Zatwierdź wszystkie dopasowane", raport synchronizacji (co pobrano, co odfiltrowano i dlaczego, co zaktualizowano), wskaźnik postępu, przywracanie odrzuconych, archiwizacja odrzuconych (hurtowo i pojedynczo), regulowany domyślny czas dokumentu i zakres synchronizacji (7/14/30 dni; szerszy przydaje się np. po urlopie) |
-| **Wpisy czasu** | Zapisane wpisy pogrupowane po dniach z sumami i pochodzeniem (z jakiego spotkania/pliku powstały); przy każdym wpisie nazwa sprawy z numerem i klientem (numer to identyfikator używany na fakturze); przełącznik widoków Aktywne / Archiwum; "Cofnij zatwierdzenie" usuwa aktywny wpis i przywraca sugestię; rozliczanie okresowe (dzień, ostatni tydzień, bieżący miesiąc, wszystko) z dwustopniowym potwierdzeniem przenosi wpisy do archiwum |
-| **Sprawy** | Zarządzanie sprawami: dodawanie, edycja (w tym słów kluczowych sterujących dopasowaniem), dezaktywacja (celowo bez twardego usuwania); wyjaśnienie zasady dopasowania |
+| `POST /api/sync` | Przetwarza dane kalendarza, pliki, wersje i tombstone'y przesłane przez frontend; zwraca raport filtrowania, sesji i zmian |
+| `GET /api/suggestions` | Zwraca sugestie filtrowane według statusu i źródła |
+| `POST /api/suggestions/merge` | Scala sugestie sesji tego samego dokumentu |
+| `POST /api/suggestions/{id}/claim-gap` | Rozdziela wolną lukę między sąsiednie pozycje |
+| `POST /api/suggestions/{id}/approve` | Zatwierdza sugestię i tworzy wpis czasu |
+| `POST /api/suggestions/{id}/reject` | Odrzuca sugestię bez usuwania historii |
+| `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą sugestię |
+| `POST /api/suggestions/{id}/archive` | Archiwizuje pojedynczą odrzuconą sugestię |
+| `POST /api/suggestions/archive-rejected` | Archiwizuje wszystkie odrzucone sugestie |
+| `GET /api/cases` | Zwraca aktywne sprawy albo, z `includeInactive=true`, wszystkie sprawy |
+| `POST /api/cases` | Dodaje sprawę z unikalnym numerem |
+| `PUT /api/cases/{id}` | Aktualizuje dane sprawy |
+| `POST /api/cases/{id}/activate` | Aktywuje sprawę |
+| `POST /api/cases/{id}/deactivate` | Dezaktywuje sprawę |
+| `GET /api/time-entries` | Zwraca aktywne albo zarchiwizowane wpisy czasu |
+| `POST /api/time-entries/merge` | Scala aktywne wpisy tego samego dokumentu i dnia |
+| `POST /api/time-entries/{id}/unmerge` | Odtwarza wpisy składowe przed archiwizacją |
+| `POST /api/time-entries/{id}/add-gap` lub `subtract-gap` | Włącza albo wyłącza wykrytą przerwę |
+| `POST /api/time-entries/{id}/adjust` | Wykonuje ręczną korektę czasu |
+| `POST /api/time-entries/{id}/round` | Zaokrągla czas do jednostki rozliczeniowej |
+| `POST /api/time-entries/archive` | Archiwizuje wpisy z zakresu dat |
+| `POST /api/time-entries/{id}/archive` | Archiwizuje pojedynczy wpis |
+| `DELETE /api/time-entries/{id}` | Cofa zatwierdzenie aktywnego wpisu |
+| `GET /api/timeline?from=&to=` | Zwraca dzienne liczniki z zakresu nieprzekraczającego 366 dni |
+| `GET /api/timeline/{date}` | Zwraca oczekujące sugestie i wpisy wybranego dnia |
+| `GET /api/timeline/document-activity?externalId=` | Zwraca historię obserwacji i sesji dokumentu |
+| `GET /api/summary` | Zwraca dane kafelków podsumowania |
 
-Nad zakładkami znajdują się kafelki podsumowania: oczekujące sugestie, zapisane wpisy,
-nierozliczony czas (tylko aktywne wpisy; archiwizacja zdejmuje godziny z kafelka),
-ostatnia synchronizacja. W nagłówku przełącznik trzech motywów (jasny / niebieski / ciemny),
-realizowanych wyłącznie tokenami CSS i zapamiętywanych lokalnie.
+Przykładowe żądania znajdują się w
+`TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
 
-## Zapisane decyzje projektowe
+## Bezpieczeństwo i ograniczenia prototypu
 
-| Decyzja | Uzasadnienie |
-|---|---|
-| **Delta query zamiast `/me/drive/recent`** | Endpoint „recent" jest oznaczony przez Microsoft jako wycofywany. `GET /me/drive/root/delta` jest wspierany i zwraca elementy dysku ze zmianami, w tym tombstone'y usuniętych plików (facet `deleted`), którymi backend czyści oczekujące sugestie. Filtrowanie (okno synchronizacji, rozszerzenia Word/Excel, autor modyfikacji) odbywa się po stronie klienta, bo delta nie wspiera `$filter`; odrzucenia klienckie są przy tym raportowane licznikami, żeby raport syncu pokazywał prawdę. Rozważone alternatywy: wyszukiwanie z sortowaniem po dacie (niestabilne wsparcie `$orderby`), endpointy aktywności (niedostępne dla kont osobistych). Szczegóły: `graph-files.service.ts`. |
-| **Cache `deltaLink` w localStorage** | Pierwszy przebieg delta przechodzi cały dysk (na dużym OneDrive to dziesiątki sekund). Zapamiętany `deltaLink` sprawia, że kolejne synchronizacje pobierają wyłącznie zmiany. Link zapisywany dopiero po udanym zapisie w backendzie (obejmującym też tombstone'y); wygaśnięcie (HTTP 410) czyści cache i wymusza pełny przebieg. Zapisany adres jest walidowany przed użyciem: podmieniony wskaźnik nie wyśle tokenu pod obcy host. |
-| **Strefa czasowa: `Prefer` + strefa biznesowa** | Kalendarz przychodzi w czasie lokalnym (nagłówek `Prefer: outlook.timezone`), dokumenty w UTC. Backend sprowadza oba źródła do wspólnej strefy biznesowej (`Suggestions:BusinessTimeZoneId`, ID IANA, domyślnie `Europe/Warsaw`): okno dokumentów walidowane na oryginalnym UTC, a `StartedAt`/`EntryDate` i agregacja per dzień liczone lokalnie; okno kalendarza liczone bezpośrednio w strefie biznesowej; „dzisiaj" w podsumowaniu również. Czas trwania spotkań liczony z różnicy instantów UTC, nie lokalnych `DateTime`, bo w noc zmiany czasu różnica lokalna kłamie o godzinę. Konwencje nocy zmiany czasu są jawne (`BusinessTime`): czas niejednoznaczny = pierwsze wystąpienie, czas nieistniejący = jakby zegar już przeskoczył (mapowanie monotoniczne, bez ujemnych trwań). |
-| **Odporność na błędy Graph** | Wspólny helper obu serwisów Graph: ponowienia dla 429/502/503/504 z odczytem `Retry-After`, token pobierany per stronę, limit czasu żądania. Kalendarz i delta podążają za `@odata.nextLink` przez wszystkie strony. |
-| **Filtr prywatności w przeglądarce** | Tytuły wydarzeń `private`/`confidential`/`personal` oraz anulowanych w ogóle nie opuszczają przeglądarki. Backend i tak powtarza swoje filtry (klientowi nie ufa), a liczniki filtrów klienckich są doliczane do raportu. |
-| **Domyślny czas dokumentu jako parametr** | Graph mówi tylko *kiedy* plik zmieniono, nie *jak długo* trwała praca. Domyślne 30 min to parametr `Suggestions:DefaultDocumentDurationMinutes` w `appsettings.json`; użytkownik może poprawić wartość przed zatwierdzeniem. |
-| **Dedup po `(źródło, id z Graph, dzień)`** | Indeks unikalny w bazie + scalanie z istniejącymi przy synchronizacji (duplikaty w obrębie jednego żądania też są scalane). Powtórny sync nie tworzy duplikatów, a **odrzucona sugestia nie wraca** (status zmieniany, rekord nieusuwany). |
-| **Odświeżanie oczekujących przy syncu** | Zmiana nazwy pliku/tytułu spotkania nie zmienia ID w Graph, więc sam dedup zostawiałby stary tytuł. Sugestie **oczekujące** są nadpisywane wartościami ze źródła (z ponownym dopasowaniem); zatwierdzonych i odrzuconych sync nie dotyka. |
-| **Rekonsyliacja kalendarza** | Backend rekonsyliuje kalendarz per spotkanie: przeniesione spotkanie aktualizuje istniejącą oczekującą sugestię w miejscu (bez „ducha" pod starą datą), odrzucenie jest „lepkie" per spotkanie (zmiana terminu nie przywraca sugestii), a oczekujące sugestie spotkań usuniętych lub już nierozliczalnych (anulowane/prywatne/całodniowe) znikają, a raport pokazuje je w liczniku „usunięte". Część destrukcyjna działa wyłącznie, gdy frontend zadeklaruje kompletny snapshot (`calendarSnapshotComplete`, czyli wszystkie strony pobrane bez błędu) wraz z zakresem dni (`calendarSnapshotDaysBack`), i tylko w przecięciu tego zakresu z oknem backendu; częściowe pobranie ani rozjazd konfiguracji okien nie skasują prawidłowych sugestii. Dokumentów to nie dotyczy: delta jest przyrostowa i nieobecność pliku w feedzie niczego nie dowodzi, więc czyszczą je wyłącznie jawne tombstone'y. |
-| **Współbieżność rozstrzygana w bazie** | Indeksy unikalne (`TimeEntries.SuggestionId`, `Cases.CaseNumber`) domykają wyścigi: równoległe zatwierdzenie/duplikat numeru sprawy kończy się jawnym 409, a synchronizacja po konflikcie ponawia scalanie na czystym stanie kontekstu. Na 409 mapowane jest wyłącznie naruszenie unikalności (SQLite 2067), nie ogólne błędy constraintów. |
-| **Dezaktywacja zamiast usuwania spraw** | Wpisy czasu wskazują na sprawy kluczem obcym, więc twarde usunięcie niszczyłoby dane rozliczeniowe. `IsActive=false` wyłącza sprawę z dopasowania i list wyboru, zachowując historię. Numer sprawy pozostaje przy niej zajęty także po dezaktywacji, bo identyfikuje ją w historii rozliczeń; recykling numeru uczyniłby stare wpisy dwuznacznymi. Konflikt numeru nazywa więc kolidującą sprawę i jej stan, zamiast wskazywać na rekord domyślnie ukryty przed użytkownikiem. |
-| **Archiwum zamiast usuwania** | Rozliczone wpisy (`TimeEntry.ArchivedAt`, znacznik czasu zamiast flagi: darmowy ślad audytowy "kiedy rozliczono") i schowane odrzucone sugestie (status `Archived`) trafiają do jednokierunkowego archiwum. Archiwum blokuje edycję: DELETE rozliczonego wpisu i restore zarchiwizowanej sugestii zwracają 409; rozliczony czas jest niezmienny, a korekta (storno) to świadomie odłożona przyszła funkcja. Zarchiwizowana sugestia zostaje w bazie i przy synchronizacji dalej blokuje ponowne utworzenie tej samej pozycji (anty-nawrót jak przy odrzuceniu). Kafelek w nagłówku liczy wyłącznie nierozliczone wpisy; archiwizacja jest jedynym "resetem" tej liczby. |
-| **Edycja = zatwierdzenie z poprawionymi wartościami** | Jeden endpoint `approve` przyjmuje wartości finalne: mniej ścieżek, ta sama walidacja. |
-| **Raport z synchronizacji** | Backend zwraca liczniki: ile pobrano, ile odfiltrowano per reguła, ile zagregowano, jak dopasowano. Bez tego odfiltrowanie spotkań wygląda dla użytkownika jak zgubione dane. |
+Treść dokumentów nie jest zapisywana w backendzie ani w SQLite. Porównanie wersji
+`.docx` pobiera pliki bezpośrednio z Microsoft Graph, wykonuje analizę w pamięci
+przeglądarki i nie zapisuje wyniku w `localStorage`. Backend przechowuje jednak wrażliwe
+metadane: nazwy plików, tytuły nieprywatnych spotkań, klientów, numery spraw, czasy
+aktywności i opisy wpisów. Baza stanowi zatem indeks pracy kancelarii i wymaga ochrony
+na równi z innymi danymi zawodowymi.
 
-## Endpointy API
+Implementacja jest lokalnym prototypem dla jednego użytkownika:
 
-| Metoda i ścieżka | Opis |
-|---|---|
-| `POST /api/sync` | Przyjmuje surowe dane z Graph (+ opcjonalnie: tombstone'y usuniętych plików, liczniki filtrów klienckich, domyślny czas dokumentu, nadpisanie okna synchronizacji `syncDaysBack`, maks. 90 dni), zwraca pełny raport z faktycznie użytym oknem (`windowDays`); 409 przy kolizji z równoległą synchronizacją |
-| `GET /api/suggestions?status=&source=` | Lista sugestii (domyślnie oczekujące) |
-| `POST /api/suggestions/{id}/approve` | Tworzy wpis czasu, zamyka sugestię |
-| `POST /api/suggestions/{id}/reject` | Odrzuca (status, bez usuwania) |
-| `POST /api/suggestions/{id}/restore` | Przywraca odrzuconą do oczekujących (409 dla zarchiwizowanej: archiwum jest terminalne) |
-| `POST /api/suggestions/{id}/archive` | Archiwizuje pojedynczą odrzuconą sugestię (409, gdy status inny niż odrzucona) |
-| `POST /api/suggestions/archive-rejected` | Hurtowo archiwizuje wszystkie odrzucone sugestie, zwraca licznik |
-| `GET /api/cases?includeInactive=` | Sprawy ze słowami kluczowymi (domyślnie tylko aktywne) |
-| `POST /api/cases`, `PUT /api/cases/{id}` | Dodawanie i edycja spraw (unikalny numer sprawy) |
-| `POST /api/cases/{id}/activate` / `deactivate` | Przełączanie aktywności (zamiast usuwania) |
-| `GET /api/time-entries?archived=` | Wpisy pogrupowane po dniach z sumami (domyślnie aktywne; `archived=true` zwraca archiwum, suma dotyczy zwróconego widoku) |
-| `POST /api/time-entries/archive` | Rozlicza (archiwizuje) aktywne wpisy z domkniętego zakresu dat (maks. 366 dni); idempotentne, zwraca liczbę wpisów i sumę minut |
-| `DELETE /api/time-entries/{id}` | Cofa zatwierdzenie: usuwa aktywny wpis i przywraca sugestię; 409 dla wpisu rozliczonego |
-| `GET /api/summary` | Liczniki do kafelków podsumowania |
+- API nie ma własnego uwierzytelniania; profil `http` używany w instrukcji uruchomienia
+  nasłuchuje na `http://localhost:5188`;
+- baza `timesuggestions.db` oraz kopie wykonywane przed migracjami nie są szyfrowane
+  przez aplikację;
+- komunikacja z lokalnym API odbywa się po HTTP, a CORS dopuszcza wyłącznie
+  `http://localhost:4200`;
+- dane nie są rozdzielane według użytkownika ani tenantów;
+- dziennik `DocumentActivity` nie ma automatycznej polityki retencji;
+- aplikacja używa jednej strefy biznesowej dla wszystkich danych;
+- sugestie dokumentowe zależą od jakości i częstotliwości metadanych publikowanych
+  przez Microsoft 365;
+- listy sugestii oraz wpisów nie są stronicowane.
 
-Przykładowe wywołania wszystkich endpointów: `TimeSuggestions/TimeSuggestions/TimeSuggestions.http`.
+## Uruchomienie lokalne
 
-## Uruchomienie
+Wymagane są .NET SDK 10 oraz Node.js w wersji obsługiwanej przez Angular 21:
+`^20.19.0`, `^22.12.0` albo `>=24.0.0`. Angular CLI jest zależnością deweloperską
+projektu i jest uruchamiany lokalnie przez `npx`.
 
-Wymagania: .NET SDK 10, Node 20+, Angular CLI.
-
-**Backend** (profil `http`: nasłuchuje wyłącznie na `http://localhost:5188`;
-baza SQLite tworzy się sama przy starcie; brak przekierowania na HTTPS, bo profil
-nie ma endpointu https, a redirect psułby preflighty CORS):
+Backend:
 
 ```bash
 cd TimeSuggestions/TimeSuggestions
 dotnet run --launch-profile http
 ```
 
-Migracje bazy wykonują się automatycznie przy starcie. Jeśli są oczekujące migracje,
-backend najpierw tworzy obok bazy kopię `timesuggestions.db.bak-<migracja>`. Gdyby
-migracja została przerwana (SQLite nie wykonuje przebudowy tabel atomowo), zatrzymaj
-backend, zastąp `timesuggestions.db` plikiem kopii (usuń też pliki `-wal`/`-shm`,
-jeśli istnieją) i uruchom ponownie.
+Backend działa pod adresem `http://localhost:5188`. Przy starcie wykonuje migracje EF
+Core. Jeżeli plik bazy już istnieje i co najmniej jedna migracja oczekuje na wykonanie,
+przed całym przebiegiem powstaje jedna kopia
+`timesuggestions.db.bak-<ostatnia-oczekująca-migracja>`. Istniejąca kopia o tej nazwie
+nie jest nadpisywana. Przy pierwszym uruchomieniu, gdy plik bazy jeszcze nie istnieje,
+kopia nie powstaje. Jeżeli migracja zostanie przerwana, należy zatrzymać backend,
+przywrócić kopię bazy, usunąć odpowiadające jej pliki `-wal` i `-shm`, jeżeli istnieją,
+a następnie uruchomić aplikację ponownie.
 
-**Frontend** (port 4200):
+Frontend:
 
 ```bash
 cd timesuggestions-web
@@ -128,233 +331,50 @@ npm install
 npx ng serve
 ```
 
-**Logowanie:** działa od razu po sklonowaniu, bo rejestracja aplikacji w Microsoft
-Entra ID jest gotowa (multi-tenant + konta osobiste) i można logować się dowolnym
-kontem Microsoft. Konfiguracja (client ID, authority, redirect URI) leży
-w `timesuggestions-web/src/environments/environment.ts`; client ID to identyfikator
-publiczny, nie sekret. Aplikacja działa jako klient publiczny (authorization code
-+ PKCE, bez client secret) i prosi o delegowane uprawnienia **Calendars.Read**
-i **Files.Read**. Ścieżka awaryjna: jeśli Twój tenant wymusza zgodę administratora
-i nie możesz jej uzyskać, utwórz własną rejestrację (platforma **SPA**, redirect URI
-`http://localhost:4200`, te same uprawnienia) i podmień `entraClientId`
-w `environment.ts`.
+Frontend działa pod adresem `http://localhost:4200`. Konfiguracja w
+`timesuggestions-web/src/environments/environment.ts` zawiera publiczny identyfikator
+klienta, authority `https://login.microsoftonline.com/common` oraz adres przekierowania
+`http://localhost:4200`. Logowanie żąda delegowanych uprawnień `Calendars.Read` i
+`Files.Read`. Dostępność logowania zależy również od ustawień zewnętrznej rejestracji
+Entra ID i zasad zgody obowiązujących w danym tenancie.
 
-**Testy** (212 testów backendu xUnit + 119 testów frontendu Vitest; bez sieci i logowania):
+## Testy
+
+Testy backendu:
 
 ```bash
 cd TimeSuggestions
 dotnet test
 ```
 
+Testy frontendu:
+
 ```bash
 cd timesuggestions-web
 npm test -- --watch=false
 ```
 
-## Struktura katalogów
+Testy nie wymagają połączenia z Microsoft Graph ani interaktywnego logowania.
 
-```
+## Struktura projektu
+
+```text
 TimeSuggestions/
-  TimeSuggestions/          API .NET
-    Configuration/          opcje (progi czasowe, okno syncu)
-    Contracts/              DTO wejścia/wyjścia + walidacja + raport syncu
-    Controllers/            cienkie kontrolery REST
-    Data/                   DbContext + seed spraw, migrator z kopią bazy,
-                            mapowanie błędów unikalności SQLite (2067 → 409)
-    Migrations/             migracje EF Core (SQLite)
-    Models/                 encje (Case, Suggestion, TimeEntry, SyncRun)
-                            + enumy źródła i statusu sugestii
-    Services/               logika czysta (normalizacja, filtr z licznikami,
-                            dopasowanie, budowa sugestii, strefy i zmiana czasu)
-                            + serwisy aplikacyjne (sync, approval, summary)
-  TimeSuggestions.Tests/    xUnit + fixtures JSON (TestData/)
+  TimeSuggestions/                 API .NET
+    Configuration/                 konfiguracja reguł biznesowych
+    Contracts/                     DTO, walidacja i raport synchronizacji
+    Controllers/                   kontrolery REST
+    Data/                          DbContext i obsługa migracji
+    Migrations/                    migracje EF Core dla SQLite
+    Models/                        encje i typy domenowe
+    Services/                      silnik sesji i usługi aplikacyjne
+  TimeSuggestions.Tests/           testy xUnit i dane testowe
+
 timesuggestions-web/
   src/app/
-    components/             suggestion-card
-    pages/                  suggestions-page, time-entries-page, cases-page
-    models/                 typy 1:1 z DTO backendu i Graph
-    pipes/                  duration (minuty → "1 godz. 30 min"),
-                            polish-plural (odmiana liczebników)
-    services/               auth (MSAL), graph-http (walidacja URL, retry, timeout),
-                            graph-calendar, graph-files (delta+cache+tombstone'y),
-                            graph-config (stałe Graph), api, summary-store,
-                            theme (motywy), toast, data-refresh, user-message
-  src/styles.css            system wizualny: tokeny, komponenty, ciemny motyw
+    components/                    oś czasu, historia dokumentu i karty sugestii
+    pages/                         Sugestie, Wpisy czasu i Sprawy
+    models/                        modele API i Microsoft Graph
+    pipes/                         formatowanie czasu i polska odmiana liczebników
+    services/                      MSAL, Graph, API, synchronizacja i stan interfejsu
 ```
-
-## Reguły biznesowe (skrót)
-
-- Z kalendarza odpadają: wydarzenia prywatne/poufne/osobiste, anulowane, krótsze niż
-  skonfigurowany próg (domyślnie 5 min; dokładnie próg przechodzi), całodniowe, poza
-  oknem synchronizacji oraz z nieprawidłowymi datami (koniec przed początkiem);
-  raport syncu pokazuje, ile i dlaczego (łącznie z filtrami wykonanymi w przeglądarce).
-- Okno synchronizacji obejmuje domyślnie ostatnie 7 dni; użytkownik może je poszerzyć
-  w UI do 14 lub 30 dni (np. po urlopie), a backend przyjmuje nadpisanie do 90 dni;
-  wartości spoza zakresu odrzuca walidacja.
-- Z dysku wchodzą tylko pliki Word/Excel zmodyfikowane przez zalogowanego użytkownika
-  w oknie synchronizacji; kilka edycji tego samego pliku jednego dnia (w strefie
-  biznesowej) = jedna sugestia. Sugestia dokumentowa odzwierciedla ostatnią zaobserwowaną modyfikację
-  pliku, nie pełną historię dni pracy (patrz „Ograniczenia prototypu").
-- Dopasowanie do sprawy po **pełnych tokenach** znormalizowanego tekstu: termin
-  jednowyrazowy musi być identycznym słowem („Alfa" nie pasuje do „Alfabet"),
-  a termin wielowyrazowy ciągiem kolejnych słów; separatorem jest każdy znak niebędący
-  literą ani cyfrą, więc interpunkcja przy nazwie („Kowalski, przegląd") nie psuje
-  dopasowania, a numery spraw działają bez zmian. Gdy trafienie jednej sprawy w całości
-  zawiera się w dłuższym trafieniu innej, wygrywa dłuższe („Audyt Beta Logistics" → klient
-  „Beta Logistics", nie keyword „Beta"); trafienia rozłączne lub tylko zahaczające
-  o siebie wspólnym słowem to osobne dowody i pozostają niejednoznaczne (spotkanie
-  międzysprawowe). Świadomy kompromis: odmiany fleksyjne („Kowalskiego") nie są
-  rozpoznawane; można je dodać jako słowa kluczowe sprawy. Trzy stany: jedno trafienie
-  (sprawa przypisana), brak (karta „sprawdź to" z wyjaśnieniem), wiele (niejednoznaczna,
-  UI wymienia pasujące sprawy).
-- Zatwierdzenie wymaga wybranej sprawy i czasu 1–1440 min; tworzy `TimeEntry` ze źródłem
-  pochodzenia i referencją do sugestii (dokładnie jeden wpis na sugestię, co gwarantuje
-  indeks unikalny). Decyzje są odwracalne (Cofnij / Przywróć / Cofnij zatwierdzenie),
-  a „Cofnij" działa także po przejściu na inną zakładkę; jedynym świadomym wyjątkiem
-  jest rozliczenie (archiwizacja), które jest nieodwracalne.
-- Cykl życia wpisu czasu: aktywny, potem rozliczony (zarchiwizowany). Rozliczenie jest
-  hurtowe (dzień albo zakres dat, maks. 366 dni), jednokierunkowe i blokuje edycję;
-  „Cofnij zatwierdzenie" działa wyłącznie dla wpisów aktywnych. Odrzuconą sugestię
-  można zarchiwizować (Rejected → Archived, stan terminalny bez unarchive);
-  zarchiwizowana nadal chroni przed ponownym utworzeniem tej samej pozycji
-  przy synchronizacji.
-
-### Przykłady dopasowania
-
-Sprawa jest dopasowywana wyłącznie po trzech terminach: **nazwie klienta**, **numerze
-sprawy** i **słowach kluczowych**. Sama nazwa sprawy (np. „Fuzja Alfa/Beta") jest tylko
-etykietą wyświetlaną na listach i nie bierze udziału w dopasowaniu. Terminy spraw
-z seedu bazy:
-
-| Klient | Numer sprawy | Słowa kluczowe |
-|---|---|---|
-| Kowalski | K-2026-001 | (brak) |
-| NovaTech | NT-2026-113 | (brak) |
-| Grzegrzółka | GZ-2026-007 | (brak) |
-| Alfa Holding | AB-2026-021 | Alfa; Beta |
-| Beta Logistics | BL-2026-030 | Beta |
-
-Wyniki poniżej pochodzą z uruchomienia logiki dopasowania na powyższych sprawach.
-Znaczenie symboli:
-
-- ✅ dokładnie jedna pasująca sprawa: sugestia dostaje ją automatycznie;
-- ⚠️ kilka pasujących spraw: sugestia trafia na kartę „sprawdź to", a aplikacja
-  wymienia kandydatów do wyboru;
-- ❌ żadna sprawa nie pasuje: sugestia trafia na kartę „sprawdź to" i sprawę
-  wybiera się ręcznie.
-
-#### Podstawy: klient, numer, słowo kluczowe
-
-| Tytuł spotkania | Wynik | Wyjaśnienie |
-|---|---|---|
-| `spotkanie z KOWALSKI` | ✅ Kowalski | nazwa klienta w tytule; wielkość liter nie ma znaczenia |
-| `Prezentacja Alfa` | ✅ Alfa Holding | tytuł zawiera „Alfa", słowo kluczowe sprawy klienta Alfa Holding |
-| `Spotkanie Alfa Holding` | ✅ Alfa Holding | dwuwyrazowa nazwa klienta pasuje, gdy oba słowa stoją obok siebie w tej kolejności |
-| `rozmowa grzegrzolka` | ✅ Grzegrzółka | tytuł bez polskich znaków pasuje do klienta z polskimi znakami, bo litery takie jak ó i ł są sprowadzane do o i l po obu stronach porównania |
-| `Rozmowa Grzegrzółka, pilna` | ✅ Grzegrzółka | polskie znaki w tytule i przecinek za nazwą; ani jedno, ani drugie nie przeszkadza |
-
-#### Numery spraw
-
-| Tytuł spotkania | Wynik | Wyjaśnienie |
-|---|---|---|
-| `Analiza NT-2026-113` | ✅ NovaTech | pełny numer sprawy w tytule |
-| `Omówienie NT 2026 113` | ✅ NovaTech | numer zapisany spacjami zamiast myślników; po normalizacji obie formy wyglądają identycznie |
-| `NT.2026.113 przegląd` | ✅ NovaTech | numer zapisany kropkami także pasuje |
-| `omówienie k-2026-001` | ✅ Kowalski | wielkość liter nie ma znaczenia również w numerze sprawy |
-| `Przygotowanie do NT-2026` | ❌ brak | niepełny numer nie wystarcza; dopasowanie wymaga wszystkich trzech części numeru (NT, 2026 i 113) |
-
-#### Interpunkcja i znaki specjalne w tytułach
-
-Znaki inne niż litery i cyfry działają jak odstępy, więc nazwa klienta jest
-rozpoznawana nawet „przyklejona" do interpunkcji:
-
-| Tytuł spotkania | Wynik | Wyjaśnienie |
-|---|---|---|
-| `Kowalski, przegląd umowy` | ✅ Kowalski | przecinek tuż za nazwą nie zmienia jej w inne słowo |
-| `Kowalski: omówienie pozwu` | ✅ Kowalski | to samo z dwukropkiem |
-| `Pilne! Kowalski?` | ✅ Kowalski | to samo z wykrzyknikiem i pytajnikiem |
-| `(Kowalski) negocjacje` | ✅ Kowalski | nawiasy wokół nazwy nie przeszkadzają |
-| `[NovaTech] status wdrożenia` | ✅ NovaTech | nawiasy kwadratowe także |
-| `Spotkanie „Kowalski"` | ✅ Kowalski | cudzysłowy (drukarskie i proste) nie przeszkadzają |
-| `Kowalski—przegląd` | ✅ Kowalski | długi myślnik wklejony bez spacji również oddziela słowa |
-| `Spotkanie 🚀 „Kowalski" i l'affaire` | ✅ Kowalski | emoji i apostrof też działają jak odstępy |
-
-#### Nazwy plików
-
-| Nazwa pliku | Wynik | Wyjaśnienie |
-|---|---|---|
-| `Umowa_NovaTech_v2.docx` | ✅ NovaTech | podkreślniki dzielą nazwę na słowa; rozszerzenie `.docx` i oznaczenie wersji `v2` są pomijane |
-| `Umowa (2)_NovaTech.docx` | ✅ NovaTech | pomijany jest też numer kopii `(2)`, który OneDrive dokleja przy powielaniu pliku |
-| `Umowa_NovaTech (3) v2.docx` | ✅ NovaTech | numer kopii i oznaczenie wersji naraz |
-| `alfa-holding_raport.docx` | ✅ Alfa Holding | dwuwyrazowa nazwa klienta rozcięta myślnikiem i podkreślnikiem to nadal dwa sąsiednie słowa |
-| `raport-Kowalski-final.docx` | ✅ Kowalski | słowo „final" zostaje w nazwie i niczego nie psuje |
-| `KOPIA umowy grzegrzolka.xlsx` | ✅ Grzegrzółka | „kopia" to zwykłe słowo; nie jest wycinane i nie przeszkadza |
-| `NOTATKI_GRZEGRZOLKA_V3.XLSX` | ✅ Grzegrzółka | wielkie litery w całej nazwie, łącznie z rozszerzeniem i oznaczeniem wersji |
-| `pozew!Kowalski!.docx` | ✅ Kowalski | interpunkcja w nazwie pliku działa jak odstęp |
-| `faktura_2026.pdf` | ❌ brak | nazwa nie zawiera żadnego terminu sprawy; niezależnie od tego pliki PDF w ogóle nie przechodzą filtra typów (tylko Word/Excel) |
-
-#### Kiedy jedna sprawa wygrywa z drugą
-
-| Tytuł spotkania | Wynik | Wyjaśnienie |
-|---|---|---|
-| `Audyt Beta Logistics` | ✅ Beta Logistics | tytuł zawiera pełną nazwę klienta „Beta Logistics"; słowo „Beta" (kluczowe dla sprawy Alfa Holding) jest tu tylko fragmentem tej dłuższej nazwy, więc tamta sprawa odpada |
-| `Beta Logistics, przegląd roczny` | ✅ Beta Logistics | jak wyżej: pełna nazwa klienta wygrywa z pojedynczym słowem kluczowym |
-| `NT-2026-113 status wdrożenia NovaTech` | ✅ NovaTech | numer sprawy i nazwa klienta wskazują tę samą sprawę, więc wynik pozostaje jednoznaczny |
-
-#### Kilka pasujących spraw: wybór należy do użytkownika
-
-| Tytuł spotkania | Wynik | Wyjaśnienie |
-|---|---|---|
-| `Analiza Beta` | ⚠️ 2 sprawy | „Beta" jest słowem kluczowym dwóch spraw (Alfa Holding i Beta Logistics); żadne trafienie nie jest lepsze od drugiego |
-| `Logistics Beta, przegląd` | ⚠️ 2 sprawy | kolejność słów ma znaczenie: „Logistics Beta" to nie nazwa klienta „Beta Logistics", zostaje więc samo słowo „Beta", wspólne dla dwóch spraw |
-| `Alfa i Beta, harmonogram fuzji` | ⚠️ 2 sprawy | „Alfa" wskazuje sprawę Alfa Holding, ale „Beta" wskazuje obie sprawy, więc niejednoznaczność zostaje |
-| `Omówienie NT-2026-113 z Kowalski` | ⚠️ 2 sprawy | numer jednej sprawy i klient drugiej stoją w różnych miejscach tytułu; to dwa niezależne ślady, więc aplikacja nie zgaduje, której sprawy dotyczył czas |
-| `Spór Kowalski vs NovaTech` | ⚠️ 2 sprawy | nazwy dwóch klientów w jednym tytule |
-| `Kowalski/NovaTech harmonogram` | ⚠️ 2 sprawy | ukośnik rozdziela dwie nazwy klientów; w tytule nadal są dwie sprawy |
-
-#### Brak dopasowania: sprawę wskazuje się ręcznie
-
-| Tytuł spotkania / nazwa pliku | Wynik | Wyjaśnienie |
-|---|---|---|
-| `Analiza Alfabet` | ❌ brak | porównywane są całe słowa: „Alfa" nie pasuje do fragmentu dłuższego wyrazu „Alfabet", co chroni przed przypisaniem czasu do złej sprawy |
-| `Betamax test` | ❌ brak | jak wyżej: „Beta" to nie „Betamax" |
-| `Rozmowa z Kowalskim` | ❌ brak | „Kowalskim" to odmieniona forma, czyli inne słowo niż „Kowalski"; aplikacja nie zna polskiej odmiany, a obejściem jest dodanie „Kowalskim" do słów kluczowych sprawy |
-| `Notatka_Kowalskiego.docx` | ❌ brak | jak wyżej, tym razem w nazwie pliku |
-| `Spotkanie Fuzja` | ❌ brak | słowo „Fuzja" występuje wyłącznie w nazwie sprawy („Fuzja Alfa/Beta"), a dopasowanie nie zagląda do nazwy sprawy; sprawdza tylko klienta, numer i słowa kluczowe |
-| `Cotygodniowy standup` | ❌ brak | tytuł nie zawiera żadnego terminu żadnej sprawy |
-
-## Co zrobiłbym inaczej, mając więcej czasu
-
-Projekt jest świadomie przygotowany jako lokalna aplikacja portfolio (patrz
-„Ograniczenia prototypu"). Przed udostępnieniem go jako publicznej usługi
-rozbudowałbym go w następującej kolejności:
-
-- **Uwierzytelnienie API i izolacja danych użytkowników**: frontend pobierałby osobny
-  token dla backendu, niezależny od tokenu Microsoft Graph. Backend weryfikowałby podpis,
-  `issuer`, `audience` i wymagany scope, a dane byłyby przypisywane i filtrowane według
-  `TenantId` oraz `UserObjectId`. Token Graph nadal nigdy nie trafiałby do backendu.
-- **Produkcyjna baza danych**: SQLite pozostałby do pracy lokalnej, natomiast wdrożenie
-  korzystałoby z PostgreSQL lub SQL Server, z kontrolowanymi migracjami, kopiami
-  zapasowymi, retencją i procedurą odtwarzania danych.
-- **Bezpieczne wdrożenie**: osobne konfiguracje Development/Test/Production, HTTPS,
-  ograniczony CORS, bezpieczne przechowywanie connection stringów i sekretów oraz
-  poprawne adresy API i redirect URI. Publiczny `clientId` Entra nadal mógłby pozostać
-  w repozytorium, ponieważ nie jest sekretem.
-- **Paginacja i ochrona API**: paginacja sugestii oraz wpisów czasu, a także rate
-  limiting skonfigurowany per użytkownik, szczególnie dla kosztownych operacji
-  synchronizacji.
-- **Korekty rozliczonych wpisów (storno)**: archiwum celowo blokuje edycję i cofanie
-  rozliczonego czasu, więc pomyłka wykryta po rozliczeniu wymaga dziś poprawki poza
-  aplikacją. Docelowo dodałbym jawną operację korygującą (wpis storno z referencją
-  do oryginału) zamiast cichej edycji historii, a do archiwum retencję i eksport.
-- **Monitoring i obsługa błędów**: centralne `ProblemDetails`, strukturalne logowanie,
-  identyfikatory żądań, metryki, health checks i alerty. Logi nie mogłyby zawierać
-  tokenów, nagłówków autoryzacji, tytułów spotkań ani nazw poufnych dokumentów.
-- **Automatyczna weryfikacja zmian**: CI/CD uruchamiające build backendu i frontendu,
-  testy jednostkowe i integracyjne, test migracji na tymczasowej bazie oraz audyt
-  zależności.
-- **Dokładniejsza historia dokumentów**: obecna synchronizacja delta pokazuje ostatni
-  zaobserwowany stan pliku, a nie wszystkie jego wcześniejsze modyfikacje. Pełniejsze
-  odtwarzanie dni pracy wymagałoby użycia historii wersji `DriveItem`, dodatkowej
-  deduplikacji, obsługi stronicowania, limitów Graph i zapamiętywania przetworzonych
-  wersji.

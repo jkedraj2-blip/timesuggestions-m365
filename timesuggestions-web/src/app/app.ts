@@ -2,14 +2,16 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from './services/auth.service';
+import { AutoSyncService } from './services/auto-sync.service';
 import { SummaryStore } from './services/summary-store';
 import { ToastService } from './services/toast.service';
 import { ThemeService } from './services/theme.service';
 import { DurationPipe } from './pipes/duration.pipe';
+import { TimelinePanel } from './components/timeline-panel';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, DatePipe, DurationPipe],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, DatePipe, DurationPipe, TimelinePanel],
   template: `
     <header class="app-header">
       <div>
@@ -47,7 +49,7 @@ import { DurationPipe } from './pipes/duration.pipe';
           <div class="session-pill">
             <span class="text-muted">{{ user() }}</span>
             <span class="pill-divider" aria-hidden="true"></span>
-            <button class="btn btn-ghost logout-btn" (click)="auth.logout()">Wyloguj</button>
+            <button class="btn btn-ghost logout-btn" (click)="logout()">Wyloguj</button>
           </div>
         }
       </div>
@@ -74,13 +76,18 @@ import { DurationPipe } from './pipes/duration.pipe';
               @if (summary.lastSyncAt) {
                 {{ summary.lastSyncAt | date: 'dd.MM HH:mm' }}
               } @else {
-                —
+                <!-- Słowo zamiast kreski: „jeszcze nigdy" to informacja, a myślnik
+                     w kafelku z liczbą wygląda jak brak danych do wczytania. -->
+                nigdy
               }
             </div>
             <div class="tile-label">ostatnia synchronizacja</div>
           </div>
         </div>
       }
+
+      <!-- Globalna, zwijana oś czasu — widoczna z każdej zakładki, domyślnie zwinięta. -->
+      <app-timeline-panel />
 
       <nav class="tabs">
         <a class="tab" routerLink="/suggestions" routerLinkActive="active">Sugestie</a>
@@ -169,6 +176,7 @@ export class App implements OnInit {
   protected summaryStore = inject(SummaryStore);
   protected toastService = inject(ToastService);
   protected themeService = inject(ThemeService);
+  private autoSync = inject(AutoSyncService);
 
   protected user = signal<string | null>(null);
 
@@ -177,7 +185,16 @@ export class App implements OnInit {
     this.user.set(this.auth.account?.username ?? null);
     if (this.user()) {
       await this.summaryStore.refresh();
+      // Automat startuje DOPIERO po odtworzeniu sesji Microsoft i żyje w korzeniu
+      // aplikacji, a nie w widoku sugestii: pomiar ma chodzić także wtedy, gdy prawnik
+      // zostawił otwartą zakładkę „Wpisy czasu".
+      this.autoSync.resume();
     }
   }
 
+  protected logout(): void {
+    // Bez tego zegar tykałby dalej po wylogowaniu i próbował sięgać do Graph bez sesji.
+    this.autoSync.pause();
+    void this.auth.logout();
+  }
 }

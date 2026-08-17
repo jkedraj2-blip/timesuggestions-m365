@@ -1,0 +1,255 @@
+[
+  {
+    "name": "pojedyncza wersja: samo minimum i czas do uzupelnienia",
+    "versionsUtc": [
+      "2026-07-24T10:00:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T12:00:00",
+        "endAtLocal": "2026-07-24T12:05:00",
+        "grossMinutes": 5,
+        "versionCount": 1,
+        "needsTimeReview": true,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "dwie wersje minute po sobie: zmierzona minuta zostaje minuta, bez podciagania do minimum",
+    "versionsUtc": [
+      "2026-07-24T10:00:00Z",
+      "2026-07-24T10:01:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T12:00:00",
+        "endAtLocal": "2026-07-24T12:01:00",
+        "grossMinutes": 1,
+        "versionCount": 2,
+        "needsTimeReview": false,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "dwa zapisy w tej samej minucie: historia nie mierzy czasu, wiec minimum i prosba o uzupelnienie",
+    "versionsUtc": [
+      "2026-07-24T10:00:00Z",
+      "2026-07-24T10:00:20Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T12:00:00",
+        "endAtLocal": "2026-07-24T12:05:00",
+        "grossMinutes": 5,
+        "versionCount": 2,
+        "needsTimeReview": true,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "seria gesta: autozapisy co 5 min to jedna ciagla sesja bez przerw",
+    "versionsUtc": [
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:05:00Z",
+      "2026-07-24T08:10:00Z",
+      "2026-07-24T08:15:00Z",
+      "2026-07-24T08:20:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:20:00",
+        "grossMinutes": 20,
+        "versionCount": 5,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "luka 20 min: jedna sesja z wykryta przerwa",
+    "versionsUtc": [
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:20:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:20:00",
+        "grossMinutes": 20,
+        "versionCount": 2,
+        "gaps": [
+          {
+            "startAtLocal": "2026-07-24T10:00:00",
+            "endAtLocal": "2026-07-24T10:20:00",
+            "minutes": 20
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "luka 40 min: dwie osobne sesje, obie jednowersyjne",
+    "versionsUtc": [
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:40:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:05:00",
+        "grossMinutes": 5,
+        "versionCount": 1,
+        "needsTimeReview": true,
+        "gaps": []
+      },
+      {
+        "startAtLocal": "2026-07-24T10:40:00",
+        "endAtLocal": "2026-07-24T10:45:00",
+        "grossMinutes": 5,
+        "versionCount": 1,
+        "needsTimeReview": true,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "luka dokladnie 15 min: ciagla sesja bez wykrytej przerwy (domkniecie przedzialu)",
+    "versionsUtc": [
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:15:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:15:00",
+        "grossMinutes": 15,
+        "versionCount": 2,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "luka dokladnie 30 min: jeszcze jedna sesja, z wykryta przerwa (domkniecie przedzialu)",
+    "versionsUtc": [
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:30:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:30:00",
+        "grossMinutes": 30,
+        "versionCount": 2,
+        "gaps": [
+          {
+            "startAtLocal": "2026-07-24T10:00:00",
+            "endAtLocal": "2026-07-24T10:30:00",
+            "minutes": 30
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "wersje w odwrotnej kolejnosci: silnik sortuje wejscie sam",
+    "versionsUtc": [
+      "2026-07-24T08:20:00Z",
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:10:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:20:00",
+        "grossMinutes": 20,
+        "versionCount": 3,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "duplikaty wersji: powtorzony czas liczony raz",
+    "versionsUtc": [
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:00:00Z",
+      "2026-07-24T08:10:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T10:00:00",
+        "endAtLocal": "2026-07-24T10:10:00",
+        "grossMinutes": 10,
+        "versionCount": 2,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "przejscie przez polnoc: wersja po polnocy otwiera nowa sesje mimo malej luki",
+    "versionsUtc": [
+      "2026-07-24T21:55:00Z",
+      "2026-07-24T22:05:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-07-24T23:55:00",
+        "endAtLocal": "2026-07-25T00:00:00",
+        "grossMinutes": 5,
+        "versionCount": 1,
+        "needsTimeReview": true,
+        "gaps": []
+      },
+      {
+        "startAtLocal": "2026-07-25T00:05:00",
+        "endAtLocal": "2026-07-25T00:10:00",
+        "grossMinutes": 5,
+        "versionCount": 1,
+        "needsTimeReview": true,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "jesienna zmiana czasu: godzinna roznica lokalna, ale realnie 2h pracy (czas z instantow UTC)",
+    "versionsUtc": [
+      "2026-10-25T00:50:00Z",
+      "2026-10-25T01:00:00Z",
+      "2026-10-25T01:14:00Z",
+      "2026-10-25T01:28:00Z",
+      "2026-10-25T01:42:00Z",
+      "2026-10-25T01:56:00Z",
+      "2026-10-25T02:10:00Z",
+      "2026-10-25T02:24:00Z",
+      "2026-10-25T02:38:00Z",
+      "2026-10-25T02:50:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-10-25T02:50:00",
+        "endAtLocal": "2026-10-25T03:50:00",
+        "grossMinutes": 120,
+        "versionCount": 10,
+        "gaps": []
+      }
+    ]
+  },
+  {
+    "name": "wiosenna zmiana czasu: przerwa miedzy wersjami liczona w UTC, nie z zegara lokalnego",
+    "versionsUtc": [
+      "2026-03-29T00:55:00Z",
+      "2026-03-29T01:05:00Z"
+    ],
+    "expectedSessions": [
+      {
+        "startAtLocal": "2026-03-29T01:55:00",
+        "endAtLocal": "2026-03-29T03:05:00",
+        "grossMinutes": 10,
+        "versionCount": 2,
+        "gaps": []
+      }
+    ]
+  }
+]

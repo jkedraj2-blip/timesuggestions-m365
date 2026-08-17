@@ -110,7 +110,6 @@ describe('ApiService.syncNow', () => {
     expect(request.clientFilteredCounts).toEqual({
       private: 2,
       cancelled: 1,
-      documentsOutsideWindow: 0,
       documentsNotOfficeDocument: 0,
     });
     expect(request.deletedDriveFileIds).toEqual(['file-deleted']);

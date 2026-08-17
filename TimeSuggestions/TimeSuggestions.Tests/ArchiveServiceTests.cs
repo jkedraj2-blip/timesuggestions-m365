@@ -59,7 +59,7 @@ public sealed class ArchiveServiceTests : IDisposable
             Description = "Praca",
             CreatedFromSuggestion = true,
             Source = SuggestionSource.Calendar,
-            Suggestion = suggestion,
+            Suggestions = [suggestion],
             CreatedAt = Now,
             ArchivedAt = archivedAt,
         };
@@ -83,6 +83,44 @@ public sealed class ArchiveServiceTests : IDisposable
         Assert.Equal(Now, (await db.TimeEntries.SingleAsync(entry => entry.Id == inRange.Id)).ArchivedAt);
         Assert.Null((await db.TimeEntries.SingleAsync(entry => entry.Id == beforeRange.Id)).ArchivedAt);
         Assert.Null((await db.TimeEntries.SingleAsync(entry => entry.Id == afterRange.Id)).ArchivedAt);
+    }
+
+    /// <summary>
+    /// Rozliczenie pojedynczego wpisu: gotowość do faktury jest cechą wpisu, nie dnia.
+    /// Bez tego prawnik albo rozliczał razem z gotowym wpisem coś, czego nie sprawdził,
+    /// albo nie rozliczał nic.
+    /// </summary>
+    [Fact]
+    public async Task ArchiveTimeEntryAsync_RozliczaTylkoWskazanyWpis()
+    {
+        var target = SeedEntry(new DateOnly(2026, 8, 5), minutes: 60);
+        var other = SeedEntry(new DateOnly(2026, 8, 5), minutes: 30);
+
+        var result = await archiveService.ArchiveTimeEntryAsync(target.Id, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Success, result.Status);
+        Assert.Equal(Now, (await db.TimeEntries.SingleAsync(entry => entry.Id == target.Id)).ArchivedAt);
+        Assert.Null((await db.TimeEntries.SingleAsync(entry => entry.Id == other.Id)).ArchivedAt);
+    }
+
+    /// <summary>Data rozliczenia jest wartością audytową — druga próba jej nie przesuwa.</summary>
+    [Fact]
+    public async Task ArchiveTimeEntryAsync_DrugaProbaToKonflikt()
+    {
+        var entry = SeedEntry(new DateOnly(2026, 8, 5), minutes: 60, archivedAt: Now.AddDays(-1));
+
+        var result = await archiveService.ArchiveTimeEntryAsync(entry.Id, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.Archived, result.Status);
+        Assert.Equal(Now.AddDays(-1), (await db.TimeEntries.SingleAsync()).ArchivedAt);
+    }
+
+    [Fact]
+    public async Task ArchiveTimeEntryAsync_NieistniejacyWpisTo404()
+    {
+        var result = await archiveService.ArchiveTimeEntryAsync(999, Now, CancellationToken.None);
+
+        Assert.Equal(TimeEntryOperationStatus.NotFound, result.Status);
     }
 
     [Fact]
